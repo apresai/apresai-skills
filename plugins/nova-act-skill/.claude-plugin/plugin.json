@@ -1,6 +1,6 @@
 {
   "name": "nova-act-skill",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Generate production-ready Amazon Nova Act Python scripts for browser automation. Includes complete API reference, best practices, and working examples for e-commerce, form filling, and monitoring.",
   "author": {
     "name": "apresai",

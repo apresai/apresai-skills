@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "apresai-skills",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Production-ready skills and plugins for Claude Code by apresai",
   "owner": {
     "name": "apresai",
