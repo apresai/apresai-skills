@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "apresai-skills",
+  "version": "1.0.0",
+  "description": "Production-ready skills and plugins for Claude Code by apresai",
+  "owner": {
+    "name": "apresai",
+    "email": "contact@apresai.com"
+  },
+  "plugins": [
+    {
+      "name": "nova-act-skill",
+      "description": "Generate production-ready Amazon Nova Act Python scripts for browser automation. Includes complete API reference, best practices, and working examples for e-commerce, form filling, and monitoring.",
+      "version": "1.0.0",
+      "author": {
+        "name": "apresai"
+      },
+      "source": "./plugins/nova-act-skill",
+      "category": "ai-automation"
+    }
+  ]
+}
