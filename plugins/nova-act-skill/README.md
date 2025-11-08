@@ -5,7 +5,7 @@ This skill enables Claude to generate production-ready Amazon Nova Act Python sc
 ## What's Included
 
 ### Core Skill Document
-- **SKILL.md** - Comprehensive Nova Act skill documentation covering:
+- **skills/nova-act-builder/SKILL.md** - Comprehensive Nova Act skill documentation covering:
   - Nova Act fundamentals and philosophy
   - Complete API reference
   - Best practices and patterns

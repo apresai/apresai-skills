@@ -216,7 +216,7 @@ with NovaAct(
 
 ## Next Steps
 
-1. **Read the skill documentation**: See `SKILL.md` for comprehensive reference
+1. **Read the skill documentation**: See `skills/nova-act-builder/SKILL.md` for comprehensive reference
 2. **Study the examples**: Learn patterns from the example scripts
 3. **Build something**: Start with a simple use case
 4. **Join the community**: Check GitHub issues for tips and solutions

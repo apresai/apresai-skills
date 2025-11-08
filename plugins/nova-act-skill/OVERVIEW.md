@@ -6,7 +6,9 @@ This is a comprehensive Claude skill package for generating Amazon Nova Act Pyth
 
 ```
 nova-act-skill/
-├── SKILL.md                      # Main skill documentation (20KB)
+├── skills/
+│   └── nova-act-builder/
+│       └── SKILL.md              # Main skill documentation (20KB)
 ├── README.md                     # Package overview and usage guide
 ├── QUICKSTART.md                 # 5-minute getting started guide
 ├── config_template.py            # Configuration template for projects
@@ -20,7 +22,7 @@ nova-act-skill/
 
 ### Core Documentation
 
-#### `SKILL.md` (Main Skill Document)
+#### `skills/nova-act-builder/SKILL.md` (Main Skill Document)
 **Purpose**: Complete reference for Nova Act script generation  
 **Size**: ~20KB of comprehensive documentation  
 **Contents**:
@@ -167,7 +169,7 @@ When you want Claude to generate Nova Act scripts, reference the skill:
 ```
 
 Claude will:
-1. Read the SKILL.md documentation
+1. Read the skills/nova-act-builder/SKILL.md documentation
 2. Apply best practices and patterns
 3. Generate production-ready code
 4. Include proper error handling
@@ -181,14 +183,14 @@ Claude will:
 2. Install Nova Act and get API key
 3. Run a simple test script
 4. Try one of the example scripts
-5. Read `SKILL.md` for deeper understanding
+5. Read `skills/nova-act-builder/SKILL.md` for deeper understanding
 
 #### Project Setup Path
 1. Copy `config_template.py` to your project
 2. Customize configuration for your needs
 3. Study relevant example script
 4. Build your automation
-5. Reference `SKILL.md` as needed
+5. Reference `skills/nova-act-builder/SKILL.md` as needed
 
 #### Learning Path
 1. `README.md` - Understand the package
@@ -196,7 +198,7 @@ Claude will:
 3. `examples/01_*.py` - Learn basic patterns
 4. `examples/02_*.py` - Learn advanced patterns
 5. `examples/03_*.py` - Learn production patterns
-6. `SKILL.md` - Deep dive into all features
+6. `skills/nova-act-builder/SKILL.md` - Deep dive into all features
 
 ## Skill Capabilities
 
@@ -397,7 +399,7 @@ python 01_price_comparison.py
 cat QUICKSTART.md
 
 # Then explore the skill
-cat SKILL.md
+cat skills/nova-act-builder/SKILL.md
 
 # Study the examples
 cat examples/*.py

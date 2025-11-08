@@ -22,7 +22,9 @@ apresai-skills-marketplace/
 │   └── nova-act-skill/           # Nova Act browser automation skill
 │       ├── .claude-plugin/
 │       │   └── plugin.json       # Plugin manifest
-│       ├── SKILL.md              # Complete Nova Act API reference (~20KB)
+│       ├── skills/
+│       │   └── nova-act-builder/
+│       │       └── SKILL.md      # Complete Nova Act API reference (~20KB)
 │       ├── README.md             # Plugin overview and usage guide
 │       ├── QUICKSTART.md         # 5-minute getting started guide
 │       ├── OVERVIEW.md           # Detailed package contents
@@ -40,7 +42,7 @@ apresai-skills-marketplace/
 
 ### Core Documents (in plugins/nova-act-skill/)
 
-- **SKILL.md**: Primary skill reference containing complete Nova Act API documentation, all initialization parameters, best practices, security patterns, and script generation guidelines. Read this first when generating Nova Act scripts.
+- **skills/nova-act-builder/SKILL.md**: Primary skill reference containing complete Nova Act API documentation, all initialization parameters, best practices, security patterns, and script generation guidelines. Read this first when generating Nova Act scripts.
 
 - **README.md**: Package overview explaining what's included, how Claude users should reference the skill, and how developers should use it.
 
