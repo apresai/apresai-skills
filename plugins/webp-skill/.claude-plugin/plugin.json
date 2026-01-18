@@ -1,0 +1,9 @@
+{
+  "name": "webp-skill",
+  "version": "1.0.0",
+  "description": "Convert images to/from WebP format using cwebp/dwebp CLI tools",
+  "author": {
+    "name": "Chad Neal",
+    "email": "chad.neal@gmail.com"
+  }
+}
