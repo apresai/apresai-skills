@@ -1,0 +1,9 @@
+{
+  "name": "go-lambda",
+  "version": "1.0.0",
+  "description": "Comprehensive Go Lambda development with provided.al2023 runtime, ARM64/Graviton2 architecture, AWS SDK v2, and CDK infrastructure. Covers scaffolding, migration, best practices, and production patterns.",
+  "author": {
+    "name": "apresai",
+    "email": "contact@apresai.com"
+  }
+}

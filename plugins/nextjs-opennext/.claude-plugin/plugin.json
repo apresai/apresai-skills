@@ -1,0 +1,9 @@
+{
+  "name": "nextjs-opennext",
+  "version": "1.0.0",
+  "description": "Deploy Next.js applications to AWS Lambda using OpenNext and CDK. Covers App Router, Server Components, ISR, streaming, middleware, and production deployment patterns.",
+  "author": {
+    "name": "apresai",
+    "email": "contact@apresai.com"
+  }
+}

@@ -27,6 +27,26 @@
       },
       "source": "./plugins/apple-release",
       "category": "apple-development"
+    },
+    {
+      "name": "go-lambda",
+      "description": "Comprehensive Go Lambda development with provided.al2023 runtime, ARM64/Graviton2 architecture, AWS SDK v2, and CDK infrastructure. Covers scaffolding, migration, best practices, and production patterns.",
+      "version": "1.0.0",
+      "author": {
+        "name": "apresai"
+      },
+      "source": "./plugins/go-lambda",
+      "category": "aws-serverless"
+    },
+    {
+      "name": "nextjs-opennext",
+      "description": "Deploy Next.js applications to AWS Lambda using OpenNext and CDK. Covers App Router, Server Components, ISR, streaming, middleware, and production deployment patterns.",
+      "version": "1.0.0",
+      "author": {
+        "name": "apresai"
+      },
+      "source": "./plugins/nextjs-opennext",
+      "category": "aws-serverless"
     }
   ]
 }
