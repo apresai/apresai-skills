@@ -17,6 +17,16 @@
       },
       "source": "./plugins/nova-act-skill",
       "category": "ai-automation"
+    },
+    {
+      "name": "apple-release",
+      "description": "Apple app release automation for TestFlight and App Store Connect. Supports iOS and macOS apps. Handles version management, infrastructure deployment, archiving, and uploading via xcodebuild.",
+      "version": "1.0.0",
+      "author": {
+        "name": "apresai"
+      },
+      "source": "./plugins/apple-release",
+      "category": "apple-development"
     }
   ]
 }

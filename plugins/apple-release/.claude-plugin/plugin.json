@@ -1,0 +1,9 @@
+{
+  "name": "apple-release",
+  "version": "1.0.0",
+  "description": "Apple app release automation for TestFlight and App Store Connect. Supports iOS and macOS apps. Handles version management, infrastructure deployment, archiving, and uploading via xcodebuild.",
+  "author": {
+    "name": "apresai",
+    "email": "contact@apresai.com"
+  }
+}
