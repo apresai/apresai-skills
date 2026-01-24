@@ -1,14 +1,31 @@
 # apresai Skills Marketplace
 
-**Production-ready AI automation skills for Claude Code**
+**Production-ready skills and plugins for Claude Code**
 
-Transform complex browser workflows into simple Python scripts using natural language. Build web scrapers, automate forms, monitor websites, and more—all powered by Amazon Nova Act's AI browser automation.
+A curated collection of Claude Code plugins for AI-powered automation, Apple app releases, and more.
+
+---
+
+## Installation
+
+Add this marketplace to your Claude Code configuration:
+
+**~/.claude.json**
+```json
+{
+  "plugins": [
+    "https://github.com/apresai/apresai-skills"
+  ]
+}
+```
+
+After adding the marketplace, restart Claude Code. The skills will be available via their slash commands (e.g., `/release`, `/nova-act-builder`).
 
 ---
 
 ## What Is This?
 
-This marketplace provides **ready-to-use skills** that teach Claude Code how to generate production-quality automation scripts. Currently featuring the **Nova Act skill**, which enables Claude to create browser automation workflows using natural language commands.
+This marketplace provides **ready-to-use skills** that teach Claude Code specialized workflows. Features plugins for browser automation, Apple app releases, AWS Lambda development, and Next.js deployment.
 
 ### What Can You Build?
 
@@ -40,47 +57,57 @@ This marketplace provides **ready-to-use skills** that teach Claude Code how to 
 
 ## Quick Start
 
-### 1. Install the Marketplace
+### 1. Add the Marketplace
 
-In Claude Code, add this marketplace:
+Add to your `~/.claude.json`:
 
-```bash
-/plugin marketplace add apresai/nova-act-skill
+```json
+{
+  "plugins": [
+    "https://github.com/apresai/apresai-skills"
+  ]
+}
 ```
 
-### 2. Get Your Nova Act API Key
+### 2. Restart Claude Code
 
-1. Visit [nova.amazon.com/act](https://nova.amazon.com/act)
-2. Sign in with your Amazon.com account (the one you shop with)
-3. Generate your API key
-4. Set it in your environment:
+The marketplace plugins will be loaded automatically.
 
-```bash
-export NOVA_ACT_API_KEY="your_api_key_here"
+### 3. Use a Skill
+
+**For Apple releases:**
+```
+/release              # Full release with infrastructure
+/release-testflight   # Quick TestFlight upload
 ```
 
-### 3. Install Nova Act SDK
-
-```bash
-pip install nova-act
-playwright install chrome
+**For browser automation:**
 ```
-
-### 4. Ask Claude to Build Something!
-
-Try these example prompts with Claude Code:
-
-> *"Using the Nova Act skill, create a script that searches Amazon for wireless headphones under $200, extracts the top 5 results with prices and ratings, and saves them to a CSV file."*
-
-> *"Build a Nova Act script that monitors a specific product page on Best Buy and sends me an alert when the price drops below $500."*
-
-> *"Create a form-filling script that logs into my job portal and applies to positions matching my criteria."*
-
-Claude will generate a complete, production-ready Python script using Nova Act best practices.
+/nova-act-builder     # Generate Nova Act scripts
+```
 
 ---
 
-## Available Skills
+## Available Plugins
+
+### 🍎 apple-release
+
+**Apple App Release Automation**
+
+Automate iOS and macOS app releases to TestFlight and App Store Connect.
+
+**Skills:**
+- `/release` - Full release workflow: commit changes, deploy infrastructure, archive and upload to TestFlight
+- `/release-testflight` - Quick TestFlight upload (no infrastructure deployment)
+
+**Requirements:**
+- Makefile with `upload`, `deploy-infra` (for `/release`), and `info` targets
+- App Store Connect API key configured (ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH)
+- Xcode command line tools
+
+**Documentation:** [apple-release](./plugins/apple-release/README.md)
+
+---
 
 ### 🤖 nova-act-skill
 
@@ -262,26 +289,23 @@ Error handling, logging, retry logic, and monitoring built into generated code.
 
 ---
 
-## Installation
+## Nova Act Setup
 
-### Step 1: Add to Claude Code
-```bash
-/plugin marketplace add apresai/nova-act-skill
-/plugin install nova-act-skill
-```
+To use the Nova Act skill, you'll also need:
 
-### Step 2: Install Nova Act SDK
+### Step 1: Install Nova Act SDK
 ```bash
 pip install nova-act
 playwright install chrome
 ```
 
-### Step 3: Set API Key
+### Step 2: Set API Key
+Get your key from [nova.amazon.com/act](https://nova.amazon.com/act):
 ```bash
 export NOVA_ACT_API_KEY="your_api_key_from_nova.amazon.com"
 ```
 
-### Step 4: Test It Out
+### Step 3: Test It Out
 ```bash
 python plugins/nova-act-skill/examples/01_price_comparison.py
 ```
@@ -464,21 +488,20 @@ See individual plugin directories for licensing information. Nova Act SDK is sub
 
 ## Get Started Today
 
-```bash
-# 1. Add marketplace
-/plugin marketplace add apresai/nova-act-skill
-
-# 2. Install skill
-/plugin install nova-act-skill
-
-# 3. Ask Claude
-"Using the Nova Act skill, create a script that..."
+```json
+// ~/.claude.json
+{
+  "plugins": [
+    "https://github.com/apresai/apresai-skills"
+  ]
+}
 ```
 
-**Stop writing brittle web scrapers. Start describing what you want in plain English.**
+Then restart Claude Code and use any skill:
+- `/release` - Apple app releases
+- `/nova-act-builder` - Browser automation scripts
 
 ---
 
-**Last Updated:** November 2025
-**Marketplace Version:** 1.0
-**Featured Skill:** nova-act-skill v1.0
+**Last Updated:** January 2026
+**Marketplace Version:** 1.0.1
