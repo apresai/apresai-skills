@@ -1,0 +1,9 @@
+{
+  "name": "google-oauth",
+  "version": "1.0.0",
+  "description": "Complete Google OAuth integration guide covering GCP project setup, client ID management, platform-specific configuration (iOS, Flutter, Next.js, Go), ID token verification via JWKS, and long-lived session best practices including token rotation, grace periods, and coordinator patterns.",
+  "author": {
+    "name": "apresai",
+    "email": "contact@apresai.com"
+  }
+}
