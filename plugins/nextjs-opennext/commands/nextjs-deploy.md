@@ -1198,3 +1198,855 @@ If you don't need full AWS customization (VPC, fine-grained IAM, cost optimizati
 - [ ] API routes validate input
 - [ ] CORS configured appropriately
 - [ ] CloudFront configured with HTTPS only
+
+---
+
+## Real-World CDK Patterns (Production Projects)
+
+This section documents patterns mined directly from production codebases. Every snippet below was pulled from a running project.
+
+### Construct Choice Across Projects
+
+All projects use `cdk-opennext` (`NextjsSite` from `"cdk-opennext"`) or hand-rolled CDK. None use `cdk-nextjs-standalone` at the time of writing. The hand-rolled path (eleven9s admin) is chosen when you need precise IAM control or AASA file routing.
+
+| Project | CDK approach | Notes |
+|---------|-------------|-------|
+| chadneal.com | `cdk-opennext` `NextjsSite` | ISR + DynamoDB cache, games served via static assets |
+| regist | `cdk-opennext` `NextjsSite` | Includes `/api/*` → API Gateway CloudFront behavior |
+| models-apresai | `cdk-opennext` `NextjsSite` | 4h EventBridge cron triggers revalidation endpoint |
+| vail5r | `cdk-opennext` `NextjsSite` | Presigned S3 uploads, RBAC |
+| dangerously-skip | `cdk-opennext` `NextjsSite` | Smallest reference project |
+| eleven9s admin | Hand-rolled CDK | Full IAM control, AASA route, streaming invoke mode |
+| sophie | Hand-rolled CDK | API Gateway HTTP API origin, custom security headers policy |
+
+### cdk-opennext: Minimal Production Instantiation
+
+```typescript
+// chadneal.com — chadneal-web/cdk/lib/chadneal-stack.ts
+import { NextjsSite } from "cdk-opennext";
+
+const site = new NextjsSite(this, "NextjsSite", {
+  openNextPath: ".open-next",
+
+  customDomain: {
+    domainName: "www.chadneal.com",
+    hostedZone,          // route53.HostedZone.fromHostedZoneAttributes(...)
+    certificate,         // acm.Certificate.fromCertificateArn(...)
+  },
+
+  defaultFunctionProps: {
+    memorySize: 2048,
+    timeout: Duration.seconds(30),
+    environment: {
+      HIGH_SCORES_TABLE_NAME: highScoresTable.tableName,
+      AUTH_SECRET: authSecret,
+      NEXTAUTH_URL: "https://www.chadneal.com",
+      GOOGLE_CLIENT_ID: googleClientId,
+      GOOGLE_CLIENT_SECRET: googleClientSecret,
+    },
+  },
+
+  warm: 1,
+  warmerInterval: Duration.minutes(5),
+});
+
+// Grant DynamoDB access to the server function
+highScoresTable.grantReadWriteData(site.defaultServerFunction);
+```
+
+**cdk-opennext exposes `site.defaultServerFunction`** — use it for `table.grantReadWriteData(...)` and `bucket.grantReadWrite(...)` instead of constructing ARNs manually.
+
+### Disabling CloudFront SSR Caching (Required Pattern)
+
+The `NextjsSite` construct wires a caching policy to the default behavior. Override it to `CachingDisabled` so Next.js cache-control headers take effect:
+
+```typescript
+// Used in chadneal.com, regist, vail5r, dangerously-skip
+const cfnDistribution = site.distribution!.node
+  .defaultChild as cloudfront.CfnDistribution;
+
+cfnDistribution.addPropertyOverride(
+  "DistributionConfig.DefaultCacheBehavior.CachePolicyId",
+  "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" // Managed-CachingDisabled
+);
+```
+
+This is an escape hatch on the L1 construct. Without it, CloudFront caches all SSR responses indefinitely regardless of `Cache-Control` headers.
+
+### Adding an API Gateway Behavior to the Same CloudFront Distribution
+
+Regist co-locates the Next.js frontend and Go API behind one CloudFront distribution. A CloudFront Function strips `/api` before forwarding:
+
+```typescript
+// regist/infrastructure/lib/regist-stack.ts
+
+// CloudFront Function: strips /api prefix
+const apiRewriteFn = new cloudfront.Function(this, "ApiRewriteFn", {
+  functionName: "regist-api-rewrite",
+  code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  request.uri = request.uri.replace(/^\\/api/, '');
+  if (request.uri === '') request.uri = '/';
+  return request;
+}
+  `.trim()),
+});
+
+const apiOrigin = new cloudfrontOrigins.HttpOrigin(
+  cdk.Fn.select(2, cdk.Fn.split("/", httpApi.apiEndpoint)),
+  { protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY }
+);
+
+site.distribution!.addBehavior("/api/*", apiOrigin, {
+  viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+  allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+  cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+  originRequestPolicy:
+    cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+  functionAssociations: [
+    {
+      function: apiRewriteFn,
+      eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+    },
+  ],
+});
+```
+
+### Hand-Rolled CDK with Streaming Invoke Mode (eleven9s Admin)
+
+When you need fine-grained IAM, use the manual path. Note `invokeMode: lambda.InvokeMode.RESPONSE_STREAM` on the server function URL — this enables Lambda response streaming for reduced TTFB:
+
+```typescript
+// eleven9s/infrastructure/lib/admin-stack.ts (simplified)
+const serverFn = new lambda.Function(this, "ServerFunction", {
+  functionName: "eleven9s-admin-server",
+  runtime: lambda.Runtime.NODEJS_22_X,
+  architecture: lambda.Architecture.ARM_64,
+  handler: "index.handler",
+  code: lambda.Code.fromAsset(path.join(openNext, "server-functions/default")),
+  memorySize: 1024,
+  timeout: cdk.Duration.seconds(30),
+  role: adminRole,
+  environment: {
+    CACHE_BUCKET_NAME: assetsBucket.bucketName,
+    CACHE_BUCKET_KEY_PREFIX: "_cache",
+    CACHE_BUCKET_REGION: this.region,
+    CACHE_DYNAMO_TABLE: tagCacheTable.tableName,
+    REVALIDATION_QUEUE_URL: revalidationQueue.queueUrl,
+    REVALIDATION_QUEUE_REGION: this.region,
+    OPEN_NEXT_FORCE_NON_EMPTY_RESPONSE: "true",
+    NEXTAUTH_URL: `https://${props.domainName}`,
+  },
+  logRetention: logs.RetentionDays.TWO_WEEKS,
+});
+
+const serverUrl = serverFn.addFunctionUrl({
+  authType: lambda.FunctionUrlAuthType.NONE,
+  invokeMode: lambda.InvokeMode.RESPONSE_STREAM,  // <-- enables streaming
+});
+
+// origins.FunctionUrlOrigin wraps Lambda Function URLs cleanly
+const serverOrigin = new origins.FunctionUrlOrigin(serverUrl);
+```
+
+The eleven9s admin stack also deploys the OpenNext cache snapshot at deploy time:
+
+```typescript
+new s3deploy.BucketDeployment(this, "DeployCache", {
+  sources: [s3deploy.Source.asset(path.join(openNext, "cache"))],
+  destinationBucket: assetsBucket,
+  destinationKeyPrefix: "_cache",
+  memoryLimit: 512,
+  prune: false,  // never prune — cache entries must persist across deploys
+});
+```
+
+### Lambda Warming via EventBridge (Standard Pattern)
+
+All projects use the same shape: EventBridge rate rule every 5 minutes targeting the warmer function. With `cdk-opennext`, pass `warm: 1, warmerInterval: Duration.minutes(5)` to the `NextjsSite` construct and it handles this automatically. For the hand-rolled path (sophie, models-apresai):
+
+```typescript
+// sophie-web/infrastructure/lib/sophie-web-stack.ts (simplified)
+const warmerFunction = new lambda.Function(this, "WarmerFunction", {
+  functionName: "sophie-web-warmer-prod",
+  runtime: lambda.Runtime.NODEJS_24_X,
+  architecture: lambda.Architecture.ARM_64,
+  handler: "index.handler",
+  code: lambda.Code.fromAsset(
+    path.join(__dirname, "../../.open-next/warmer-function")
+  ),
+  memorySize: 128,
+  timeout: cdk.Duration.seconds(30),
+  environment: {
+    // WARM_PARAMS is a JSON array: [{concurrency, function}]
+    // Confirmed from .open-next/warmer-function/index.mjs
+    WARM_PARAMS: JSON.stringify([
+      { concurrency: 3, function: serverFunction.functionName },
+    ]),
+  },
+});
+
+serverFunction.grantInvoke(warmerFunction);
+
+new events.Rule(this, "WarmerRule", {
+  ruleName: "sophie-web-warmer-prod",
+  schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+  targets: [new eventsTargets.LambdaFunction(warmerFunction)],
+});
+```
+
+`concurrency: 3` keeps 3 instances warm. Cost: ~$0.19/month. Set to 1 for low-traffic sites.
+
+### Cost Tags via CDK App-Level Aspects (Standard Schema)
+
+Apply tags at the `cdk.App()` level so every resource in every stack is tagged uniformly. Taken directly from dangerously-skip:
+
+```typescript
+// cdk/bin/app.ts
+const app = new cdk.App();
+
+new DangerouslySkipStack(app, "DangerouslySkipStack", { env });
+new GitHubOidcStack(app, "GitHubOidcStack", { env });
+
+// Standard cost tag schema — applies to every resource in both stacks
+cdk.Tags.of(app).add("project", "dangerously-skip");
+cdk.Tags.of(app).add("env", "prod");
+cdk.Tags.of(app).add("managed-by", "cdk");
+cdk.Tags.of(app).add("owner", "chad");
+```
+
+The four canonical tags are `project`, `env`, `managed-by`, and `owner`. See `obsidian:resources/aws-cost-tagging.md` for the full cost allocation setup.
+
+### GitHub OIDC Stack (Keyless CI Deploys)
+
+No long-lived AWS access keys in CI. The OIDC provider lets GitHub Actions assume a role using a short-lived token:
+
+```typescript
+// dangerously-skip/cdk/lib/github-oidc-stack.ts
+const provider = new iam.OpenIdConnectProvider(this, "GitHubOidc", {
+  url: "https://token.actions.githubusercontent.com",
+  clientIds: ["sts.amazonaws.com"],
+});
+
+const role = new iam.Role(this, "GitHubActionsDeployRole", {
+  roleName: "github-actions-dangerously-skip-deploy",
+  maxSessionDuration: cdk.Duration.hours(1),
+  assumedBy: new iam.WebIdentityPrincipal(
+    provider.openIdConnectProviderArn,
+    {
+      StringEquals: {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+      },
+      StringLike: {
+        "token.actions.githubusercontent.com:sub":
+          "repo:apresai/dangerously-skip:ref:refs/heads/main",
+      },
+    }
+  ),
+});
+```
+
+Reference this role ARN in your GitHub Actions workflow under `role-to-assume`.
+
+### EventBridge Cron for Background Workers (models-apresai)
+
+The models-apresai collector runs every 4 hours and calls the Next.js `/api/revalidate` endpoint afterward — a clean pattern for decoupling data collection from page rendering:
+
+```typescript
+// models-apresai/infrastructure/lib/models-apresai-stack.ts
+new events.Rule(this, "CollectorSchedule", {
+  ruleName: "models-apresai-collector-cron",
+  description: "Run the collector every 4 hours (00/04/08/12/16/20 UTC)",
+  schedule: events.Schedule.expression("cron(0 0,4,8,12,16,20 * * ? *)"),
+  targets: [new targets.LambdaFunction(collectorFn)],
+});
+```
+
+The collector Lambda posts to `https://${domainName}/api/revalidate` with a bearer token, triggering `revalidateTag(...)` inside the Next.js route handler. The site then also calls `cloudfront.CreateInvalidation` on `/api/*` to bust CloudFront's edge cache independently of the Next.js ISR layer.
+
+### Apex Domain + www via L1 Escape Hatch
+
+`cdk-opennext` only accepts one `domainName`. To serve both apex and www, patch the CloudFront L1 construct and add a second Route53 record:
+
+```typescript
+// chadneal-web/cdk/lib/chadneal-stack.ts
+cfnDistribution.addPropertyOverride("DistributionConfig.Aliases", [
+  "www.chadneal.com",
+  "chadneal.com",
+]);
+
+new route53.ARecord(this, "ApexARecord", {
+  zone: hostedZone,
+  recordName: "chadneal.com",
+  target: route53.RecordTarget.fromAlias(
+    new targets.CloudFrontTarget(site.distribution)
+  ),
+});
+
+new route53.AaaaRecord(this, "ApexAaaaRecord", {
+  zone: hostedZone,
+  recordName: "chadneal.com",
+  target: route53.RecordTarget.fromAlias(
+    new targets.CloudFrontTarget(site.distribution)
+  ),
+});
+```
+
+Always create both A and AAAA records (IPv4 + IPv6).
+
+### Runtime Audit in Makefile (models-apresai pattern)
+
+Every project's `make deploy` should gate on a runtime audit. The models-apresai Makefile shows the exact grep:
+
+```makefile
+audit:
+	@echo ">> auditing Lambda runtime/arch invariants"
+	@! grep -RnE 'NODEJS_(16|18|20)_X|Architecture\.X86_64' . \
+		--include='*.ts' --include='*.js' \
+		--exclude-dir=node_modules --exclude-dir=.git --exclude-dir=cdk.out \
+		--exclude-dir=.next --exclude-dir=.open-next --exclude-dir=dist 2>/dev/null \
+		|| (echo "AUDIT FAILED: forbidden Lambda runtime/arch found above" && exit 1)
+	@echo "OK"
+
+deploy: audit build build-opennext cdk-install
+	cd infrastructure && npx cdk deploy --require-approval never
+```
+
+This blocks any deploy that introduces `NODEJS_16_X`, `NODEJS_18_X`, `NODEJS_20_X`, or `Architecture.X86_64`.
+
+---
+
+## Authentication Patterns
+
+### Pattern 1: Server Components + `auth()` Only (No Middleware, No Lambda@Edge)
+
+This is the eleven9s admin portal pattern. It is the recommended approach for internal tools and admin portals where every page requires authentication.
+
+**Why not middleware?**
+
+Next.js middleware runs in the Edge runtime by default. On Lambda/OpenNext, deploying middleware as `external: true` requires Lambda@Edge — adding cost, cold starts, and SDK compatibility constraints. For an admin portal where every route is protected, calling `auth()` directly in each Server Component is simpler and runs entirely in the existing Node.js Lambda.
+
+```typescript
+// eleven9s/admin/src/lib/auth.ts
+import NextAuth, { type NextAuthConfig } from "next-auth";
+import Google from "next-auth/providers/google";
+import { getRuntimeConfig } from "./runtimeConfig";
+
+// Top-level await works in Node 20+ ESM. Config is fetched from SSM
+// once at cold start and reused for the Lambda's lifetime.
+const config = await getRuntimeConfig();
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  trustHost: true, // Required behind CloudFront / Lambda Function URL
+  secret: config.nextauthSecret,
+  session: { strategy: "jwt" },
+  providers: [
+    Google({
+      clientId: config.googleClientId,
+      clientSecret: config.googleClientSecret,
+      allowDangerousEmailAccountLinking: true,
+    }),
+  ],
+  pages: { signIn: "/login", error: "/login" },
+  callbacks: {
+    async signIn({ user }) {
+      // Allowlist check — only permitted emails can sign in
+      return config.allowedEmails
+        .map((e) => e.toLowerCase())
+        .includes((user.email ?? "").toLowerCase());
+    },
+    async session({ session }) {
+      return session;
+    },
+  },
+} satisfies NextAuthConfig);
+```
+
+```tsx
+// eleven9s/admin/src/app/page.tsx
+import { redirect } from "next/navigation";
+import { auth } from "@/lib/auth";
+import { getDashboardStats } from "@/lib/dashboardData";
+
+export const dynamic = "force-dynamic";
+
+export default async function DashboardPage() {
+  // auth() is called in every protected Server Component.
+  // No middleware, no Lambda@Edge.
+  const session = await auth();
+  if (!session?.user) redirect("/login");
+
+  const stats = await getDashboardStats();
+  return <AdminShell session={session}>...</AdminShell>;
+}
+```
+
+The login page uses a Server Action to call `signIn()`:
+
+```tsx
+// eleven9s/admin/src/app/login/page.tsx
+import { signIn } from "@/lib/auth";
+
+export default async function LoginPage({ searchParams }) {
+  const { callbackUrl } = await searchParams;
+  return (
+    <form
+      action={async () => {
+        "use server";
+        await signIn("google", { redirectTo: callbackUrl ?? "/" });
+      }}
+    >
+      <button type="submit">Continue with Google</button>
+    </form>
+  );
+}
+```
+
+**Credentials from SSM at cold start**: The `getRuntimeConfig()` function calls SSM `GetParameters` on first invocation and caches the result in module scope. This avoids baking secrets into Lambda environment variables while keeping latency minimal (SSM call only happens on cold start).
+
+### Pattern 2: NextAuth.js v5 (Beta) with Google OAuth + Backend Token Exchange
+
+Used in sophie, chadneal.com, podcaster, vail5r. The web app authenticates with Google, then exchanges the Google ID token for backend-issued JWT tokens. This lets the mobile and web clients use the same token format.
+
+```typescript
+// podcaster/portal/src/lib/auth.ts (condensed)
+import "server-only";
+import NextAuth from "next-auth";
+import type { NextAuthConfig } from "next-auth";
+import Google from "next-auth/providers/google";
+
+declare module "next-auth" {
+  interface Session {
+    user: { id: string; email: string; name: string; role: string; status: string; };
+    error?: string;
+  }
+}
+
+const SESSION_MAX_AGE = 365 * 24 * 60 * 60;
+
+export const authConfig: NextAuthConfig = {
+  trustHost: true,                    // Required for Lambda/CloudFront
+  providers: [
+    Google({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      checks: ["none"],               // Disable PKCE (not needed for server-side)
+      authorization: {
+        params: {
+          prompt: "consent",
+          access_type: "offline",     // Get refresh token
+          response_type: "code",
+        },
+      },
+    }),
+  ],
+  session: {
+    strategy: "jwt",
+    maxAge: SESSION_MAX_AGE,
+  },
+  cookies: {
+    sessionToken: {
+      name: process.env.NODE_ENV === "production"
+        ? "__Secure-authjs.session-token"
+        : "authjs.session-token",
+      options: { httpOnly: true, sameSite: "lax", path: "/", secure: true },
+    },
+  },
+  callbacks: {
+    async jwt({ token, account }) {
+      if (account) {
+        // Initial sign-in: capture tokens from Google
+        return {
+          ...token,
+          access_token: account.access_token,
+          refresh_token: account.refresh_token,
+          expires_at: account.expires_at,
+        };
+      }
+      if (token.expires_at && Date.now() < token.expires_at * 1000) {
+        return token; // Token still valid
+      }
+      // Token expired — refresh via Google
+      const res = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: process.env.GOOGLE_CLIENT_ID!,
+          client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+          refresh_token: token.refresh_token as string,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ...token, error: "RefreshAccessTokenError" };
+      return { ...token, access_token: data.access_token,
+               expires_at: Math.floor(Date.now() / 1000) + data.expires_in };
+    },
+    session: sessionCallback, // stamps role/status from DynamoDB onto session
+  },
+  pages: { signIn: "/login" },
+};
+
+export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);
+```
+
+**Cookie naming with `__Secure-` prefix**: Use `__Secure-authjs.session-token` in production, not `__Host-`. CloudFront strips the `Path` attribute that `__Host-` requires, causing silent auth failures. All projects use `__Secure-` (or `__Secure-next-auth.session-token` on older NextAuth naming).
+
+**RBAC via session callback**: The podcaster pattern stamps `role` and `status` from DynamoDB onto the session in `sessionCallback`. Downstream checks do `session.user.role !== "admin"` — they never trust a client-supplied role claim.
+
+```typescript
+// podcaster/portal/src/lib/auth-callbacks.ts
+export async function sessionCallback({ session, token }) {
+  if (session.user?.email) {
+    const dbUser = await getUserByEmail(session.user.email);
+    if (dbUser) {
+      session.user.id = dbUser.userId;
+      session.user.role = dbUser.role;   // "user" | "creator" | "admin"
+      session.user.status = dbUser.status;
+    } else {
+      session.error = "UserNotFound";
+      session.user.role = "";
+    }
+  }
+  return session;
+}
+```
+
+**Sophie's more complex pattern**: Sophie exchanges the Google ID token for Go-backend-issued JWT tokens (separate `accessToken` and `refreshToken`). This lets the mobile app and web app share the same token validation logic. See `/Users/chad/dev/sophie/sophie-web/auth.ts` for the full multi-tab token refresh coordination pattern with `acquireRefreshLock()`.
+
+### Pattern 3: Custom JWT (Go Backend Issues Tokens, Web Validates)
+
+Used in regist. The Go API issues JWTs stored in AWS Secrets Manager. The Next.js frontend validates these tokens server-side without Cognito or NextAuth.
+
+```typescript
+// regist/infrastructure/lib/regist-stack.ts — JWT secret setup
+const jwtSecret = new secretsmanager.Secret(this, "JwtSecret", {
+  secretName: "regist-jwt-secret",
+  generateSecretString: {
+    secretStringTemplate: "{}",
+    generateStringKey: "secret",
+    passwordLength: 64,
+    excludePunctuation: true,
+  },
+});
+
+// The auth Lambda reads this secret, issues JWTs, and vends
+// short-lived STS credentials for direct DynamoDB/S3 access from iOS.
+const authFn = new lambda.Function(this, "AuthFunction", {
+  environment: {
+    JWT_SECRET_ARN: jwtSecret.secretArn,
+    STS_ROLE_ARN: iosSdkRole.roleArn,     // iOS client assumes this role
+    GOOGLE_CLIENT_IDS: googleClientIDs,
+  },
+});
+jwtSecret.grantRead(authFn);
+```
+
+The web frontend passes the JWT as a cookie to the Go API (`INTERNAL_API_URL` is the API Gateway endpoint, set as a Lambda environment variable):
+
+```typescript
+// regist NextjsSite environment
+defaultFunctionProps: {
+  environment: {
+    INTERNAL_API_URL: httpApi.apiEndpoint,  // direct APIGW, no CloudFront
+  },
+},
+```
+
+---
+
+## ISR and Caching Patterns
+
+### ISR Infrastructure: Two S3 Buckets + DynamoDB + SQS FIFO Queue
+
+OpenNext ISR requires four resources. The naming and schema matter:
+
+```typescript
+// sophie-web/infrastructure/lib/sophie-web-stack.ts — ISR setup
+const cacheBucket = new s3.Bucket(this, "CacheBucket", {
+  bucketName: `sophie-web-cache-prod-${this.account}`,
+  lifecycleRules: [
+    { expiration: cdk.Duration.days(7), prefix: "_cache/" },
+  ],
+});
+
+const cacheTable = new dynamodb.Table(this, "CacheTable", {
+  tableName: "sophie-web-cache-prod",
+  partitionKey: { name: "path", type: dynamodb.AttributeType.STRING },
+  sortKey: { name: "tag", type: dynamodb.AttributeType.STRING },
+  billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+  timeToLiveAttribute: "ttl",
+});
+cacheTable.addGlobalSecondaryIndex({
+  indexName: "revalidate",
+  partitionKey: { name: "path", type: dynamodb.AttributeType.STRING },
+  sortKey: { name: "revalidatedAt", type: dynamodb.AttributeType.NUMBER },
+});
+
+const revalidationQueue = new sqs.Queue(this, "RevalidationQueue", {
+  queueName: "sophie-web-revalidation-prod.fifo",
+  fifo: true,
+  contentBasedDeduplication: true,
+  visibilityTimeout: cdk.Duration.seconds(60),
+  retentionPeriod: cdk.Duration.days(1),
+});
+```
+
+The DynamoDB GSI name must be `revalidate` (lowercase) — OpenNext looks for this index by name.
+
+**When to use `revalidate: 0` vs. ISR**: Use `revalidate: 0` (or `export const dynamic = "force-dynamic"`) for pages that must be fresh on every request: admin dashboards, user-specific data, anything that reads from session. Use ISR with a positive revalidation interval for public content that can tolerate stale data (blog posts, product listings, public stats).
+
+### Externally-Triggered Revalidation (models-apresai Pattern)
+
+The collector Lambda calls a protected Next.js route to invalidate specific tags after a data update:
+
+```typescript
+// Next.js route: app/api/revalidate/route.ts
+import { revalidateTag } from "next/cache";
+import { NextRequest, NextResponse } from "next/server";
+
+export async function POST(req: NextRequest) {
+  const auth = req.headers.get("authorization");
+  if (auth !== `Bearer ${process.env.REVALIDATE_TOKEN}`) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const { tag } = await req.json();
+  revalidateTag(tag);
+  return NextResponse.json({ revalidated: true });
+}
+```
+
+The `REVALIDATE_TOKEN` is generated by CDK (`generateSecretString`) and injected into both the site Lambda and the collector Lambda environment. After calling the Next.js endpoint, the collector also calls `cloudfront.CreateInvalidation` on `/api/*` to bust CloudFront's own edge cache.
+
+---
+
+## OpenAPI-First Workflow (sophie, regist, eleven9s)
+
+### Pattern: Single Spec, Generated Types for Every Consumer
+
+Sophie maintains one `openapi/spec/openapi.yaml` and generates types for Go (server), TypeScript (web), and Dart (mobile) from it. The eleven9s pattern extends this to Swift.
+
+```makefile
+# sophie/Makefile — type generation targets
+generate-types:
+	# Step 1: Go types
+	cd sophie-api/openapi && $(MAKE) generate-go
+	# Step 2: TypeScript types
+	cd sophie-api/openapi && $(MAKE) generate-ts
+	# Step 3: Distribute to consumers
+	cp sophie-api/openapi/generated/typescript/types.ts ../sophie-web/types/api.ts
+
+# Ensure types are in sync before deploy
+check-sync:
+	# Regenerate in a temp dir and diff against committed types
+	$(MAKE) generate-types > /dev/null 2>&1
+	diff -r .generated-backup openapi/generated || (echo "Types out of sync, run make generate-types"; exit 1)
+```
+
+```makefile
+# eleven9s/Makefile — generates TypeScript for the admin Next.js app
+gen-admin-types:
+	cd admin && npx openapi-typescript ../openapi/admin-api.yaml -o src/api/types.ts
+```
+
+### Spec-First Deploy Guard (sophie)
+
+Sophie blocks deploys on uncommitted changes — pre-commit hooks validate that `generate-types` was run:
+
+```makefile
+deploy: $(SCHEMA_MARKER)
+	@if ! git diff --quiet HEAD 2>/dev/null; then \
+		echo "Deploy blocked: uncommitted changes detected"; \
+		echo "Commit first so pre-commit hooks validate your code."; \
+		exit 1; \
+	fi
+	cd sophie-api && $(MAKE) deploy
+	cd sophie-web && $(MAKE) deploy
+	sophie-api/scripts/verify-lambda-env.sh
+```
+
+---
+
+## Makefile Patterns
+
+All projects follow the same target conventions:
+
+```makefile
+# Standard Makefile structure
+.PHONY: clean build deploy dev
+
+clean:
+	rm -rf .next .open-next cdk.out node_modules/.cache
+
+build:
+	npm run build          # Next.js build
+	npx open-next build    # Produces .open-next/
+
+# Load .env.production before CDK so secrets reach Lambda env vars
+deploy: clean build
+	@if [ -f .env.production ]; then \
+		set -a && . ./.env.production && set +a && \
+		cd infrastructure && npx cdk deploy --require-approval never; \
+	else \
+		echo "Error: .env.production not found"; exit 1; \
+	fi
+
+dev:
+	npm run dev
+
+# CDK-only shortcut (skips next.js rebuild — useful when only infra changed)
+diff:
+	cd infrastructure && npx cdk diff
+
+synth:
+	cd infrastructure && npx cdk synth
+```
+
+For monorepos (regist, models-apresai) where the CDK project is a sibling directory:
+
+```makefile
+# models-apresai pattern — explicit build chain
+build-opennext: build-web
+	cd web && npx open-next build     # writes web/.open-next/
+
+deploy: audit build build-opennext cdk-install
+	cd infrastructure && npx cdk deploy --require-approval never
+```
+
+**The `.env.production` convention**: Secrets are stored in a gitignored `.env.production` file at the project root. The Makefile sources it with `set -a && . ./.env.production && set +a` so environment variables are available when CDK reads `process.env.*` at synth time. This is how `AUTH_SECRET`, `GOOGLE_CLIENT_ID`, etc. reach the Lambda `environment` block.
+
+---
+
+## Worktree Gotcha: CDK Synth Fails Without Build Artifacts
+
+Fresh worktrees created with `claude -w <slug>` do not contain `.open-next/` because it is gitignored. CDK's `lambda.Code.fromAsset(path.join(openNext, "server-functions/default"))` reads from disk at synth time to hash the artifact for CloudFormation logical IDs. Synth fails with "path does not exist."
+
+**Four options (choose one per situation):**
+
+1. **Code-only PRs (default)**: Run `npx tsc --noEmit -p infrastructure/` instead of `cdk synth`. TypeScript compile catches type errors without needing build artifacts. Use this for tag additions, comment edits, renames.
+
+2. **Structural validation**: Run `make build && cdk synth && cdk diff` in the worktree. This runs the full build chain, produces `.open-next/`, then synths. Required when the PR adds/removes a Lambda or moves an asset path.
+
+3. **CI placeholder pattern** (eleven9s reference): Before `cdk synth --quiet` in CI, write placeholder bytes to each asset path. This lets synth hash dummy files without rebuilding.
+   ```bash
+   mkdir -p web/.open-next/server-functions/default
+   printf "placeholder" > web/.open-next/server-functions/default/index.js
+   npx cdk synth --quiet
+   ```
+
+4. **`make bootstrap` target**: Each project's Makefile should have a `bootstrap` target that runs `npm ci` in each package and executes a first build. Run after `git worktree add` to prime the worktree.
+
+See `obsidian:resources/cdk-worktree-build-norms.md` for the canonical reference.
+
+---
+
+## Security Headers (Production Pattern from Sophie)
+
+Sophie uses a `ResponseHeadersPolicy` construct for Lighthouse compliance. This is worth reusing:
+
+```typescript
+// sophie-web/infrastructure/lib/sophie-web-stack.ts (condensed)
+const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
+  this,
+  "SecurityHeadersPolicy",
+  {
+    securityHeadersBehavior: {
+      strictTransportSecurity: {
+        accessControlMaxAge: cdk.Duration.seconds(31536000), // 1 year
+        includeSubdomains: true,
+        preload: true,
+        override: true,
+      },
+      contentTypeOptions: { override: true }, // nosniff
+      frameOptions: {
+        frameOption: cloudfront.HeadersFrameOption.DENY,
+        override: true,
+      },
+      referrerPolicy: {
+        referrerPolicy:
+          cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+        override: true,
+      },
+    },
+  }
+);
+```
+
+Apply to the default behavior and all additional behaviors. The eleven9s admin stack uses `cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS` (the built-in managed policy) for simpler setups.
+
+---
+
+## Common Errors and Fixes
+
+### `path does not exist` during CDK synth
+
+**Cause**: `.open-next/` or `build/` artifacts do not exist in the worktree. CDK hashes these at synth time.
+
+**Fix**: Run `make build` (or `make build-opennext`) before `cdk synth`. In CI, use placeholder bytes (see Worktree Gotcha section).
+
+### SSR responses cached by CloudFront
+
+**Cause**: `cdk-opennext` wires a default caching policy to the CloudFront default behavior. All SSR responses get cached regardless of `Cache-Control`.
+
+**Fix**: Override to the managed `CachingDisabled` policy:
+```typescript
+cfnDistribution.addPropertyOverride(
+  "DistributionConfig.DefaultCacheBehavior.CachePolicyId",
+  "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+);
+```
+
+### Auth cookies dropped or not set
+
+**Cause 1**: `__Host-` cookie prefix requires `Path=/` and `Secure` to be set by the same origin. CloudFront strips or modifies `Set-Cookie` headers in ways that violate `__Host-` constraints.
+
+**Fix**: Use `__Secure-` prefix instead. Both eleven9s and podcaster use this.
+
+**Cause 2**: `trustHost: true` not set. NextAuth v5 requires this when running behind a proxy (CloudFront, API Gateway).
+
+**Fix**: Add `trustHost: true` to the NextAuth config.
+
+### Lambda cold start hangs on first byte
+
+**Cause**: Lambda response streaming is enabled but the initial response body is empty. Lambda's buffering layer waits for content before flushing.
+
+**Fix**: Set `OPEN_NEXT_FORCE_NON_EMPTY_RESPONSE: "true"` in the server function environment. This is set in eleven9s admin, and should be set in all streaming deployments.
+
+### ISR revalidation not triggering
+
+**Cause 1**: DynamoDB GSI not named `revalidate` (exact match required by OpenNext).
+
+**Cause 2**: SQS queue is not FIFO or `contentBasedDeduplication` is false.
+
+**Cause 3**: Revalidation function missing `CACHE_DYNAMO_TABLE` environment variable.
+
+**Fix**: Cross-check against the eleven9s admin or sophie ISR setup above.
+
+### NextAuth `NEXTAUTH_URL` mismatch
+
+**Cause**: `NEXTAUTH_URL` must match the exact domain the app is served on, including the `https://` scheme. If CloudFront is in front, set it to the CloudFront or custom domain, not the Lambda Function URL.
+
+**Fix**: Set `NEXTAUTH_URL: "https://your-domain.com"` in the Lambda environment. Also set `trustHost: true`.
+
+### `site.defaultServerFunction` undefined
+
+**Cause**: Accessing `site.defaultServerFunction` before the `NextjsSite` construct has fully initialized, or the property name changed in a newer version of `cdk-opennext`.
+
+**Fix**: Check the installed version of `cdk-opennext`. The property is `defaultServerFunction` on recent versions. Grant permissions after the construct is fully initialized.
+
+---
+
+## Checklist Additions
+
+### Deployment Checklist
+
+- [ ] Run `make audit` — no `NODEJS_(16|18|20)_X` or `Architecture.X86_64` in CDK code
+- [ ] `.env.production` sourced before `cdk deploy` (secrets reach Lambda environment)
+- [ ] `OPEN_NEXT_FORCE_NON_EMPTY_RESPONSE=true` set on server function
+- [ ] `NEXTAUTH_URL` matches the deployed domain exactly
+- [ ] `trustHost: true` in NextAuth config
+- [ ] CloudFront default behavior overridden to `CachingDisabled` (if using `cdk-opennext`)
+- [ ] Cost tags applied at `cdk.App()` level: `project`, `env`, `managed-by`, `owner`
+- [ ] Lambda warming configured (1 instance every 5 min minimum)
+- [ ] Both A and AAAA Route53 records created for custom domain
+- [ ] `prune: false` on cache `BucketDeployment` (never prune ISR cache entries)

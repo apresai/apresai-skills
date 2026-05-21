@@ -39,6 +39,7 @@ Quick lookup index. Everything here is upstream — when in doubt, the source of
 | bubble-table (enhanced table) | https://github.com/evertras/bubble-table |
 | catwalk (test framework alternative) | https://github.com/knz/catwalk |
 | teatest (official testing helpers) | https://github.com/charmbracelet/x/tree/main/exp/teatest |
+| teatest pkg.go.dev reference | https://pkg.go.dev/github.com/charmbracelet/x/exp/teatest |
 
 ## Worked examples worth studying
 
@@ -47,6 +48,8 @@ Quick lookup index. Everything here is upstream — when in doubt, the source of
 | `bubbletea/examples/*` | Reference patterns for every bubble |
 | `bubbletea-app-template` | A scaffold for a real app (CI, GoReleaser, golangci-lint) |
 | `grok-chat` (this codebase) | Chat REPL + slash palette + model picker + concurrent streaming + Braille banner + filled input |
+| `gimage` (`~/dev/gimage/internal/tui/`) | Multi-step wizard (8 steps), NavigateMsg screen routing, Tab-cycled multi-component focus, lipgloss.Place centering — v1 but the patterns translate 1:1 to v2 |
+| `emailz` (`~/dev/emailz/internal/cli/tui.go`) | Minimal list+textinput config manager — canonical example of bubbles/list + textinput with view-enum routing — v1, migrate to v2 for production use |
 | `glow` (charmbracelet/glow) | Markdown viewer; shows great use of viewport + lipgloss styles |
 | `gum` (charmbracelet/gum) | CLI prompt primitives; pairs huh patterns with shell-friendly composability |
 | `wishlist` (charmbracelet/wishlist) | SSH directory; multi-pane layout, mouse focus, BubbleZone |
@@ -94,7 +97,7 @@ The v2 stack went GA in early 2026. Version pinning recommendation for new proje
 charm.land/bubbletea/v2  v2.0.6
 charm.land/bubbles/v2    v2.1.0
 charm.land/lipgloss/v2   v2.0.3
-charm.land/huh/v2        v2.0.0  // if you're using forms
+charm.land/huh/v2        v2.0.3  // if you're using forms
 ```
 
 These are stable. Future minor versions should not break the patterns documented here.

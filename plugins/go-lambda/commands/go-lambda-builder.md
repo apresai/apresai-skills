@@ -1498,6 +1498,605 @@ func TestGetUser(t *testing.T) {
 
 ---
 
+---
+
+## Production Patterns (mined from real projects)
+
+The sections below document patterns extracted from ~12 production Lambda projects. Where the pattern originates from a specific project it's noted explicitly — use that as a reference when you need the full context.
+
+---
+
+### Lambda init Pattern (Cold-Start Friendly)
+
+Global vars are initialized once at cold start and reused across all invocations in that container's lifetime. Fail fast with `os.Exit(1)` or `log.Fatalf` so a bad environment surfaces as a clean runtime init error in CloudWatch rather than a misleading panic or a handler invocation that silently does nothing.
+
+The pattern from **emailz** (`cmd/email-forwarder/main.go`) — note the bounded timeout on `LoadDefaultConfig` to prevent a hung IMDS call from pinning the cold start indefinitely:
+
+```go
+var (
+    s3Bucket      string
+    forwardToAddr string
+    forwarder     *email.Forwarder
+)
+
+func init() {
+    s3Bucket = os.Getenv("S3_BUCKET")
+    forwardToAddr = os.Getenv("FORWARD_TO_EMAIL")
+    if s3Bucket == "" || forwardToAddr == "" {
+        log.Fatal("Missing required env vars: S3_BUCKET, FORWARD_TO_EMAIL")
+    }
+
+    // Bounded timeout prevents hung IMDS/STS calls from pinning cold start.
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    cfg, err := config.LoadDefaultConfig(ctx)
+    if err != nil {
+        log.Fatalf("Failed to load AWS config: %v", err)
+    }
+
+    forwarder = email.NewForwarder(s3.NewFromConfig(cfg), ses.NewFromConfig(cfg), ...)
+}
+```
+
+The pattern from **regist** (`cmd/api-auth/main.go`) logs a cold-start marker so you can measure container reuse in CloudWatch:
+
+```go
+func init() {
+    slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+        Level: slog.LevelInfo,
+    })))
+    slog.Info("lambda_cold_start", "function", "api-auth")
+
+    tableName := os.Getenv("TABLE_NAME")
+    dbClient, err = db.New(ctx, tableName)
+    if err != nil {
+        slog.Error("failed to create db client", "error", err)
+        os.Exit(1)
+    }
+    // ... more clients ...
+}
+```
+
+The pattern from **eleven9s** (`backend/cmd/api/main.go`) chains dependency construction through a `config.Load` helper and uses `os.Exit(1)` after each failure so the full init always runs and every bad config field is visible in one cold-start log:
+
+```go
+func init() {
+    slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+        Level: slog.LevelInfo,
+    })))
+
+    ctx := context.Background()
+    cfg, err := config.Load(ctx)
+    if err != nil {
+        slog.Error("load config", "err", err)
+        os.Exit(1)
+    }
+
+    db, err := ddb.New(ctx, cfg.Region, cfg.TableName)
+    if err != nil {
+        slog.Error("ddb client", "err", err)
+        os.Exit(1)
+    }
+
+    // ... more dependencies wired via cfg ...
+
+    lambdaAdapter = httpadapter.NewV2(authed)
+}
+```
+
+**Rules:**
+- Load all env vars at the top of `init()` and fail immediately if required ones are missing.
+- Use `os.Exit(1)` (with `slog.Error`) or `log.Fatalf` — never `panic()`.
+- Wrap `config.LoadDefaultConfig` with a `context.WithTimeout` (10 s is enough).
+- Assign AWS clients to package-level vars so the handler function never calls `NewFromConfig`.
+
+---
+
+### DynamoDB Single-Table with Typed Go Structs
+
+Every project uses `PK`/`SK` compound keys with entity-type prefixes and `dynamodbav` struct tags. **Never use `map[string]interface{}`** — DynamoDB's attribute marshaller corrupts ULIDs and RFC3339 timestamps when they go through `interface{}` round-trips.
+
+**Entity prefix inventory across projects:**
+
+| Project | Entity prefixes |
+|---------|----------------|
+| eleven9s | `USER#`, `MEDIA#`, `ALBUM#`, `CLUSTER#`, `APPLE_TX#`, `STATUS#uploading` |
+| for-the-win | `USER#`, `GROUP#`, `LEADERBOARD#` |
+| regist | `USER#`, `REFRESH#`, `HASH#`, `MEETING#`, `CONTACT#` |
+| sophie | `WINE#`, `UPLOAD#`, `REVIEW#`, `ENRICHMENT#`, `AI_CALL#`, `ENTITY#` |
+| emailz | N/A — no DDB (SES → S3 only) |
+
+**Standard struct shape** (from sophie's `internal/db/dynamodb.go`):
+
+```go
+// WineItem is the DDB representation of a Wine entity.
+// PK and SK are the only fields read by GetItem/Query key conditions.
+// All other fields use dynamodbav so marshal/unmarshal is automatic.
+type WineItem struct {
+    PK string `dynamodbav:"PK"` // WINE#{wineId}
+    SK string `dynamodbav:"SK"` // METADATA
+
+    // Embed the domain model — avoids duplicating every field.
+    Data models.Wine `dynamodbav:"Data"`
+
+    // GSI keys (omitempty so sparse indexing works correctly)
+    GSI1PK string `dynamodbav:"GSI1PK,omitempty"` // TYPE#{wineType}
+    GSI1SK string `dynamodbav:"GSI1SK,omitempty"` // REGION#{region}
+    GSI5PK string `dynamodbav:"GSI5PK,omitempty"` // SLUG#{slug}
+    GSI5SK string `dynamodbav:"GSI5SK,omitempty"` // METADATA
+}
+```
+
+**Key construction helpers** (from for-the-win's `internal/db/`):
+
+```go
+// Key helpers — small functions prevent typos in ad-hoc string concat.
+func userPK(userID string) string            { return "USER#" + userID }
+func groupPK(groupID string) string          { return "GROUP#" + groupID }
+func leaderboardSK(period, date string) string {
+    return "LEADERBOARD#" + period + "#" + date
+}
+```
+
+**Shared DB client wrapper** (from for-the-win and eleven9s — identical pattern):
+
+```go
+// internal/db/client.go
+type Client struct {
+    DDB       *dynamodb.Client
+    TableName string
+}
+
+func New(ctx context.Context, tableName string) (*Client, error) {
+    cfg, err := config.LoadDefaultConfig(ctx)
+    if err != nil {
+        return nil, fmt.Errorf("load aws config: %w", err)
+    }
+    return &Client{
+        DDB:       dynamodb.NewFromConfig(cfg),
+        TableName: tableName,
+    }, nil
+}
+```
+
+**GSI naming convention**: GSI1 through GSI5 (and beyond) named `GSI1-Purpose` in CDK, referenced as `"GSI1"` in query code. regist uses `GSI1-UserDate`, `GSI2-TokenHash`. eleven9s documents purpose in `docs/ddb-schema.yaml`.
+
+---
+
+### ULID for Sortable IDs
+
+All projects use `github.com/oklog/ulid/v2` instead of `google/uuid`. ULIDs are 26-char Crockford base32, lexicographically sortable by creation time, and safe for DynamoDB sort keys. eleven9s wraps this in an `internal/ids` package:
+
+```go
+// internal/ids/ulid.go
+package ids
+
+import (
+    "crypto/rand"
+    "time"
+
+    "github.com/oklog/ulid/v2"
+)
+
+// New returns a freshly generated ULID string (26 chars, Crockford base32).
+// ULIDs sort lexicographically and encode a timestamp — preferred over UUID v4.
+func New() string {
+    return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
+}
+
+// ParseTime extracts the timestamp embedded in a ULID string.
+func ParseTime(s string) (time.Time, error) {
+    u, err := ulid.Parse(s)
+    if err != nil {
+        return time.Time{}, fmt.Errorf("parse ulid %q: %w", s, err)
+    }
+    return ulid.Time(u.Time()), nil
+}
+```
+
+Regist and for-the-win call `ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()` inline. Prefer the wrapper package pattern for projects with multiple Lambdas so the generation logic lives in one place.
+
+---
+
+### OpenAPI-First Workflow (Go Side)
+
+**eleven9s** is the canonical reference for the full oapi-codegen pipeline. The config (`backend/oapi-codegen-public.yaml`) generates types, an `std-http-server`, and a `strict-server` simultaneously:
+
+```yaml
+# backend/oapi-codegen-public.yaml
+output: internal/api/api.gen.go
+package: api
+generate:
+  models: true
+  std-http-server: true     # net/http mux wiring, no framework
+  strict-server: true       # typed request/response wrappers
+  embedded-spec: false
+```
+
+```makefile
+# backend/Makefile
+gen-public:
+    oapi-codegen -config oapi-codegen-public.yaml ../openapi/public-api.yaml
+
+gen-admin:
+    oapi-codegen -config oapi-codegen-admin.yaml ../openapi/admin-api.yaml
+```
+
+The generated `api.gen.go` produces a `StrictServerInterface` that your implementation struct satisfies. The `main.go` wires it through `httpadapter` for API Gateway HTTP API v2:
+
+```go
+// cmd/api/main.go (eleven9s pattern)
+var lambdaAdapter *httpadapter.HandlerAdapterV2
+
+func init() {
+    // ... build all deps ...
+    server := api.NewServer(cfg, db, ...)
+    strictHandler := api.NewStrictHandlerWithOptions(server, nil, api.StrictHTTPServerOptions{
+        RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+            slog.WarnContext(r.Context(), "strict request error", "err", err)
+            writeErrorEnvelope(w, http.StatusBadRequest, "bad_request", "Bad request")
+        },
+        ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+            slog.ErrorContext(r.Context(), "strict response error", "err", err)
+            writeErrorEnvelope(w, http.StatusInternalServerError, "internal_error", "Internal error")
+        },
+    })
+    mux := http.NewServeMux()
+    routed := api.HandlerFromMux(strictHandler, mux)
+    authed := api.AuthMiddleware(jwtIssuer)(routed)
+    lambdaAdapter = httpadapter.NewV2(authed)
+}
+
+func handler(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+    return lambdaAdapter.ProxyWithContext(ctx, req)
+}
+```
+
+The `httpadapter` package is `github.com/awslabs/aws-lambda-go-api-proxy/httpadapter`.
+
+**Route parity test** — for-the-win's `TestRoutesMatchSpec` (`packages/api/internal/handlers/routes_test.go`) parses the Go 1.22+ `mux.HandleFunc` call strings with `go/ast` and compares them to `api.yaml` paths loaded via `github.com/getkin/kin-openapi/openapi3`. Any route in code but not in spec (or vice versa) fails the test. Run it with:
+
+```bash
+make test-api-spec
+# expands to: go test ./internal/handlers/ -run TestRoutesMatchSpec -v
+```
+
+The spec also drives Swift client generation (`gen-swift-client`) and TypeScript types (`gen-go-types`) from the same YAML — one spec, four generated artifacts.
+
+---
+
+### Structured Logging (slog)
+
+The existing skill covers `lambda.NewLogHandler()` (v1.54+) and the manual fallback. The real projects add two patterns:
+
+**1. Error codes for searchable log correlation** (from regist's `shared/logging/logging.go`):
+
+```go
+// shared/logging/logging.go
+const (
+    RGAuth001 = "RG-AUTH-001" // Invalid token
+    RGAuth003 = "RG-AUTH-003" // Refresh token reuse detected
+    RGAuth005 = "RG-AUTH-005" // STS assume role failed
+    RGDB001   = "RG-DB-001"   // DynamoDB operation failed
+    RGSumm001 = "RG-SUMM-001" // Bedrock invocation failed
+)
+
+func Error(ctx context.Context, code, msg string, args ...any) {
+    allArgs := append([]any{"error_code", code}, args...)
+    logger.ErrorContext(ctx, msg, allArgs...)
+}
+```
+
+Usage: `logging.Error(ctx, logging.RGDB001, "token lookup failed", "error", err)` — the `error_code` field lets CloudWatch Insights group errors by type independently of the message string.
+
+**2. Structured phase logging for multi-step Lambdas** (from sophie's `generate-article`):
+
+```go
+// Log each pipeline phase with a consistent field set so queries can
+// filter by phase= or measure latency across invocations.
+fmt.Printf("INFO: [generate-article] phase=generate_start requestId=%s topic=\"%s\"\n",
+    event.RequestID, req.Topic)
+// ... do work ...
+fmt.Printf("INFO: [generate-article] phase=generate_complete requestId=%s durationMs=%d\n",
+    event.RequestID, generateDuration.Milliseconds())
+```
+
+Sophie uses `fmt.Printf` with key=value pairs for structured logs without a logger dependency (the generate-article Lambda predates slog adoption in that project). New code should use `slog.InfoContext(ctx, "phase", "phase", "generate_complete", "requestId", ..., "durationMs", ...)`.
+
+---
+
+### Event-Driven Lambda Patterns
+
+**EventBridge consumer** (from for-the-win's `score-compute`):
+
+```go
+lambda.Start(func(ctx context.Context, event json.RawMessage) error {
+    // Attempt to parse as an EventBridge envelope first.
+    var ebEvent struct {
+        DetailType string          `json:"detail-type"`
+        Detail     json.RawMessage `json:"detail"`
+    }
+    if err := json.Unmarshal(event, &ebEvent); err == nil && ebEvent.Detail != nil {
+        var detail struct {
+            UserID string `json:"userId"`
+        }
+        if err := json.Unmarshal(ebEvent.Detail, &detail); err == nil && detail.UserID != "" {
+            switch ebEvent.DetailType {
+            case "StepsUpdated", "BadgeEarned":
+                return recomputeUserScore(ctx, dbClient, detail.UserID)
+            }
+        }
+    }
+    // Fall through to full recompute (cron trigger has no detail).
+    return recomputeAllRanks(ctx, dbClient)
+})
+```
+
+**EventBridge publisher** (from sophie's `generate-article`):
+
+```go
+func publishArticleCreated(ctx context.Context, article *models.Article) {
+    detail := map[string]interface{}{
+        "articleId": article.ArticleId,
+        "slug":      article.Slug,
+        "category":  string(article.Category),
+    }
+    detailJSON, _ := json.Marshal(detail)
+    detailStr := string(detailJSON)
+    source := "stcom.content"
+    detailType := "Content.ArticleCreated"
+
+    _, err = eventBridgeClient.PutEvents(ctx, &eventbridge.PutEventsInput{
+        Entries: []eventbridgetypes.PutEventsRequestEntry{
+            {
+                Source:       &source,
+                DetailType:   &detailType,
+                Detail:       &detailStr,
+                EventBusName: &eventBusName,
+            },
+        },
+    })
+}
+```
+
+**EventBridge → SQS → Lambda envelope unwrap** (sophie's `generate-article` handles all three trigger paths: SQS-wrapped EventBridge, direct EventBridge, and direct invocation for tests):
+
+```go
+func handler(ctx context.Context, rawEvent json.RawMessage) (*GenerateResult, error) {
+    var event ContentRequestCreatedEvent
+
+    // Try SQS wrapper first (EventBridge → SQS → Lambda path)
+    var sqsEvent struct {
+        Records []struct{ Body string `json:"body"` } `json:"Records"`
+    }
+    if err := json.Unmarshal(rawEvent, &sqsEvent); err == nil && len(sqsEvent.Records) > 0 {
+        var envelope struct{ Detail json.RawMessage `json:"detail"` }
+        if err := json.Unmarshal([]byte(sqsEvent.Records[0].Body), &envelope); err != nil {
+            // Malformed — drop, don't retry (parse errors are never retryable)
+            return &GenerateResult{Error: "malformed SQS body"}, nil
+        }
+        json.Unmarshal(envelope.Detail, &event)
+    } else {
+        // Try direct EventBridge, then direct invocation for testing
+        var envelope struct{ Detail json.RawMessage `json:"detail"` }
+        if err := json.Unmarshal(rawEvent, &envelope); err == nil && envelope.Detail != nil {
+            json.Unmarshal(envelope.Detail, &event)
+        } else {
+            json.Unmarshal(rawEvent, &event)
+        }
+    }
+    // ... handle event ...
+}
+```
+
+**Scheduled cron** (from models-apresai — runs every 4 hours via CDK EventBridge rule):
+
+```typescript
+// infrastructure/lib/models-apresai-stack.ts
+new events.Rule(this, 'CollectorSchedule', {
+    ruleName: 'models-apresai-collector-cron',
+    description: 'Run the collector every 4 hours (00/04/08/12/16/20 UTC)',
+    schedule: events.Schedule.expression('cron(0 0,4,8,12,16,20 * * ? *)'),
+    targets: [new targets.LambdaFunction(collectorFn)],
+});
+```
+
+The Go handler for scheduled events receives an `events.CloudWatchEvent` (or `json.RawMessage` if you don't need the event fields).
+
+---
+
+### STS AssumeRole Pattern
+
+Regist's `api-auth` Lambda issues scoped STS credentials so the iOS SDK can call DynamoDB and S3 directly without proxying through the API — this eliminates a per-request Lambda invocation for streaming workloads like Transcribe.
+
+The session policy restricts DDB to `USER#{userID}` leading keys and S3 to `{userID}/*` prefixes. Two scope levels are provided: full (DDB + S3 + Transcribe) and Transcribe-only for web clients.
+
+```go
+// assumeRoleForUser issues credentials scoped to a single user's data.
+// Policy is built via json.Marshal (not fmt.Sprintf) so userID characters
+// cannot break out of the JSON string.
+func assumeRoleForUser(ctx context.Context, userID string) (*sts.AssumeRoleOutput, error) {
+    if !ulidPattern.MatchString(userID) {
+        return nil, fmt.Errorf("invalid userID format")
+    }
+    tableName := os.Getenv("TABLE_NAME")
+
+    policyDoc := map[string]any{
+        "Version": "2012-10-17",
+        "Statement": []map[string]any{
+            {
+                "Effect": "Allow",
+                "Action": []string{
+                    "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem", "dynamodb:Query",
+                },
+                "Resource": fmt.Sprintf("arn:aws:dynamodb:*:*:table/%s", tableName),
+                "Condition": map[string]any{
+                    "ForAllValues:StringLike": map[string]any{
+                        "dynamodb:LeadingKeys": []string{"USER#" + userID},
+                    },
+                },
+            },
+            {
+                "Effect": "Allow",
+                "Action": []string{"s3:PutObject", "s3:GetObject"},
+                "Resource": "arn:aws:s3:::my-bucket-*/" + userID + "/*",
+            },
+        },
+    }
+    policyBytes, _ := json.Marshal(policyDoc)
+    policy := string(policyBytes)
+    sessionName := "myapp-" + userID[:8] // first 8 chars of ULID = timestamp
+
+    return stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+        RoleArn:         &stsRoleARN,
+        RoleSessionName: &sessionName,
+        Policy:          &policy,
+        DurationSeconds: aws.Int32(3600),
+    })
+}
+```
+
+**When to use this pattern:**
+- Mobile/desktop client needs to call AWS services directly (avoids Lambda-as-proxy latency).
+- The resource can be scoped by user ID in IAM (`LeadingKeys` for DDB, path prefix for S3).
+- You need Transcribe streaming, which cannot be proxied through a Lambda without very large buffers.
+
+**When NOT to use:**
+- Resources cannot be scoped per-user (e.g., a shared table where users can't be isolated by leading key).
+- The client is web-only and XSS risk of credential exposure is unacceptable (use Transcribe-only scope or proxy instead).
+
+---
+
+### DDB Schema Enforcement (make ddb-lint)
+
+**eleven9s** declares every DynamoDB attribute in `docs/ddb-schema.yaml` and enforces it with `TestSchemaDrift` in `backend/internal/ddb/schema_test.go`. The YAML is the source of truth — edit it first, then update the `*Row` struct, then the handler, all in the same commit.
+
+```makefile
+# Root Makefile
+ddb-lint:
+    cd backend && go test -run TestSchemaDrift -v ./internal/ddb/...
+```
+
+`TestSchemaDrift` reflects over every registered `*Row` struct and cross-checks:
+1. Every attribute in YAML has a matching `dynamodbav` tag on the struct.
+2. Every tagged struct field is declared in YAML.
+3. DDB type in YAML (`S`, `N`, `BOOL`) is consistent with the Go type.
+
+```go
+// schema_test.go — register every entity you want validated
+types := map[string]reflect.Type{
+    "User":   reflect.TypeOf(UserRow{}),
+    "Media":  reflect.TypeOf(MediaRow{}),
+    "Album":  reflect.TypeOf(AlbumRow{}),
+    // ... all entities ...
+}
+sch, _ := loadSchema() // reads docs/ddb-schema.yaml
+// checkEntity cross-checks each entity against its reflect.Type
+```
+
+Wire this into CI as `make ddb-lint` so a schema change that forgets to update the struct (or vice versa) fails the build before deploy.
+
+---
+
+### Cost Tagging
+
+Every project applies four standard tags to the entire CDK app in `infrastructure/bin/<project>.ts`. This ensures all resources (Lambda, DDB, S3, CloudFront, API Gateway) carry consistent tags for Cost Explorer filtering.
+
+```typescript
+// infrastructure/bin/myapp.ts — apply after creating the app, before synth
+const app = new cdk.App();
+new MyAppStack(app, 'MyAppStack', { env: { account: '...', region: 'us-east-1' } });
+
+cdk.Tags.of(app).add('project',    'my-project-slug'); // lowercase, kebab
+cdk.Tags.of(app).add('env',        'prod');
+cdk.Tags.of(app).add('managed-by', 'cdk');
+cdk.Tags.of(app).add('owner',      'chad');
+```
+
+`cdk.Tags.of(app).add(...)` applies the tag to every resource in every stack under the app via a CDK Aspect — no per-resource tagging required. Apply it to the app object, not the stack, so it propagates to nested stacks.
+
+Reference: `obsidian:resources/aws-cost-tagging.md` for the full tagging policy.
+
+---
+
+### Makefile Patterns
+
+All projects follow the same skeleton. Key invariants: `GOOS=linux GOARCH=arm64 CGO_ENABLED=0`, output binary named `bootstrap`, zipped from inside the build directory so the zip root contains `bootstrap` directly.
+
+**Single Lambda (emailz pattern):**
+
+```makefile
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+    -tags lambda.norpc \
+    -ldflags="-s -w" \
+    -o build/bootstrap ./cmd/email-forwarder
+cd build && zip -q email-forwarder.zip bootstrap
+```
+
+**Multiple Lambdas (eleven9s pattern — parallel-friendly via make's default jobserver):**
+
+```makefile
+LAMBDAS := api apple-webhook admin-ops sweep egress-analyzer
+BUILD_DIR := build
+GOFLAGS := -ldflags="-s -w" -tags lambda.norpc
+GOENV := GOOS=linux GOARCH=arm64 CGO_ENABLED=0
+
+build: $(LAMBDAS)
+
+# Pattern rule — each Lambda name expands to this recipe.
+$(LAMBDAS):
+    @mkdir -p $(BUILD_DIR)/$@
+    $(GOENV) go build $(GOFLAGS) -o $(BUILD_DIR)/$@/bootstrap ./cmd/$@
+    cd $(BUILD_DIR)/$@ && zip -q ../$@.zip bootstrap
+```
+
+Run `make -j4 build` to build four Lambdas in parallel. CDK reads the zip files from `build/*.zip` using `lambda.Code.fromAsset('build/api.zip')`.
+
+**Regist's pattern** adds `-trimpath` to strip build machine paths from the binary (improves reproducibility and shrinks the binary slightly):
+
+```makefile
+GOFLAGS := -trimpath
+LDFLAGS := -s -w
+# ...
+$(GOENV) go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$@/bootstrap ./cmd/$@
+```
+
+**Build a single Lambda by name** (regist's convenience target):
+
+```makefile
+build-lambda-%:
+    cd $(LAMBDA_DIR) && $(GOENV) go build $(GOFLAGS) \
+        -ldflags "$(LDFLAGS)" -o bin/$*/bootstrap ./cmd/$*
+```
+
+Usage: `make build-lambda-api-auth`.
+
+**Standard targets every project should have:**
+
+| Target | Description |
+|--------|-------------|
+| `make build` | Cross-compile all Lambdas to `build/` or `dist/` |
+| `make deploy` | `build` + `cd infrastructure && npx cdk deploy` |
+| `make clean` | Remove `build/`, `dist/`, `cdk.out/` |
+| `make test` | `go test ./...` |
+| `make gen` | Re-run oapi-codegen (if OpenAPI-first) |
+| `make lint` | `golangci-lint run ./...` |
+
+---
+
+### Powertools-for-Go
+
+**There is no Powertools for Lambda Go package.** The Python/TypeScript/Java Powertools libraries have no Go equivalent — the open feature request is `aws-powertools/powertools-lambda #82`. Do not suggest `aws-lambda-powertools-go` or any similar package name; it does not exist.
+
+Go developers substitute:
+- **Tracing**: `github.com/aws/aws-xray-sdk-go` (X-Ray SDK, used in emailz)
+- **Logging**: `log/slog` with `lambda.NewLogHandler()` (v1.54+) or `slog.NewJSONHandler`
+- **Middleware**: hand-rolled `http.Handler` wrapper or `httpadapter` + `net/http` middleware
+
+---
+
 ## Best Practices Summary
 
 ### DO

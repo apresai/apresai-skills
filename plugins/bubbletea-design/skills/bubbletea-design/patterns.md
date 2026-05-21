@@ -676,6 +676,259 @@ For more sophisticated easing, see `charm.land/harmonica` — spring physics for
 
 ---
 
+---
+
+## Pattern 11: Multi-step wizard with step enum
+
+An 8-step wizard where each step is a distinct UI state. Used in `~/dev/gimage/internal/tui/generate_flow.go` for the image generation flow. Works equally well for onboarding, form collection, or anything that forces a linear path.
+
+### Shape
+
+```
+Step 1: Prompt textarea  →  Step 2: Provider picker  →  Step 3: Size picker
+→  Step 4: Style picker  →  Step 5: Advanced options (multi-field, Tab cycling)
+→  Step 6: Output path   →  Step 7: Command preview  →  Step 8: Progress + result
+```
+
+### Model
+
+```go
+type Step int
+
+const (
+    StepPrompt Step = iota
+    StepProvider
+    StepSize
+    StepAdvanced
+    StepOutput
+    StepPreview
+    StepProgress
+    StepResult
+)
+
+type model struct {
+    currentStep Step
+    width, height int
+
+    // One field per step that needs a component
+    promptArea  textarea.Model
+    outputInput textinput.Model
+    progressBar progress.Model
+
+    // Picker state (pure int index + slice of options)
+    providers       []providerOption
+    selectedProvider int
+
+    // Result state
+    resultPath string
+    err        error
+}
+```
+
+### Update routing
+
+```go
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+    // Global keys first
+    switch msg := msg.(type) {
+    case tea.KeyPressMsg:
+        switch msg.String() {
+        case "ctrl+c":
+            return m, tea.Quit
+        case "esc":
+            if m.currentStep > StepPrompt {
+                m.currentStep--
+                m.resetFocusForStep()
+            }
+            return m, nil
+        }
+    case tea.WindowSizeMsg:
+        m.width, m.height = msg.Width, msg.Height
+        return m, nil
+    case generationCompleteMsg:
+        m.currentStep = StepResult
+        m.resultPath, m.err = msg.path, msg.err
+        return m, nil
+    }
+
+    // Delegate to the active step
+    switch m.currentStep {
+    case StepPrompt:    return m.updatePrompt(msg)
+    case StepProvider:  return m.updateProvider(msg)
+    case StepAdvanced:  return m.updateAdvanced(msg)
+    case StepProgress:  return m.updateProgress(msg)
+    }
+    return m, nil
+}
+```
+
+### View: center each step in the terminal
+
+```go
+func (m *model) View() tea.View {
+    var content string
+    switch m.currentStep {
+    case StepPrompt:   content = m.viewPrompt()
+    case StepProvider: content = m.viewProvider()
+    // … etc
+    }
+    v := tea.NewView(content)
+    v.AltScreen = true
+    return v
+}
+
+func (m *model) viewPrompt() string {
+    box := focusedBoxStyle.Width(76).Render(
+        titleStyle.Render("Step 1 / 8: Describe your image") + "\n\n" +
+        m.promptArea.View() + "\n\n" +
+        helpStyle.Render("Enter: next • Shift+Enter: newline • Esc: back • ?: help"),
+    )
+    return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+```
+
+`lipgloss.Place` centers the fixed-width box regardless of terminal size — no relayout math needed per step.
+
+### Backtrack-safe focus reset
+
+```go
+func (m *model) resetFocusForStep() {
+    switch m.currentStep {
+    case StepPrompt:   m.promptArea.Focus()
+    case StepAdvanced: m.blurAllAdvanced(); m.focusAdvanced(0)
+    case StepOutput:   m.outputInput.Focus()
+    }
+}
+```
+
+### Why this works
+
+- **Single `currentStep` int** keeps routing trivial — no nested state machines.
+- **Esc always goes back one step** — consistent, no surprise exits.
+- **`lipgloss.Place` for centering** means each step can have its own fixed width box; no global relayout.
+- **Multi-field Tab cycling** in advanced steps: see gotcha #30 for the blur-all pattern.
+- **`generationCompleteMsg`** is sent from a goroutine via `prog.Send` (see Pattern 1's streaming idiom) — never block the event loop during generation.
+
+---
+
+## Pattern 12: AltScreen vs inline — decision guide
+
+| Shape | Use AltScreen | Use Inline |
+|---|---|---|
+| Full-screen TUI (chat REPL, dashboard, file picker, wizard) | Yes | No |
+| Short-lived prompt (picker, confirm, form with 1-3 fields) | No | Yes |
+| Log tail that scrolls forever | Yes | No |
+| Tool that prints structured output to stdout after interaction | No | Yes |
+| Embeds in a shell pipeline (`cmd \| your-tui \| cmd`) | No | Yes |
+| Needs the terminal's scrollback buffer | No | Yes |
+
+**AltScreen** (`v.AltScreen = true` in View): takes over the full terminal, hides scrollback, restores on exit. User sees only your TUI. Correct for anything that should feel like an application.
+
+**Inline** (default when `v.AltScreen` is false): renders below the shell prompt, uses the terminal's own scrollback. Correct for short confirmations or for tools that need to print their output so it's accessible after the TUI exits.
+
+**Switching at runtime**: set `v.AltScreen` based on model state — you can enter and exit alt-screen mid-session (e.g., open a picker over the shell prompt, close it on selection, print the result inline).
+
+```go
+func (m model) View() tea.View {
+    v := tea.NewView(m.render())
+    v.AltScreen = m.pickerOpen  // dynamic: only full-screen during picker
+    return v
+}
+```
+
+**Performance note**: Bubble Tea v2 uses Synchronized Output (Mode 2026) automatically on terminals that support it (Ghostty, Kitty, WezTerm, recent iTerm2). This eliminates tearing for high-throughput log viewers regardless of AltScreen vs inline.
+
+---
+
+## Pattern 13: Testing TUIs with teatest
+
+`teatest` lives at `github.com/charmbracelet/x/exp/teatest`. It wraps your model in a test harness, lets you send keystrokes, and provides golden-file snapshot helpers.
+
+### Setup
+
+```go
+import (
+    "testing"
+    "time"
+
+    tea "charm.land/bubbletea/v2"
+    "github.com/charmbracelet/x/exp/teatest"
+)
+
+func TestModel_Quit(t *testing.T) {
+    tm := teatest.NewTestModel(
+        t,
+        initialModel(),
+        teatest.WithInitialTermSize(80, 24),
+    )
+
+    // Simulate pressing 'q'
+    tm.Send(tea.KeyPressMsg{Code: 'q'})
+
+    // Wait for the program to exit
+    tm.WaitFinished(t, teatest.WithFinalTimeout(time.Second))
+}
+```
+
+### Simulate keypresses
+
+```go
+// Press a single key
+tm.Send(tea.KeyPressMsg{Code: 'j'})   // down
+tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+// Type a string (one keypress per rune)
+for _, r := range "hello" {
+    tm.Send(tea.KeyPressMsg{Code: r, Text: string(r)})
+}
+
+// Ctrl+C
+tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+```
+
+### Golden-file snapshot
+
+```go
+func TestModel_Golden(t *testing.T) {
+    tm := teatest.NewTestModel(
+        t,
+        initialModel(),
+        teatest.WithInitialTermSize(80, 24),
+    )
+
+    // Wait until the model renders something specific
+    teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+        return strings.Contains(string(b), "Select Provider")
+    }, teatest.WithDuration(3*time.Second))
+
+    // Snapshot current output against golden file
+    // Run with -update to regenerate: go test ./... -update
+    tm.RequireEqualOutput(t)
+}
+```
+
+Golden files are stored in `testdata/` next to your `_test.go` file. Regenerate with `go test ./... -update`.
+
+**CI gotcha**: golden files contain ANSI escape sequences that vary by color profile. Either generate them in CI (not locally) or force a fixed profile — see gotcha #32.
+
+### WaitFor: poll until output matches
+
+```go
+teatest.WaitFor(
+    t,
+    tm.Output(),
+    func(b []byte) bool {
+        return strings.Contains(string(b), "done")
+    },
+    teatest.WithDuration(5*time.Second),
+    teatest.WithCheckInterval(100*time.Millisecond),
+)
+```
+
+Use `WaitFor` whenever your model has async operations (streaming, generation) — don't sleep.
+
+---
+
 ## See also
 
 - `architecture.md` — the runtime model that makes these patterns work

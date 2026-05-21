@@ -485,6 +485,151 @@ case msg:
 
 ---
 
+## 29. `NavigateMsg` pattern: sub-model screen routing
+
+**Symptom**: You have multiple screens (MainMenu, Detail, Settings) and aren't sure how to hand off between them cleanly without global mutable state.
+
+**Pattern**: Define a `NavigateMsg` type and a helper command. The parent routes based on which sub-model is active, and sub-models emit `NavigateMsg` to request transitions rather than returning `tea.Quit`:
+
+```go
+type Screen int
+const (
+    ScreenMain Screen = iota
+    ScreenDetail
+)
+
+type NavigateMsg struct{ Screen Screen }
+
+func Navigate(s Screen) tea.Cmd {
+    return func() tea.Msg { return NavigateMsg{Screen: s} }
+}
+
+// In parent Update:
+case NavigateMsg:
+    m.screen = msg.Screen
+    switch msg.Screen {
+    case ScreenDetail:
+        m.detail = NewDetailModel()
+        return m, m.detail.Init()
+    }
+    return m, nil
+```
+
+Sub-models return `Navigate(ScreenMain)` to go back — they never call `tea.Quit` directly (unless it's a global quit). This is the pattern used in `~/dev/gimage/internal/tui/tui.go`.
+
+**Sub-model Update signatures**: note that sub-models return their own concrete type, not `tea.Model`, so the parent can re-store the updated value without a type assertion:
+
+```go
+func (m *GenerateFlowModel) Update(msg tea.Msg) (*GenerateFlowModel, tea.Cmd) { … }
+
+// In parent:
+m.generateFlow, cmd = m.generateFlow.Update(msg)
+```
+
+---
+
+## 30. Multi-component focus: explicit blur-all before focus-one
+
+**Symptom**: Two textinputs both show their cursor as active; visual feedback is wrong.
+
+**Cause**: You called `Focus()` on the new component but didn't call `Blur()` on the old one.
+
+**Fix**: Write a `blurAll()` helper that blurs every focusable component, then call `focusCurrent()` after changing the focus index. This is safer than tracking which component was previously focused:
+
+```go
+func (m *GenerateFlowModel) blurAllAdvancedInputs() {
+    m.negativePromptInput.Blur()
+    m.seedInput.Blur()
+    m.cfgScaleInput.Blur()
+    m.countInput.Blur()
+    // picker-only fields need no blur — they have no cursor
+}
+
+func (m *GenerateFlowModel) focusAdvancedInput() {
+    switch m.advancedFocusIndex {
+    case 0: m.negativePromptInput.Focus()
+    case 1: m.seedInput.Focus()
+    case 6: m.cfgScaleInput.Focus()
+    case 7: m.countInput.Focus()
+    }
+}
+```
+
+When cycling focus with Tab:
+
+```go
+case "tab":
+    m.blurAllAdvancedInputs()
+    m.advancedFocusIndex = (m.advancedFocusIndex + 1) % totalFields
+    m.focusAdvancedInput()
+    return m, textinput.Blink
+```
+
+(Real usage: `~/dev/gimage/internal/tui/generate_flow.go`)
+
+---
+
+## 31. `tea.WithAltScreen()` as a NewProgram option is v1 syntax
+
+**Symptom**: You port v1 code and write `tea.NewProgram(m, tea.WithAltScreen())` — it compiles but the option is silently ignored in v2, OR it doesn't exist at all.
+
+**Fix**: In v2, AltScreen and all terminal-level flags live on the `View` struct returned from `View()`. Remove the option and set it in the view:
+
+```go
+// v1 — gone in v2
+p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+// v2
+func (m model) View() tea.View {
+    v := tea.NewView(content)
+    v.AltScreen = true
+    v.MouseMode = tea.MouseModeCellMotion
+    return v
+}
+```
+
+---
+
+## 32. Golden-file tests fail in CI due to color profile mismatch
+
+**Symptom**: `teatest.RequireEqualOutput` passes locally but fails in GitHub Actions.
+
+**Cause**: Your local terminal reports TrueColor; CI reports 256-color or NoColor. Lip Gloss renders different ANSI escape sequences. The golden file contains your local color profile's output.
+
+**Fix**: Force a specific color profile when creating the test program:
+
+```go
+import "github.com/charmbracelet/colorprofile"
+
+tm := teatest.NewTestModel(
+    t,
+    initialModel(),
+    teatest.WithInitialTermSize(80, 24),
+)
+// Or: regenerate golden files in CI and commit them.
+```
+
+Alternatively, use `CLICOLOR_FORCE=0` in CI to disable colors globally, and ensure your golden files are generated with the same env. The `-update` flag regenerates them: `go test ./... -update`.
+
+---
+
+## 33. `key.Text` vs `msg.String()` for printable rune input in modal pickers
+
+**Symptom**: You want to extend a filter string character-by-character as the user types, but `msg.String()` returns `"a"` for some keys and `"ctrl+a"` for others — hard to guard.
+
+**Fix**: Use `msg.Key().Text` — it returns the printable text for printable keys and is empty for control keys. No guard needed:
+
+```go
+if t := msg.Key().Text; t != "" {
+    m.filter += t
+    m.recompute()
+}
+```
+
+This is the pattern used in the modal picker (Pattern 3 in `patterns.md`). It safely ignores modifiers and control keys without an explicit denylist.
+
+---
+
 ## See also
 
 - `architecture.md` — the broader v2 model

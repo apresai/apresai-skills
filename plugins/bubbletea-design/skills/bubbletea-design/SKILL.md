@@ -106,7 +106,7 @@ require (
     charm.land/bubbletea/v2 v2.0.6
     charm.land/bubbles/v2   v2.1.0
     charm.land/lipgloss/v2  v2.0.3
-    charm.land/huh/v2       v2.0.0  // optional, for forms
+    charm.land/huh/v2       v2.0.3  // optional, for forms
 )
 ```
 

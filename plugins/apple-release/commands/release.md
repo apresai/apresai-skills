@@ -29,24 +29,34 @@ Also check for `deploy-infra:` as a fallback if `deploy:` is not found.
 
 ### 1.3 Check App Store Connect API Key Configuration
 
-Look for these variables in the project's Makefile (check root Makefile, then ios/Makefile):
+**Key storage convention**: All ASC API keys live in `~/dev/certs/api-keys/` as `AuthKey_<KEY_ID>.p8`, with symlinks mirrored in `~/private_keys/`. Each project loads its key path dynamically so the `.p8` file never moves and no path is hardcoded.
+
+Look for `ASC_KEY_ID` and `ASC_ISSUER_ID` in the project's `.env` file (gitignored), then verify the Makefile picks them up:
 
 ```bash
-grep -rE "^ASC_KEY_ID|^ASC_ISSUER_ID|^ASC_KEY_PATH" Makefile ios/Makefile 2>/dev/null
+# Check .env for key vars (this is the correct source — not Makefile hardcodes)
+grep -E "^ASC_KEY_ID|^ASC_ISSUER_ID" .env 2>/dev/null
+
+# Check Makefile reads .env and constructs the path
+grep -E "ASC_KEY_PATH|include .env|-include .env" Makefile 2>/dev/null
 ```
 
-Required variables:
-- `ASC_KEY_ID` - App Store Connect API Key ID
-- `ASC_ISSUER_ID` - App Store Connect Issuer ID
-- `ASC_KEY_PATH` - Path to the .p8 key file
+**Required variables** (from `.env`, never hardcoded in the Makefile):
+- `ASC_KEY_ID` — API key ID (e.g., `WT7YRT8J32`)
+- `ASC_ISSUER_ID` — Issuer ID (e.g., `69a6de8d-e64d-47e3-e053-5b8c7c11a4d1`)
+- `ASC_KEY_PATH` — Constructed by the Makefile as `$(HOME)/dev/certs/api-keys/AuthKey_$(ASC_KEY_ID).p8` or `$(HOME)/private_keys/AuthKey_$(ASC_KEY_ID).p8`
 
-The API key must have at least the **App Manager** role in App Store Connect. Developer-only keys can fail at the upload or cloud-signing step with a permissions error. If the upload fails with a cloud signing or permission-denied message, check the key's role under App Store Connect → Users and Access → Keys.
+**Which key to use**: Key `WT7YRT8J32` has cloud signing enabled and is the correct key for uploads, archiving, and TestFlight. Key `62T8FXA8J7` is for API queries only — it cannot upload. If `.env` is missing or sets a different key ID, the upload will fail. Clipz is the reference implementation for this pattern.
+
+The API key must have at least the **App Manager** role in App Store Connect. Developer-only keys fail at the upload or cloud-signing step with a permissions error. Verify under App Store Connect → Users and Access → Keys.
 
 ### 1.4 Verify API Key File Exists
 
 ```bash
-ASC_KEY_PATH=$(grep "^ASC_KEY_PATH" ios/Makefile Makefile 2>/dev/null | head -1 | sed 's/.*= *//' | sed "s|\$(HOME)|$HOME|g")
-test -f "$ASC_KEY_PATH" && echo "API key file found" || echo "API key file NOT found at $ASC_KEY_PATH"
+# Expand $(HOME) and verify the file is present
+KEY_ID=$(grep "^ASC_KEY_ID" .env 2>/dev/null | cut -d= -f2 | tr -d ' ')
+KEY_PATH="$HOME/dev/certs/api-keys/AuthKey_${KEY_ID}.p8"
+test -f "$KEY_PATH" && echo "Key file found: $KEY_PATH" || echo "Key file NOT found at $KEY_PATH"
 ```
 
 ### 1.5 Check PyJWT for ASC API
@@ -81,8 +91,10 @@ make info
 ```
 
 - Check for uncommitted changes
-- Note current version
+- Note current version and build number (both are shown by `make info`)
 - Ask the user for "What's New" release notes, or generate from recent commits
+
+**Build number verification**: `make info` reads from the project's `BUILD_NUMBER` file and `project.yml`. The live build number in App Store Connect may differ if a previous upload partially succeeded or if Xcode Cloud is also incrementing. If uncertain, run `make appstore-status` (Clipz pattern) to see what ASC actually has before incrementing.
 
 ## Step 3: Commit & Push (if changes exist)
 
@@ -103,10 +115,37 @@ make upload 2>&1 | tee /tmp/upload_output.txt
 ```
 
 This command:
-1. Increments build number automatically
-2. Creates release archive with xcodebuild
-3. Signs with App Store distribution profile
-4. Uploads to App Store Connect
+1. Increments build number (writes to `BUILD_NUMBER` file)
+2. Runs `xcodebuild archive` to produce an `.xcarchive`
+3. Runs `xcodebuild -exportArchive` with `ExportOptions.plist` to sign and upload
+
+**Split archive + upload targets (Clipz pattern)**: Some projects separate `make archive-upload` (increment + archive) from `make upload-only` (export + upload). This means a failed upload can be retried with `make upload-only` without re-archiving or double-incrementing the build number. The build number is only written to `BUILD_NUMBER` after the archive succeeds; the commit of `BUILD_NUMBER` and `project.yml` happens after the upload succeeds.
+
+### Build Number Increment Pattern
+
+The canonical pattern across all projects: a plain text `BUILD_NUMBER` file at the project root (or `ios/`) is the authoritative build counter. The Makefile reads it, increments by 1, writes the new value back, and passes it to `xcodebuild` as `CURRENT_PROJECT_VERSION`. The `project.yml` (XcodeGen) is updated and `xcodegen generate` is re-run so the `.xcodeproj` reflects the new number.
+
+```makefile
+# Canonical increment-build pattern (from eleven9s/ios/Makefile)
+increment-build:
+    @OLD=$$(cat BUILD_NUMBER); NEW=$$((OLD + 1)); \
+    echo $$NEW > BUILD_NUMBER; \
+    sed -i '' "s/CURRENT_PROJECT_VERSION: \"[^\"]*\"/CURRENT_PROJECT_VERSION: \"$$NEW\"/g" project.yml; \
+    sed -i '' "s/MARKETING_VERSION: \"[^\"]*\"/MARKETING_VERSION: \"$(MAJOR).$(MINOR).$$NEW\"/g" project.yml; \
+    echo "Build: $$OLD -> $$NEW"
+```
+
+**Never guess the build number.** Always read `BUILD_NUMBER` (the file on disk) before releasing. ASC rejects builds with duplicate build numbers — if a previous upload succeeded but the commit was lost, the file and ASC are out of sync. Check ASC first with `make appstore-status` or the API before incrementing.
+
+**Version number bump** (`MARKETING_VERSION`) is a separate operation from build number increment. Projects use `make bump-patch`, `make bump-minor`, or `make bump-major` to update `project.yml`, then `xcodegen generate` to sync to `.xcodeproj`. Both changes must be committed before archiving.
+
+**Validation after archive**: Projects verify the archive's `CFBundleVersion` and `CFBundleShortVersionString` via `PlistBuddy` before writing the new build number to disk, so a stale `.xcodeproj` (un-regenerated `project.yml`) fails loudly rather than uploading the wrong version:
+
+```bash
+ACTUAL_BUILD=$(/usr/libexec/PlistBuddy -c "Print :ApplicationProperties:CFBundleVersion" \
+    build/MyApp.xcarchive/Info.plist)
+[ "$ACTUAL_BUILD" = "$NEW_BUILD" ] || { echo "Build number mismatch!"; exit 1; }
+```
 
 ### Verify Upload
 
@@ -173,6 +212,8 @@ Once the build is VALID:
    }
    ```
 
+   For macOS apps, use `"platform": "MAC_OS"` instead of `"IOS"`.
+
 2. **Set "What's New" text** on the version localization:
    ```
    GET /v1/appStoreVersions/{VERSION_ID}/appStoreVersionLocalizations
@@ -227,6 +268,7 @@ After completion, summarize:
 - **Review time**: Apple typically reviews within 24-48 hours.
 - **If submission fails**: Check that the version has all required metadata (What's New text, screenshots, description). The most common failure is missing "What's New" text.
 - **Build processing**: Takes 5-15 minutes after upload. The skill polls automatically.
+- **macOS vs iOS**: The platform string in the App Store version creation differs (`MAC_OS` vs `IOS`). Clipz (macOS) uses `MAC_OS`; all iOS projects use `IOS`.
 
 ## Troubleshooting
 
@@ -234,3 +276,6 @@ After completion, summarize:
 - **403 on submission**: The `appStoreVersionSubmissions` endpoint has been removed. Use the `reviewSubmissions` three-step flow described in Step 8.
 - **409 "not in valid state"**: The version is missing required metadata (usually "What's New"). Ensure Step 7.2 completed successfully.
 - **Build not VALID**: Wait longer — Apple's processing can take up to 30 minutes for large binaries.
+- **Wrong key used**: If upload fails with a cloud signing or permissions error, confirm `.env` sets `ASC_KEY_ID=WT7YRT8J32` (not `62T8FXA8J7`). The latter has no cloud signing permission.
+- **Provisioning profile expired**: Run `make renew-profile` (eleven9s pattern) or `make renew-all-profiles` for multi-extension apps. Profiles expire annually; check expiry with `make info` before each release.
+- **Build number conflict**: If ASC already has the build number you're about to upload, it will reject with "CFBundleVersion already exists." Check ASC first, then manually increment `BUILD_NUMBER` to one above the highest build in ASC.
