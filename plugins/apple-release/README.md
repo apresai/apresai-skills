@@ -32,6 +32,23 @@ Tag-triggered Xcode Cloud build:
 3. Create annotated `v*` tag and push
 4. Xcode Cloud builds and uploads to TestFlight automatically
 
+### `/app-store-audit`
+
+Pre-submission risk audit against the full Apple App Store Review Guidelines (saved at `resources/app-store-review-guidelines.md`):
+
+1. Detects missing/empty/placeholder Info.plist usage descriptions (5.1.1)
+2. Checks Privacy Manifest (`PrivacyInfo.xcprivacy`) completeness and Required Reason API coverage (5.1.1.v)
+3. Cross-references third-party SDK dependencies against tracking/analytics SDK lists (5.1.2)
+4. Flags non-StoreKit payment SDKs in apps that sell digital content (3.1.1)
+5. Detects web-view-only apps that risk 4.2 rejection
+6. Audits App Transport Security exceptions (5.1.6)
+7. Catches placeholder metadata (2.3)
+8. Checks UGC apps for the four required moderation features (1.2)
+9. Validates VPN/NetworkExtension and HealthKit declarations
+10. Produces CRITICAL / HIGH / MEDIUM / LOW findings each citing the exact guideline ID and quoted rule text
+
+The saved guidelines were fetched 2026-05-21. The audit's pre-flight detects staleness (>90 days) and offers to refresh before running.
+
 ## Requirements
 
 Your Xcode project needs a `Makefile` with these targets:
