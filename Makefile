@@ -238,6 +238,12 @@ deploy: bump-patch validate test desktop
 deploy-minor: bump-minor validate test desktop
 	@VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	echo "==> Preparing deployment for v$$VERSION..."; \
+	echo "  Checking git status..."; \
+	if [ -n "$$(git status --porcelain | grep -v '^ M .claude-plugin/marketplace.json' | grep -v '^ M plugins/.*/\.claude-plugin/plugin.json')" ]; then \
+		echo "❌ ERROR: Working directory has uncommitted changes beyond version files."; \
+		echo "Commit content changes first, then re-run make deploy-minor."; \
+		exit 1; \
+	fi; \
 	git add .claude-plugin/marketplace.json plugins/*/.claude-plugin/plugin.json; \
 	git commit -m "Bump version to $$VERSION" || true; \
 	git tag -a "v$$VERSION" -m "Release v$$VERSION"; \
@@ -249,6 +255,12 @@ deploy-minor: bump-minor validate test desktop
 deploy-major: bump-major validate test desktop
 	@VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	echo "==> Preparing deployment for v$$VERSION..."; \
+	echo "  Checking git status..."; \
+	if [ -n "$$(git status --porcelain | grep -v '^ M .claude-plugin/marketplace.json' | grep -v '^ M plugins/.*/\.claude-plugin/plugin.json')" ]; then \
+		echo "❌ ERROR: Working directory has uncommitted changes beyond version files."; \
+		echo "Commit content changes first, then re-run make deploy-major."; \
+		exit 1; \
+	fi; \
 	git add .claude-plugin/marketplace.json plugins/*/.claude-plugin/plugin.json; \
 	git commit -m "Bump version to $$VERSION" || true; \
 	git tag -a "v$$VERSION" -m "Release v$$VERSION"; \
