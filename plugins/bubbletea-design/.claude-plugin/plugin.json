@@ -1,0 +1,9 @@
+{
+  "name": "bubbletea-design",
+  "version": "1.0.0",
+  "description": "Build beautiful, idiomatic terminal UIs in Go with Bubble Tea v2, Bubbles v2, and Lip Gloss v2. Architecture patterns, component catalog, styling recipes, async/streaming patterns, v1→v2 migration map, and visual design principles for sexy TUIs.",
+  "author": {
+    "name": "Chad Neal",
+    "email": "chad.neal@gmail.com"
+  }
+}

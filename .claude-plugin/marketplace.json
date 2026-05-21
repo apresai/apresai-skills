@@ -47,6 +47,16 @@
       },
       "source": "./plugins/nextjs-opennext",
       "category": "aws-serverless"
+    },
+    {
+      "name": "bubbletea-design",
+      "description": "Build beautiful, idiomatic terminal UIs in Go with Bubble Tea v2, Bubbles v2, and Lip Gloss v2. Architecture patterns, component catalog, styling recipes, async/streaming patterns, v1→v2 migration map, and visual design principles for sexy TUIs.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Chad Neal"
+      },
+      "source": "./plugins/bubbletea-design",
+      "category": "go-tui"
     }
   ]
 }
