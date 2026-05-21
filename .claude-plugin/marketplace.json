@@ -1,23 +1,13 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "apresai-skills",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Production-ready skills and plugins for Claude Code by apresai",
   "owner": {
     "name": "apresai",
     "email": "contact@apresai.com"
   },
   "plugins": [
-    {
-      "name": "nova-act-skill",
-      "description": "Generate production-ready Amazon Nova Act Python scripts for browser automation. Includes complete API reference, best practices, and working examples for e-commerce, form filling, and monitoring.",
-      "version": "1.0.0",
-      "author": {
-        "name": "apresai"
-      },
-      "source": "./plugins/nova-act-skill",
-      "category": "ai-automation"
-    },
     {
       "name": "apple-release",
       "description": "Apple app release automation for TestFlight and App Store Connect. Supports iOS and macOS apps. Handles version management, infrastructure deployment, archiving, and uploading via xcodebuild.",
@@ -59,14 +49,24 @@
       "category": "go-tui"
     },
     {
-      "name": "webp-skill",
-      "description": "Convert images to/from WebP format using cwebp/dwebp CLI tools. Covers batch conversion, optimization presets for photos/screenshots/UI, decoding, and metadata inspection.",
-      "version": "1.0.0",
+      "name": "image-encoding",
+      "description": "Modern web image encoding with AVIF (primary) and WebP (fallback). Covers cwebp/dwebp/avifenc CLIs, the <picture> cascade pattern, browser-support cliffs, and when each format wins.",
+      "version": "1.1.0",
       "author": {
         "name": "Chad Neal"
       },
-      "source": "./plugins/webp-skill",
+      "source": "./plugins/image-encoding",
       "category": "image-processing"
+    },
+    {
+      "name": "chad-review",
+      "description": "8-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across structural, behavioral, spec-drift, test, test-coverage, observability, documentation, and adversarial dimensions. Parallel sub-agent execution, read-only.",
+      "version": "1.2.0",
+      "author": {
+        "name": "Chad Neal"
+      },
+      "source": "./plugins/chad-review",
+      "category": "code-quality"
     },
     {
       "name": "google-oauth",

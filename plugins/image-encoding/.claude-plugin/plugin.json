@@ -1,0 +1,9 @@
+{
+  "name": "image-encoding",
+  "version": "1.2.0",
+  "description": "Modern web image encoding with AVIF (primary) and WebP (fallback). Covers cwebp/dwebp/avifenc CLIs, <picture> cascade markup, browser-support cliffs, and when each format wins.",
+  "author": {
+    "name": "Chad Neal",
+    "email": "chad.neal@gmail.com"
+  }
+}
