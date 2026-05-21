@@ -45,7 +45,7 @@ bump-patch:
 	NEW_PATCH=$$((PATCH + 1)); \
 	NEW_VERSION="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
 	echo "Bumping version: $$CURRENT -> $$NEW_VERSION"; \
-	jq ".version = \"$$NEW_VERSION\"" .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
+	jq --arg v "$$NEW_VERSION" '.version = $$v | .plugins |= map(.version = $$v)' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
 	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
 	for plugin_json in $$(find plugins -name "plugin.json" -path "*/.claude-plugin/plugin.json"); do \
 		jq ".version = \"$$NEW_VERSION\"" $$plugin_json > $$plugin_json.tmp && \
@@ -61,7 +61,7 @@ bump-minor:
 	NEW_MINOR=$$((MINOR + 1)); \
 	NEW_VERSION="$$MAJOR.$$NEW_MINOR.0"; \
 	echo "Bumping version: $$CURRENT -> $$NEW_VERSION"; \
-	jq ".version = \"$$NEW_VERSION\"" .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
+	jq --arg v "$$NEW_VERSION" '.version = $$v | .plugins |= map(.version = $$v)' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
 	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
 	for plugin_json in $$(find plugins -name "plugin.json" -path "*/.claude-plugin/plugin.json"); do \
 		jq ".version = \"$$NEW_VERSION\"" $$plugin_json > $$plugin_json.tmp && \
@@ -76,7 +76,7 @@ bump-major:
 	NEW_MAJOR=$$((MAJOR + 1)); \
 	NEW_VERSION="$$NEW_MAJOR.0.0"; \
 	echo "Bumping version: $$CURRENT -> $$NEW_VERSION"; \
-	jq ".version = \"$$NEW_VERSION\"" .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
+	jq --arg v "$$NEW_VERSION" '.version = $$v | .plugins |= map(.version = $$v)' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
 	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
 	for plugin_json in $$(find plugins -name "plugin.json" -path "*/.claude-plugin/plugin.json"); do \
 		jq ".version = \"$$NEW_VERSION\"" $$plugin_json > $$plugin_json.tmp && \
