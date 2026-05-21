@@ -139,19 +139,22 @@ class GoogleAuthManager: NSObject, ASWebAuthenticationPresentationContextProvidi
 }
 ```
 
-**Alternative — Implicit grant (simpler, less secure)**: Use `response_type=token` to get an ID token directly in the redirect URL. Simpler but the token is exposed in the URL.
+**Note on implicit grant**: The `response_type=token` (implicit) grant is removed in OAuth 2.1 and has been discouraged by Google for native apps for years. Do not use it — the authorization code + PKCE flow above is the correct path.
 
-### 2.2 iOS/Flutter — google_sign_in SDK
+**iOS SDK notes**: `GoogleSignIn-iOS` 9.x (current as of 2026) added custom nonce support for apps that validate ID-token nonces on the backend (e.g., Supabase or custom nonce checks). Minimum iOS 12, minimum SDK version 7.1.0+ required for Apple Privacy Manifest compliance (enforced May 2024). Use the nonce parameter in `initialize()` if your backend validates nonces.
 
-Best for Flutter apps or when you want Google's native sign-in UI.
+### 2.2 Flutter — google_sign_in SDK (v7.x)
+
+`google_sign_in` 7.0 introduced a major breaking refactor. The `GoogleSignIn()` constructor is gone — everything goes through a singleton. Authentication (sign-in) and authorization (scoped access tokens / server auth codes) are now separate steps.
+
+```yaml
+# pubspec.yaml
+dependencies:
+  google_sign_in: ^7.2.0
+```
 
 ```dart
-// pubspec.yaml
-dependencies:
-  google_sign_in: ^6.2.1
-
-// Configuration: ios/Runner/Info.plist
-// Add reversed client ID as a URL scheme:
+// ios/Runner/Info.plist — add reversed iOS client ID as URL scheme:
 // <string>com.googleusercontent.apps.YOUR_IOS_CLIENT_ID</string>
 ```
 
@@ -159,32 +162,98 @@ dependencies:
 import 'package:google_sign_in/google_sign_in.dart';
 
 class GoogleAuthService {
-  // Use web client ID for serverAuthCode (backend exchange)
-  // iOS client ID is auto-detected from Info.plist
-  final _googleSignIn = GoogleSignIn(
-    serverClientId: 'WEB_CLIENT_ID.apps.googleusercontent.com',
-    scopes: ['email', 'profile'],
-  );
+  GoogleSignInAccount? _currentUser;
 
-  Future<String?> signIn() async {
-    final account = await _googleSignIn.signIn();
-    if (account == null) return null; // User cancelled
+  // Call once at app startup — before any auth calls.
+  // clientId:       your iOS/macOS client ID (auto-detected from plist if omitted on iOS)
+  // serverClientId: your WEB client ID — required to obtain a serverAuthCode
+  Future<void> initialize() async {
+    await GoogleSignIn.instance.initialize(
+      clientId: 'IOS_CLIENT_ID.apps.googleusercontent.com',
+      serverClientId: 'WEB_CLIENT_ID.apps.googleusercontent.com',
+    );
 
-    final auth = await account.authentication;
-    // auth.idToken — send to backend for verification
-    // auth.serverAuthCode — alternative: backend exchanges for tokens
-    return auth.idToken;
+    // Listen for sign-in and sign-out events
+    GoogleSignIn.instance.authenticationEvents
+        .listen(_handleAuthenticationEvent)
+        .onError(_handleAuthenticationError);
+
+    // Try to restore a previous session silently (no UI)
+    await GoogleSignIn.instance.attemptLightweightAuthentication();
+  }
+
+  // Trigger the full sign-in UI (Credential Manager bottom sheet on Android)
+  Future<void> signIn() async {
+    if (!GoogleSignIn.instance.supportsAuthenticate()) {
+      // Web platform: use renderButton() from google_sign_in_web instead
+      return;
+    }
+    try {
+      await GoogleSignIn.instance.authenticate();
+      // User is delivered via authenticationEvents stream
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) return;
+      rethrow;
+    }
+  }
+
+  void _handleAuthenticationEvent(GoogleSignInAuthenticationEvent event) {
+    if (event is GoogleSignInAuthenticationEventSignIn) {
+      _currentUser = event.user;
+      // event.user.authentication.idToken — send to backend for verification
+    } else if (event is GoogleSignInAuthenticationEventSignOut) {
+      _currentUser = null;
+    }
+  }
+
+  void _handleAuthenticationError(Object error) {
+    // Handle errors from the authenticationEvents stream
+  }
+
+  // Get the ID token for the currently signed-in user
+  Future<String?> getIdToken() async {
+    final auth = _currentUser?.authentication;
+    return auth?.idToken;
+  }
+
+  // Obtain a client-side access token for Google APIs
+  Future<String?> getAccessToken(List<String> scopes) async {
+    final user = _currentUser;
+    if (user == null) return null;
+
+    // Try silent grant first; falls back to showing UI if needed
+    final authorization = await user.authorizationClient.authorizeScopes(scopes);
+    return authorization.accessToken;
+  }
+
+  // Obtain a server auth code for backend exchange (replaces serverAuthCode in 6.x)
+  Future<String?> getServerAuthCode(List<String> scopes) async {
+    final user = _currentUser;
+    if (user == null) return null;
+
+    final serverAuth = await user.authorizationClient.authorizeServer(scopes);
+    return serverAuth?.serverAuthCode;
   }
 
   Future<void> signOut() async {
-    await _googleSignIn.signOut();
+    await GoogleSignIn.instance.signOut();
   }
 }
 ```
 
-**Key distinction**: `serverClientId` must be the **web** client ID, not the iOS one. The SDK uses this to request a `serverAuthCode` that your backend can exchange.
+**Key v7.x points**:
+- `serverClientId` in `initialize()` must be the **web** client ID. This is what enables `authorizeServer()` to return a code your backend can exchange.
+- `authenticate()` is not supported on web; use the rendered Google button from `google_sign_in_web` instead.
+- Access tokens and server auth codes are obtained via `authorizationClient` after authentication — not bundled with the sign-in response.
+- The package wraps Android Credential Manager (the replacement for the deprecated `GoogleSignInClient` play-services API).
 
-### 2.3 Next.js Web — NextAuth.js v5 (Auth.js)
+### 2.3 Android — Credential Manager (direct integration)
+
+If you are building a native Android app (not Flutter), the legacy `GoogleSignInClient` (play-services-auth) is deprecated and will be removed. The correct path is Android Credential Manager + Sign in with Google button from the `androidx.credentials` library. The `google_sign_in` 7.x Flutter package wraps this for you automatically — no additional Android-side configuration is needed beyond the standard Google Services JSON setup.
+
+### 2.4 Next.js Web — NextAuth.js v5 (Auth.js)
+
+**Web auth context**: Google Identity Services (GIS) is the only supported web flow as of 2023 — the legacy `gapi.auth2` library was sunset. NextAuth.js v5 / Auth.js uses Google's standard OAuth authorization code endpoints internally, which are fully compatible with GIS. You do not call GIS directly when using NextAuth; this is just background for readers who see references to `gapi.auth2` in older tutorials.
 
 ```typescript
 // auth.ts (root or src/)
@@ -234,17 +303,21 @@ NEXTAUTH_SECRET=your-random-secret
 
 **Authorized redirect URI** in GCP console: `https://yourdomain.com/api/auth/callback/google`
 
-### 2.4 Go Backend — ID Token Verification
+### 2.5 Go Backend — ID Token Verification
 
 Two approaches depending on your needs:
 
 #### Approach A: Google's idtoken library (simplest)
 
+**Known limitation**: `idtoken.Validate` accepts only a **single** audience string (tracked in google-api-go-client issue #2247). For backends that accept tokens from multiple client IDs (web + iOS), call it twice as shown below — this is the documented workaround, not a style choice.
+
 ```go
 import "google.golang.org/api/idtoken"
 
 func verifyGoogleIDToken(ctx context.Context, token string) (*idtoken.Payload, error) {
-    // Validates signature, expiry, issuer, and audience
+    // Validates signature, expiry, issuer, and audience.
+    // idtoken.Validate only accepts one audience per call — try web client ID first,
+    // then fall back to iOS client ID (see google-api-go-client#2247).
     payload, err := idtoken.Validate(ctx, token, googleWebClientID)
     if err != nil {
         // Try iOS client ID
@@ -880,8 +953,9 @@ Set TTL values in your DB client:
 | Platform | Auth Library | Token Flow |
 |----------|-------------|------------|
 | iOS (Swift) | ASWebAuthenticationSession | PKCE code → backend exchange |
-| iOS (Flutter) | google_sign_in SDK | ID token → backend verify |
-| Web (Next.js) | NextAuth.js v5 / Auth.js | Server-side OAuth code flow |
+| Flutter | google_sign_in 7.x | ID token via authenticationEvents → backend verify |
+| Android (native) | Credential Manager + GIS | Credential Manager bottom sheet → backend verify |
+| Web (Next.js) | NextAuth.js v5 / Auth.js | Server-side OAuth code flow (GIS-compatible) |
 | Backend (Go) | google.golang.org/api/idtoken | JWKS verification |
 
 ### Token Lifetimes
@@ -901,7 +975,7 @@ When adding Google OAuth to a new project:
 3. **Backend**: Add `/auth/google/callback` handler + JWKS verification
 4. **Backend**: Add `/auth/refresh` handler with atomic rotation
 5. **Backend**: Add provider link table entries (`GOOGLE#{sub}` → `LINK`)
-6. **iOS**: Add GoogleSignIn config or ASWebAuthenticationSession flow
+6. **iOS/Flutter**: Add GoogleSignIn config or ASWebAuthenticationSession flow; for Flutter call `GoogleSignIn.instance.initialize()` at app startup
 7. **iOS**: Add TokenRefreshCoordinator actor
 8. **iOS**: Wire coordinator into API service 401 handling
 9. **Web**: Configure NextAuth.js with Google provider + JWT refresh callback

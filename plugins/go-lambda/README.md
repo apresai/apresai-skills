@@ -5,7 +5,7 @@ Comprehensive Go Lambda development with production-ready patterns for AWS.
 ## Features
 
 - **Runtime**: `provided.al2023` (recommended) for smaller footprint and longer support
-- **Architecture**: ARM64 (Graviton2) for 34% better price-performance
+- **Architecture**: ARM64 for up to 20% cheaper, often faster (backed by Graviton2 in standard Lambda)
 - **SDK**: AWS SDK for Go v2 with proper patterns
 - **Infrastructure**: AWS CDK v2 with TypeScript
 

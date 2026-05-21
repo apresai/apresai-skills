@@ -40,6 +40,8 @@ Required variables:
 - `ASC_ISSUER_ID` - App Store Connect Issuer ID
 - `ASC_KEY_PATH` - Path to the .p8 key file
 
+The API key must have at least the **App Manager** role in App Store Connect. Developer-only keys can fail at the upload or cloud-signing step with a permissions error. If the upload fails with a cloud signing or permission-denied message, check the key's role under App Store Connect → Users and Access → Keys.
+
 ### 1.4 Verify API Key File Exists
 
 ```bash
@@ -63,11 +65,13 @@ grep -oE 'apps/[0-9]+' CLAUDE.md | head -1 | grep -oE '[0-9]+'
 
 If not found, ask the user for their App Store Connect app ID.
 
-### 1.7 Check Xcode Command Line Tools
+### 1.7 Check Xcode Version
 
 ```bash
 xcodebuild -version 2>/dev/null || echo "Xcode CLI tools not installed"
 ```
+
+Parse the major version from the output. Apple requires Xcode 14 or later for all uploads (enforced 2026). Starting April 2026, new App Store submissions must be built with Xcode 26 and the iOS 26 SDK. If the Xcode version is below 14, stop and ask the user to upgrade before continuing. If the version is below 26 and today's date is after April 2026, warn the user that Apple may reject the submission.
 
 ## Step 2: Pre-flight Checks
 
@@ -106,7 +110,16 @@ This command:
 
 ### Verify Upload
 
-Check for `Upload succeeded` and `EXPORT SUCCEEDED` in the output.
+Check for `Upload succeeded` and `EXPORT SUCCEEDED` in the output:
+
+```bash
+grep -E "Upload succeeded|EXPORT SUCCEEDED" /tmp/upload_output.txt
+grep -E "ERROR|errors returned by the App Store" /tmp/upload_output.txt
+```
+
+With Xcode 26, `altool` may exit 0 even when the upload silently failed (fastlane issue #29743). Do not rely on the exit code alone. If the success strings are absent, or if any error strings appear, treat the upload as failed.
+
+Note: `xcrun altool --upload-app` (and its newer form `--upload-package`) is the correct tool for App Store and TestFlight uploads — it is not deprecated for this use. Only `altool --notarize-app` was retired (per Apple TN3147, November 2023); App Store uploads via altool remain supported.
 
 ```bash
 make info
@@ -170,7 +183,7 @@ Once the build is VALID:
 
 ## Step 8: Submit for App Review
 
-Use the v2 review submissions API (v1 appStoreVersionSubmissions is deprecated):
+Use the `reviewSubmissions` API (the legacy `appStoreVersionSubmissions` endpoint has been removed from Apple's documentation with no announced sunset date — do not use it):
 
 1. **Create review submission:**
    ```
@@ -218,6 +231,6 @@ After completion, summarize:
 ## Troubleshooting
 
 - **Build upload fails**: Check compilation errors, verify provisioning profile, ensure API key file exists. Run `make clean` and retry.
-- **403 on submission**: The v1 `appStoreVersionSubmissions` endpoint is deprecated. Use the v2 `reviewSubmissions` flow described in Step 8.
+- **403 on submission**: The `appStoreVersionSubmissions` endpoint has been removed. Use the `reviewSubmissions` three-step flow described in Step 8.
 - **409 "not in valid state"**: The version is missing required metadata (usually "What's New"). Ensure Step 7.2 completed successfully.
 - **Build not VALID**: Wait longer — Apple's processing can take up to 30 minutes for large binaries.

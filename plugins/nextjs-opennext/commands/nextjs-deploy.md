@@ -10,7 +10,97 @@ description: Deploy Next.js applications to AWS Lambda using OpenNext and CDK. U
 Deploy Next.js applications to AWS using:
 - **OpenNext**: Transforms Next.js build output for AWS Lambda
 - **CDK**: Infrastructure as Code with TypeScript
-- **cdk-nextjs**: High-level construct for Next.js deployment
+- **Node.js 22** Lambda runtime (`NODEJS_22_X`) — required; `NODEJS_20_X` reached Lambda EOL 2026-04-30
+
+## Choosing a Construct (Start Here)
+
+Three live options for deploying Next.js on AWS CDK as of 2026:
+
+| Option | Package | Status | When to use |
+|--------|---------|--------|-------------|
+| `cdk-nextjs-standalone` (jetbridge) | npm | Stable, v4.x | Most projects today; mature, battle-tested, OpenNext v3/v4 |
+| `cdklabs/cdk-nextjs` (AWS Labs) | npm | 0.5 beta | Next.js 16.2+ on the public Adapter API; AWS's strategic direction; not yet stable |
+| Manual CDK | aws-cdk-lib | Always available | Full control; function splitting; custom routing logic |
+
+**Pick `cdk-nextjs-standalone`** for new projects today unless you specifically need the public Adapter API topology options from `cdklabs/cdk-nextjs`. The AWS Labs construct is still in beta (0.5.0-beta) as of May 2026 — wait for stable before using in production.
+
+**Future direction**: Next.js 16.2 shipped a stable public Adapter API in March 2026. OpenNext is rebuilding on it; `cdklabs/cdk-nextjs` uses it today. Expect a v5-era OpenNext paired with a stable `cdklabs/cdk-nextjs` to become the recommendation by late 2026.
+
+---
+
+## OpenNext v3 vs v4
+
+`@opennextjs/aws` installs the latest by default — **v4.x as of May 2026**.
+
+- **v3.10.x**: Targets Next.js up to 15.x. SWR tag revalidation, non-200 ISR status codes, query-string preservation through i18n redirects, symlink dereferencing in `public/`. Still works; `cdk-nextjs-standalone` 4.x uses it.
+- **v4.0+ (May 2026)**: First version coordinated with the Next.js 16.2 stable Adapter API. Rebuilt internal interface; new monorepo structure with Cloudflare/AWS adapters co-developed. Required for full Next.js 16 support including Cache Components and Dynamic IO.
+
+Pin explicitly if you need v3 behavior on a Next.js 15 project:
+```bash
+npm install @opennextjs/aws@^3.10
+```
+
+For Next.js 16+ projects, use the latest:
+```bash
+npm install @opennextjs/aws
+```
+
+---
+
+## Next.js 16 Features
+
+Next.js 16 (October 2025 GA) introduced several first-class features. OpenNext v4 supports them via the Adapter API path.
+
+### Cache Components (`use cache` directive)
+
+```tsx
+// app/dashboard/stats.tsx
+"use cache"; // Opt this component into the cache layer
+
+export async function Stats() {
+  const data = await fetchExpensiveData();
+  return <StatsDisplay data={data} />;
+}
+```
+
+Enable in `next.config.ts`:
+```typescript
+// next.config.ts
+const nextConfig = {
+  cacheComponents: true, // Replaces experimental.ppr from Next.js 14/15
+};
+export default nextConfig;
+```
+
+**Note**: The `experimental.ppr` flag and `experimental_ppr` route segment config are **removed** in Next.js 16. Do not use them.
+
+### Partial Prerendering (PPR) — Now Default
+
+PPR is default behavior under `cacheComponents: true`. No separate flag needed. Routes that mix static and dynamic content automatically benefit from shell-first streaming.
+
+### Turbopack (Stable)
+
+Turbopack is stable in Next.js 16. Use it for development to dramatically reduce rebuild times:
+```bash
+next dev --turbopack
+```
+
+OpenNext consumes the standard `.next` build output — Turbopack affects only the dev experience and build performance, not the Lambda artifact.
+
+### React Compiler (Stable)
+
+```typescript
+// next.config.ts
+const nextConfig = {
+  experimental: {
+    reactCompiler: true,
+  },
+};
+```
+
+Automatic memoization; eliminates most manual `useMemo`/`useCallback`. OpenNext passes through React Compiler output unchanged.
+
+---
 
 ## Quick Start
 
@@ -18,7 +108,7 @@ Deploy Next.js applications to AWS using:
 
 ```bash
 npm install @opennextjs/aws
-npm install -D aws-cdk-lib constructs @aws-cdk/aws-lambda-go-alpha
+npm install -D aws-cdk-lib constructs
 ```
 
 ### 2. Create OpenNext Config
@@ -69,7 +159,7 @@ const config: OpenNextConfig = {
   default: {
     // Override components
     override: {
-      wrapper: "aws-lambda-streaming", // Enable streaming
+      wrapper: "aws-lambda-streaming", // Enable streaming (all regions as of April 2026)
       converter: "aws-apigw-v2",
       // Custom implementations
       tagCache: "dynamodb-lite",
@@ -140,7 +230,7 @@ const config: OpenNextConfig = {
 
 ## CDK Infrastructure
 
-### Using cdk-nextjs Construct
+### Using cdk-nextjs-standalone Construct
 
 ```typescript
 // infrastructure/lib/stack.ts
@@ -273,9 +363,9 @@ export class NextjsManualStack extends cdk.Stack {
       visibilityTimeout: cdk.Duration.seconds(60),
     });
 
-    // Server function
+    // Server function — Node 22, ARM64
     const serverFunction = new lambda.Function(this, "ServerFunction", {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
       handler: "index.handler",
       code: lambda.Code.fromAsset(
@@ -290,6 +380,8 @@ export class NextjsManualStack extends cdk.Stack {
         CACHE_DYNAMO_TABLE: cacheTable.tableName,
         REVALIDATION_QUEUE_URL: revalidationQueue.queueUrl,
         REVALIDATION_QUEUE_REGION: this.region,
+        // Workaround: prevents Lambda buffering from hanging on empty streaming bodies
+        OPEN_NEXT_FORCE_NON_EMPTY_RESPONSE: "true",
       },
     });
 
@@ -298,9 +390,9 @@ export class NextjsManualStack extends cdk.Stack {
     cacheTable.grantReadWriteData(serverFunction);
     revalidationQueue.grantSendMessages(serverFunction);
 
-    // Image optimization function
+    // Image optimization function — Node 22, ARM64
     const imageFunction = new lambda.Function(this, "ImageFunction", {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
       handler: "index.handler",
       code: lambda.Code.fromAsset(
@@ -316,17 +408,21 @@ export class NextjsManualStack extends cdk.Stack {
 
     bucket.grantRead(imageFunction);
 
-    // Revalidation function
-    const revalidationFunction = new lambda.Function(this, "RevalidationFunction", {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      architecture: lambda.Architecture.ARM_64,
-      handler: "index.handler",
-      code: lambda.Code.fromAsset(
-        path.join(__dirname, "../../.open-next/revalidation-function")
-      ),
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(30),
-    });
+    // Revalidation function — Node 22, ARM64
+    const revalidationFunction = new lambda.Function(
+      this,
+      "RevalidationFunction",
+      {
+        runtime: lambda.Runtime.NODEJS_22_X,
+        architecture: lambda.Architecture.ARM_64,
+        handler: "index.handler",
+        code: lambda.Code.fromAsset(
+          path.join(__dirname, "../../.open-next/revalidation-function")
+        ),
+        memorySize: 256,
+        timeout: cdk.Duration.seconds(30),
+      }
+    );
 
     // Add SQS event source to revalidation function
     revalidationFunction.addEventSource(
@@ -360,6 +456,9 @@ export class NextjsManualStack extends cdk.Stack {
     });
 
     // CloudFront distribution
+    // Note: origins.S3Origin is deprecated in CDK v2; use S3BucketOrigin.withOriginAccessControl
+    const s3Origin = origins.S3BucketOrigin.withOriginAccessControl(bucket);
+
     const distribution = new cloudfront.Distribution(this, "Distribution", {
       defaultBehavior: {
         origin: new origins.HttpOrigin(
@@ -367,14 +466,13 @@ export class NextjsManualStack extends cdk.Stack {
         ),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        originRequestPolicy:
+          cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
       },
       additionalBehaviors: {
-        // Static assets from S3
+        // Static assets from S3 — served directly, long TTL
         "_next/static/*": {
-          origin: new origins.S3Origin(bucket, {
-            originPath: "/assets",
-          }),
+          origin: s3Origin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
@@ -388,9 +486,7 @@ export class NextjsManualStack extends cdk.Stack {
         },
         // Public assets
         "favicon.ico": {
-          origin: new origins.S3Origin(bucket, {
-            originPath: "/assets",
-          }),
+          origin: s3Origin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         },
       },
@@ -436,7 +532,7 @@ my-nextjs-app/
 │   ├── db.ts               # Database utilities
 │   └── auth.ts             # Auth utilities
 ├── public/
-├── next.config.js
+├── next.config.ts
 ├── open-next.config.ts
 ├── tailwind.config.ts
 └── infrastructure/
@@ -875,6 +971,8 @@ export async function getSecret(secretName: string): Promise<string> {
 
 ### Enable Streaming in OpenNext
 
+Lambda response streaming is available in all commercial AWS regions as of April 2026.
+
 ```typescript
 // open-next.config.ts
 const config: OpenNextConfig = {
@@ -885,6 +983,19 @@ const config: OpenNextConfig = {
   },
 };
 ```
+
+### Streaming Gotcha: Empty Body Hang
+
+Lambda buffering can prevent streaming from starting when the initial response body is empty. Set the environment variable on your server function:
+
+```typescript
+environment: {
+  OPEN_NEXT_FORCE_NON_EMPTY_RESPONSE: "true",
+  // ... other env vars
+},
+```
+
+Add this to `open-next.config.ts` environment as well if using the high-level construct.
 
 ### Suspense for Streaming
 
@@ -964,8 +1075,8 @@ destroy:
 ### Bundle Size Exceeds Lambda Limit
 
 ```typescript
-// next.config.js
-module.exports = {
+// next.config.ts
+const nextConfig = {
   experimental: {
     // Reduce bundle size
     optimizePackageImports: ["lodash", "@aws-sdk/*"],
@@ -979,6 +1090,7 @@ module.exports = {
     return config;
   },
 };
+export default nextConfig;
 ```
 
 ### ISR Not Revalidating
@@ -994,10 +1106,12 @@ module.exports = {
 // open-next.config.ts
 const config: OpenNextConfig = {
   middleware: {
-    external: true, // Deploy to Lambda@Edge
+    external: true, // Deploy to Lambda@Edge so it runs on every request
   },
 };
 ```
+
+**Note**: For simple request/response manipulation (header rewrites, geolocation-based redirects), CloudFront Functions are now the preferred pattern — sub-millisecond execution, and they have access to geolocation/CloudFront headers that Lambda@Edge Viewer Request lacks.
 
 ### Cold Starts Too Slow
 
@@ -1021,7 +1135,21 @@ const config: OpenNextConfig = {
 };
 ```
 
-3. Use ARM64 architecture (faster cold starts)
+3. Use ARM64 architecture (faster cold starts, ~20% cost reduction)
+
+---
+
+## Alternatives
+
+| Option | When to choose |
+|--------|---------------|
+| **Vercel** | You don't need to own AWS infra; simplest DX; the Next.js Adapter API was designed for Vercel |
+| **SST v3** | You want OpenNext + Pulumi/Terraform (SST moved off CDK in v3); strong DX |
+| **AWS Amplify** | Managed Next.js hosting; Amplify's adapter is in active development via OpenNext |
+| **`cdklabs/cdk-nextjs`** | CDK + public Adapter API; Next.js 16.2+ required; still 0.5 beta |
+| **App Runner / ECS Fargate** | Long-running `next start` server; use `cdklabs/cdk-nextjs` container topologies |
+
+If you don't need full AWS customization (VPC, fine-grained IAM, cost optimization, co-location with other Lambda workloads), Amplify or Vercel will be simpler to operate.
 
 ---
 
@@ -1034,8 +1162,9 @@ const config: OpenNextConfig = {
 - Initialize database clients at module level (connection reuse)
 - Use `revalidateTag` for fine-grained cache invalidation
 - Enable streaming for faster Time to First Byte
-- Use ARM64 architecture for Lambda
+- Use ARM64 architecture for Lambda (`lambda.Architecture.ARM_64`)
 - Set appropriate memory (1024-2048 MB for server function)
+- Use `NODEJS_22_X` runtime — `NODEJS_20_X` reached Lambda EOL 2026-04-30
 
 ### DON'T
 
@@ -1045,13 +1174,17 @@ const config: OpenNextConfig = {
 - Don't skip CloudFront invalidation after on-demand revalidation
 - Don't store secrets in environment variables without encryption
 - Don't deploy without testing ISR behavior locally
+- Don't use `experimental.ppr` flag or `experimental_ppr` segment config — removed in Next.js 16
+- Don't use deprecated `origins.S3Origin(bucket)` — use `origins.S3BucketOrigin.withOriginAccessControl(bucket)`
 
 ### Performance Checklist
 
 - [ ] Using ARM64 Lambda architecture
+- [ ] Runtime is `NODEJS_22_X` (not 20 or earlier)
 - [ ] Server function memory >= 1024 MB
 - [ ] Image optimization memory >= 1536 MB
 - [ ] Streaming enabled for large pages
+- [ ] `OPEN_NEXT_FORCE_NON_EMPTY_RESPONSE=true` set on server function
 - [ ] Static assets served from S3 via CloudFront
 - [ ] ISR configured with appropriate revalidation times
 - [ ] CloudFront cache policies configured correctly

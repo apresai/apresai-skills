@@ -1,6 +1,6 @@
 ---
 name: go-lambda-builder
-description: Generate production-ready Go Lambda functions with provided.al2023 runtime, ARM64/Graviton2 architecture, AWS SDK v2 integration, and CDK infrastructure. Use when building new Lambda functions in Go or migrating from go1.x runtime.
+description: Generate production-ready Go Lambda functions with provided.al2023 runtime, ARM64 architecture, AWS SDK v2 integration, and CDK infrastructure. Use when building new Lambda functions in Go or migrating from go1.x runtime.
 ---
 
 # Go Lambda Builder - Complete Reference
@@ -8,8 +8,8 @@ description: Generate production-ready Go Lambda functions with provided.al2023 
 ## Overview
 
 This skill generates production-ready Go Lambda functions optimized for:
-- **Runtime**: `provided.al2023` (recommended) or `provided.al2`
-- **Architecture**: ARM64 (Graviton2) for 34% better price-performance
+- **Runtime**: `provided.al2023` (required for new functions; `provided.al2` is deprecated July 31, 2026 — do not use)
+- **Architecture**: ARM64 for up to 20% cheaper, often faster (standard Lambda ARM64 is backed by Graviton2; Graviton4 is available only via Lambda Managed Instances)
 - **SDK**: AWS SDK for Go v2
 - **Infrastructure**: AWS CDK v2 with TypeScript
 
@@ -41,6 +41,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"log/slog"
 	"os"
 
@@ -53,20 +54,19 @@ import (
 var (
 	dbClient  *dynamodb.Client
 	tableName string
-	logger    *slog.Logger
 )
 
 func init() {
-	// Initialize logger
-	logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	// Use lambda.NewLogHandler() (aws-lambda-go v1.54+): reads AWS_LAMBDA_LOG_FORMAT /
+	// AWS_LAMBDA_LOG_LEVEL and auto-injects requestId. Falls back to slog.NewJSONHandler
+	// on older versions of the library.
+	slog.SetDefault(slog.New(lambda.NewLogHandler()))
 
-	// Load AWS config
+	// Load AWS config — use log.Fatal so failures emit a clean runtime init error
+	// in CloudWatch rather than an unhandled panic.
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		logger.Error("failed to load AWS config", "error", err)
-		panic(err)
+		log.Fatalf("failed to load AWS config: %v", err)
 	}
 
 	// Initialize clients (reused across invocations)
@@ -75,10 +75,10 @@ func init() {
 }
 
 func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	logger.Info("processing request",
-		"requestId", event.RequestContext.RequestID,
+	slog.Info("processing request",
 		"path", event.Path,
 		"method", event.HTTPMethod,
+		// requestId injected automatically by lambda.NewLogHandler
 	)
 
 	// Your business logic here
@@ -128,8 +128,48 @@ func (context.Context) (TOut, error)
 // Context and input
 func (context.Context, TIn) error
 
-// Context, input, output (RECOMMENDED)
+// Context, input, output (RECOMMENDED for compatibility)
 func (context.Context, TIn) (TOut, error)
+```
+
+### Generic Handler (aws-lambda-go v1.47+, RECOMMENDED for new code)
+
+`StartHandlerFunc` provides compile-time type safety via Go generics — prefer it for new functions:
+
+```go
+import "github.com/aws/aws-lambda-go/lambda"
+
+type Request struct {
+	UserID string `json:"userId"`
+}
+
+type Response struct {
+	Message string `json:"message"`
+}
+
+func handler(ctx context.Context, req Request) (Response, error) {
+	return Response{Message: "ok"}, nil
+}
+
+func main() {
+	// Type parameters are inferred from the handler signature.
+	lambda.StartHandlerFunc(handler)
+}
+```
+
+### Graceful Shutdown with WithEnableSIGTERM (aws-lambda-go v1.41+)
+
+Stateful Lambdas (connection pools, buffered writers) should flush on SIGTERM. Lambda sends SIGTERM ~500 ms before the hard kill during scale-in:
+
+```go
+func main() {
+	lambda.StartWithOptions(handler,
+		lambda.WithEnableSIGTERM(func() {
+			// Flush logs, drain pools, close DB connections
+			slog.Info("SIGTERM received — shutting down")
+		}),
+	)
+}
 ```
 
 ### Handler Rules
@@ -358,6 +398,12 @@ func handler(ctx context.Context, event any) error {
 			"requestId", requestID,
 			"memoryLimit", memoryLimit,
 		)
+
+		// TenantID is populated when Lambda Tenant Isolation Mode is active (aws-lambda-go v1.54+).
+		// Empty string means the function is not running in a tenant-isolated context.
+		if lc.TenantID != "" {
+			slog.Info("tenant context", "tenantId", lc.TenantID)
+		}
 	}
 
 	// Check remaining time before timeout
@@ -535,7 +581,10 @@ func uploadFile(ctx context.Context, client *s3.Client, bucket, key string, data
 	return err
 }
 
-// Upload large file with manager
+// Upload large file with Transfer Manager v2 (GA January 2026)
+// manager.NewUploader / manager.NewDownloader are still available as the manager package API;
+// the Transfer Manager v2 unifies upload and download under a single client with improved
+// defaults. Use the manager package for multipart uploads in Lambda.
 func uploadLargeFile(ctx context.Context, client *s3.Client, bucket, key string, reader io.Reader) error {
 	uploader := manager.NewUploader(client, func(u *manager.Uploader) {
 		u.PartSize = 10 * 1024 * 1024 // 10MB parts
@@ -815,6 +864,36 @@ func putItemSafe(ctx context.Context, client *dynamodb.Client, item map[string]t
 
 ### Structured Logging with slog (Go 1.21+)
 
+**Preferred: `lambda.NewLogHandler()` (aws-lambda-go v1.54+)**
+
+`lambda.NewLogHandler()` reads `AWS_LAMBDA_LOG_FORMAT` and `AWS_LAMBDA_LOG_LEVEL` set by the Lambda console or CDK, and auto-injects `requestId` into every log line — no manual wiring required:
+
+```go
+import (
+	"log/slog"
+	"github.com/aws/aws-lambda-go/lambda"
+)
+
+func init() {
+	// Reads AWS_LAMBDA_LOG_FORMAT (JSON/TEXT) and AWS_LAMBDA_LOG_LEVEL automatically.
+	// Sets slog.Default so package-level slog.Info/Error calls work without a logger var.
+	slog.SetDefault(slog.New(lambda.NewLogHandler()))
+}
+
+func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	slog.Info("processing request",
+		"path", event.Path,
+		"method", event.HTTPMethod,
+	)
+	// requestId is injected automatically from the Lambda context.
+	return events.APIGatewayProxyResponse{StatusCode: 200}, nil
+}
+```
+
+**Fallback: manual slog setup (aws-lambda-go < v1.54 or custom formatting)**
+
+Use this only when `lambda.NewLogHandler()` is unavailable or you need non-standard log routing:
+
 ```go
 import (
 	"log/slog"
@@ -878,6 +957,10 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 
 ## Cold Start Optimization
 
+### Why not SnapStart?
+
+SnapStart (snapshot-based cold start elimination) is supported for Java 11+, Python 3.12+, and .NET 8+ only. **Go is not supported and there is no announced roadmap.** For Go, use connection pooling in `init()` and Provisioned Concurrency when sub-100 ms cold start is required.
+
 ### Connection Pooling in init()
 
 ```go
@@ -893,7 +976,9 @@ func init() {
 	// Load config once
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		panic(err)
+		// Use log.Fatal so the failure surfaces as a runtime init error in CloudWatch,
+		// not as an unhandled panic. Avoid panic() in init().
+		log.Fatalf("failed to load AWS config: %v", err)
 	}
 
 	// Create clients (reused across invocations)
@@ -1421,7 +1506,8 @@ func TestGetUser(t *testing.T) {
 - Initialize AWS clients in `init()` for connection reuse
 - Use `context.Context` for all operations
 - Wrap errors with `fmt.Errorf("context: %w", err)`
-- Use structured logging (slog with JSON)
+- Use `lambda.NewLogHandler()` for slog setup (aws-lambda-go v1.54+)
+- Use `lambda.StartHandlerFunc` for new handlers (compile-time type safety)
 - Define small, focused interfaces
 - Use table-driven tests
 - Build with `-ldflags="-s -w"` for smaller binaries
@@ -1431,20 +1517,30 @@ func TestGetUser(t *testing.T) {
 - Use global `map[string]interface{}` for DynamoDB (causes type corruption)
 - Ignore context cancellation
 - Create AWS clients inside handler functions
-- Use `panic()` for error handling
+- Use `panic()` in `init()` — prefer `log.Fatal` so failures surface as clean runtime init errors
 - Log sensitive data (API keys, tokens, passwords)
 - Use CGO unless absolutely necessary
 - Deploy x86_64 when ARM64 is available
+- Use `provided.al2` for new functions (deprecated July 31, 2026)
 
 ### Performance Checklist
 
-- [ ] Using ARM64 (Graviton2) architecture
+- [ ] Using ARM64 architecture (standard Lambda ARM64 = Graviton2; Graviton4 requires Lambda Managed Instances)
 - [ ] AWS clients initialized in `init()`
 - [ ] Binary stripped with `-ldflags="-s -w"`
 - [ ] Memory configured based on workload (use Power Tuning)
 - [ ] Timeout set appropriately (not too long)
 - [ ] Concurrent operations use goroutines
 - [ ] Database connections pooled
+- [ ] `WithEnableSIGTERM` registered if the function holds stateful resources
+
+### Platform Compatibility Notes
+
+- **SnapStart**: Java, Python, .NET only. Go is not supported and no roadmap exists. Use Provisioned Concurrency for latency-sensitive Go functions.
+- **Powertools for Lambda**: Available for Python, TypeScript, Java, and .NET. There is no Go implementation (open feature request: aws-powertools/powertools-lambda #82). Go developers use `slog` + `aws-xray-sdk-go` + hand-rolled middleware instead.
+- **Runtime lifecycle**: `provided.al2023` deprecation is June 30, 2029. `provided.al2` deprecates July 31, 2026 — do not use for new functions.
+- **AWS SDK for Go**: v2 is the current and actively maintained SDK. No v3 is announced or planned.
+- **CDK**: v2 is the current major. AWS has confirmed there will be no CDKv3.
 
 ### Security Checklist
 

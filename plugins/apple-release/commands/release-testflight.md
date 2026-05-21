@@ -48,6 +48,8 @@ If any are missing or set to placeholder values, ask the user:
 > - ASC_ISSUER_ID: (from App Store Connect → Users and Access → Keys)
 > - ASC_KEY_PATH: (path to your AuthKey_XXXXX.p8 file)"
 
+The API key must have at least the **App Manager** role. A Developer-only key can fail at the upload or cloud-signing step with a permissions error. If upload fails with a cloud signing or permission-denied message, verify the key's role under App Store Connect → Users and Access → Keys.
+
 ### 1.4 Verify API Key File Exists
 
 Extract the key path from Makefile and verify it exists:
@@ -60,7 +62,7 @@ test -f "$ASC_KEY_PATH" && echo "API key file found" || echo "API key file NOT f
 If the key file doesn't exist, ask:
 > "API key file not found at [path]. Please verify the path or download the key from App Store Connect."
 
-### 1.5 Check Xcode Command Line Tools
+### 1.5 Check Xcode Version
 
 ```bash
 xcodebuild -version 2>/dev/null || echo "Xcode CLI tools not installed"
@@ -68,6 +70,8 @@ xcodebuild -version 2>/dev/null || echo "Xcode CLI tools not installed"
 
 If not installed, inform the user:
 > "Xcode command line tools required. Install with: `xcode-select --install`"
+
+Parse the major version from the output. Apple requires Xcode 14 or later for all uploads (enforced 2026). Starting April 2026, new App Store submissions must be built with Xcode 26 and the iOS 26 SDK. Warn the user if their Xcode version does not meet the current requirement.
 
 ## Step 2: Check Current Version
 
@@ -95,11 +99,15 @@ This command:
 
 ```bash
 tail -30 /tmp/upload_output.txt
+grep -E "Upload succeeded|EXPORT SUCCEEDED" /tmp/upload_output.txt
+grep -E "ERROR|errors returned by the App Store" /tmp/upload_output.txt
 ```
 
 Look for:
 - `Upload succeeded`
 - `EXPORT SUCCEEDED`
+
+With Xcode 26, `altool` may exit 0 while the upload silently failed (fastlane issue #29743). If the success strings are absent or any error strings appear, treat the upload as failed rather than relying on the exit code. Verify the build appears in App Store Connect → TestFlight within a few minutes as a secondary check.
 
 ## Step 5: Report Results
 

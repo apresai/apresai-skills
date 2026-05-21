@@ -9,7 +9,7 @@ Quick lookup index. Everything here is upstream — when in doubt, the source of
 | Bubble Tea v2 | `charm.land/bubbletea/v2` | v2.0.6+ | https://github.com/charmbracelet/bubbletea |
 | Bubbles v2 | `charm.land/bubbles/v2` | v2.1.0+ | https://github.com/charmbracelet/bubbles |
 | Lip Gloss v2 | `charm.land/lipgloss/v2` | v2.0.3+ | https://github.com/charmbracelet/lipgloss |
-| huh (forms) | `charm.land/huh/v2` | v2.0.0+ | https://github.com/charmbracelet/huh |
+| huh (forms) | `charm.land/huh/v2` | v2.0.3+ | https://github.com/charmbracelet/huh |
 | Harmonica (physics) | `github.com/charmbracelet/harmonica` | latest | https://github.com/charmbracelet/harmonica |
 
 ## Official documentation
