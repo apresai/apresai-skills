@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "apresai-skills",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Production-ready skills and plugins for Claude Code by apresai",
   "owner": {
     "name": "apresai",
@@ -21,7 +21,7 @@
     {
       "name": "go-lambda",
       "description": "Comprehensive Go Lambda development with provided.al2023 runtime, ARM64/Graviton2 architecture, AWS SDK v2, and CDK infrastructure. Covers scaffolding, migration, best practices, and production patterns.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": {
         "name": "apresai"
       },
@@ -31,7 +31,7 @@
     {
       "name": "nextjs-opennext",
       "description": "Deploy Next.js applications to AWS Lambda using OpenNext and CDK. Covers App Router, Server Components, ISR, streaming, middleware, and production deployment patterns.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": {
         "name": "apresai"
       },
@@ -41,7 +41,7 @@
     {
       "name": "bubbletea-design",
       "description": "Build beautiful, idiomatic terminal UIs in Go with Bubble Tea v2, Bubbles v2, and Lip Gloss v2. Architecture patterns, component catalog, styling recipes, async/streaming patterns, v1→v2 migration map, and visual design principles for sexy TUIs.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": {
         "name": "Chad Neal"
       },
@@ -51,7 +51,7 @@
     {
       "name": "image-encoding",
       "description": "Modern web image encoding with AVIF (primary) and WebP (fallback). Covers cwebp/dwebp/avifenc CLIs, the <picture> cascade pattern, browser-support cliffs, and when each format wins.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": {
         "name": "Chad Neal"
       },
@@ -61,7 +61,7 @@
     {
       "name": "chad-review",
       "description": "8-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across structural, behavioral, spec-drift, test, test-coverage, observability, documentation, and adversarial dimensions. Parallel sub-agent execution, read-only.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": {
         "name": "Chad Neal"
       },
