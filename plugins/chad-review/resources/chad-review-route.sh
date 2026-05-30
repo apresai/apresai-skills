@@ -9,6 +9,20 @@
 # iOS Swift has no native specialist agent so we fall back to `code-reviewer`
 # enriched with Context7 docs for the Apple frameworks the diff actually uses.
 #
+# PROJECT-AGNOSTIC BY DESIGN
+# This script does NOT assume fixed directory names. It adapts to whatever the
+# repo actually looks like:
+#   - CDK vs Next.js TypeScript is told apart by IMPORTS (aws-cdk-lib vs next/
+#     react) and by marker files (cdk.json / next.config.*), not by a `web/` or
+#     `infrastructure/` path.
+#   - OpenAPI specs are found by an `openapi:`/`swagger:` key or an `openapi/`
+#     dir, not by an exact `openapi.yaml` filename.
+#   - Context7 framework hints are DERIVED from the imports / package.json deps
+#     the changed files actually use — not a hardcoded per-project list.
+#   - SPEC-DRIFT command hints are DERIVED from the project's Makefile targets
+#     (gen*, openapi-lint, …) when present.
+# Anything it can't classify is still surfaced (no silent drops).
+#
 # USAGE
 #   bash chad-review-route.sh                     # auto-detect from working tree
 #   bash chad-review-route.sh <path-prefix>       # restrict detection to a path
@@ -16,7 +30,7 @@
 #
 # OUTPUT
 # Human-readable routing plan: per-pass agent + Context7 hints. Designed for
-# the chad-review skill to copy into sub-agent prompts.
+# the chad-review skill to copy into sub-agent prompts. Read-only.
 #
 set -euo pipefail
 
@@ -28,6 +42,8 @@ for arg in "$@"; do
     *) path_prefix="$arg" ;;
   esac
 done
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 
 # Capture the changed-file list. Tolerate brand-new repos with no HEAD by
 # suppressing git stderr; an empty `files` triggers the no-changes path below.
@@ -48,31 +64,100 @@ if [[ -z "$files" ]]; then
   exit 0
 fi
 
-# Classify by extension and path. A diff can hit multiple partitions; we
-# detect each independently so the skill can route per file group.
-has_go=$(echo "$files"     | grep -c '\.go$'                              || true)
-has_cdk=$(echo "$files"    | grep -cE '(^|/)infrastructure/(lib|bin)/.*\.ts$'  || true)
-has_web=$(echo "$files"    | grep -cE '(^|/)web/.*\.(ts|tsx|js|jsx)$'     || true)
-has_swift=$(echo "$files"  | grep -c '\.swift$'                           || true)
-has_openapi=$(echo "$files" | grep -c '^openapi\.yaml$'                   || true)
-has_md=$(echo "$files"     | grep -cE '\.md$'                             || true)
-has_cdkjson=$(echo "$files" | grep -cE 'cdk\.json$|package\.json$'        || true)
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# sniff <file> <content-regex> : true if the on-disk file matches the content
+# regex. Deleted/renamed-away files won't exist on disk → false.
+sniff() { [[ -f "$repo_root/$1" ]] && grep -qE "$2" "$repo_root/$1" 2>/dev/null; }
+
+# first_make_target <regex> : echo `make <target>` for the first Makefile target
+# whose name matches, else nothing. Lets SPEC-DRIFT hints reflect the real repo.
+first_make_target() {
+  local mk="$repo_root/Makefile"
+  [[ -f "$mk" ]] || return 0
+  local t
+  t=$(grep -oE "^[a-zA-Z0-9_.-]+:" "$mk" 2>/dev/null | sed 's/:$//' | grep -E "$1" | head -1 || true)
+  [[ -n "$t" ]] && echo "make $t"
+}
+
+# first_dir <newline-list> : dirname of the first entry in a classified file
+# list, for a human-readable block label (e.g. "ios/Eleven9s").
+first_dir() {
+  local f
+  f=$(echo "$1" | grep -m1 . || true)
+  [[ -n "$f" ]] && dirname "$f"
+}
+
+# ---------------------------------------------------------------------------
+# Classify changed files. TypeScript/JS is split into CDK / web / generic by
+# imports first, then by marker-file ancestry, so directory names don't matter.
+# ---------------------------------------------------------------------------
+go_files=""; swift_files=""; cdk_files=""; web_files=""; ts_files=""
+yaml_specs=""; md_files=""; other_files=""
+
+# Pre-locate marker dirs once (pruned find, capped depth) for ancestry fallback.
+prune=( -name node_modules -o -name .git -o -name cdk.out -o -name .next -o -name build -o -name dist -o -name DerivedData -o -name vendor )
+cdk_marker_dirs=$(find "$repo_root" -maxdepth 5 \( "${prune[@]}" \) -prune -o -name cdk.json -exec dirname {} \; 2>/dev/null | sort -u || true)
+next_marker_dirs=$(find "$repo_root" -maxdepth 5 \( "${prune[@]}" \) -prune -o \( -name 'next.config.js' -o -name 'next.config.mjs' -o -name 'next.config.ts' -o -name 'next.config.cjs' \) -exec dirname {} \; 2>/dev/null | sort -u || true)
+
+under_marker() { # under_marker <abs-file-dir> <newline-list-of-dirs>
+  local fdir="$1" markers="$2" m
+  [[ -z "$markers" ]] && return 1
+  while IFS= read -r m; do
+    [[ -z "$m" ]] && continue
+    [[ "$fdir" == "$m" || "$fdir" == "$m"/* ]] && return 0
+  done <<< "$markers"
+  return 1
+}
+
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  case "$f" in
+    *.go) go_files+="$f"$'\n'; continue ;;
+    *.swift) swift_files+="$f"$'\n'; continue ;;
+    *.md|*.mdx) md_files+="$f"$'\n'; continue ;;
+    *.ts|*.tsx|*.mts|*.cts|*.js|*.jsx|*.mjs|*.cjs) ;;  # fall through to TS routing
+    *.yaml|*.yml)
+      if sniff "$f" '^(openapi|swagger):' || [[ "$f" == openapi/* || "$f" == */openapi/* ]]; then
+        yaml_specs+="$f"$'\n'
+      else
+        other_files+="$f"$'\n'
+      fi
+      continue ;;
+    *) other_files+="$f"$'\n'; continue ;;
+  esac
+
+  # --- TypeScript/JS: CDK vs web vs generic ---
+  if sniff "$f" "aws-cdk-lib|@aws-cdk/|from ['\"]constructs['\"]"; then
+    cdk_files+="$f"$'\n'; continue
+  fi
+  if sniff "$f" "from ['\"]next|from ['\"]react|['\"]use client['\"]|['\"]use server['\"]|next/"; then
+    web_files+="$f"$'\n'; continue
+  fi
+  fdir=$(dirname "$repo_root/$f")
+  if under_marker "$fdir" "$cdk_marker_dirs"; then cdk_files+="$f"$'\n'; continue; fi
+  if under_marker "$fdir" "$next_marker_dirs"; then web_files+="$f"$'\n'; continue; fi
+  ts_files+="$f"$'\n'
+done <<< "$files"
+
+cnt() { echo -n "$1" | grep -c . || true; }
 
 echo "chad-review routing — $mode"
 echo "==========================================="
 echo "Files detected:"
-[[ "$has_go" -gt 0 ]]      && echo "  Go (.go)               : $has_go"
-[[ "$has_cdk" -gt 0 ]]     && echo "  CDK (infra/*.ts)       : $has_cdk"
-[[ "$has_web" -gt 0 ]]     && echo "  Web (Next.js/React)    : $has_web"
-[[ "$has_swift" -gt 0 ]]   && echo "  iOS Swift              : $has_swift"
-[[ "$has_openapi" -gt 0 ]] && echo "  openapi.yaml           : $has_openapi"
-[[ "$has_md" -gt 0 ]]      && echo "  Markdown docs          : $has_md"
-[[ "$has_cdkjson" -gt 0 ]] && echo "  CDK/npm config         : $has_cdkjson"
+[[ -n "$go_files" ]]    && echo "  Go (.go)                 : $(cnt "$go_files")"
+[[ -n "$cdk_files" ]]   && echo "  CDK TypeScript           : $(cnt "$cdk_files")"
+[[ -n "$web_files" ]]   && echo "  Next.js / React          : $(cnt "$web_files")"
+[[ -n "$ts_files" ]]    && echo "  TypeScript / JS (generic): $(cnt "$ts_files")"
+[[ -n "$swift_files" ]] && echo "  iOS / Apple Swift        : $(cnt "$swift_files")"
+[[ -n "$yaml_specs" ]]  && echo "  OpenAPI spec             : $(cnt "$yaml_specs")"
+[[ -n "$md_files" ]]    && echo "  Markdown docs            : $(cnt "$md_files")"
+[[ -n "$other_files" ]] && echo "  Other / unclassified     : $(cnt "$other_files")"
 echo
 
-# Per-language routing block. Print one block per detected language so the
-# chad-review skill can spawn the right agent per file group. All agents run
-# on model: "opus" per chad-review's policy.
+# emit_block <lang> <p1> <p2> <p3> <p5> <p6> <p7> <ctx>
 emit_block() {
   local lang="$1" p1="$2" p2="$3" p3="$4" p5="$5" p6="$6" p7="$7" ctx="$8"
   cat <<EOF
@@ -89,62 +174,117 @@ EOF
   echo
 }
 
-# Go cmd Lambdas / shared packages — the partitions 1-4 pattern.
-[[ "$has_go" -gt 0 ]] && emit_block "Go (cmd Lambdas / shared)" \
+# Detected, project-specific command hints. Prefer an aggregate `gen` target,
+# else the first `gen*`; phrase it as the project's codegen entrypoint so the
+# reviewing agent runs the language-appropriate sub-target itself.
+gen_target=$(first_make_target '^gen$'); [[ -z "$gen_target" ]] && gen_target=$(first_make_target '^gen')
+lint_target=$(first_make_target 'openapi-lint|^lint$|validate')
+go_spec_cmd="general-purpose (regenerate types${gen_target:+ via $gen_target}${lint_target:+ + $lint_target} + diff generated *.gen.go)"
+web_spec_cmd="general-purpose (regen API types${gen_target:+ via $gen_target} + diff generated types; tsc --noEmit)"
+swift_spec_cmd="general-purpose (regen client${gen_target:+ via $gen_target} + diff Generated/ vs the OpenAPI spec)"
+cdk_spec_cmd="general-purpose (cdk synth + cdk diff after build; or tsc --noEmit)"
+
+# --- Go ---------------------------------------------------------------------
+[[ -n "$go_files" ]] && emit_block "Go" \
   "Explore (thoroughness: medium)" \
   "feature-dev:code-reviewer" \
-  "general-purpose (run scripts/validate-openapi.sh)" \
+  "$go_spec_cmd" \
   "Explore (thoroughness: medium)" \
   "feature-dev:code-reviewer" \
   "general-purpose" \
   ""
 
-# CDK TypeScript — cloud-architect knows IAM patterns, drift, asset paths.
-[[ "$has_cdk" -gt 0 ]] && emit_block "CDK TypeScript (infrastructure/)" \
+# --- CDK TypeScript ---------------------------------------------------------
+[[ -n "$cdk_files" ]] && emit_block "CDK TypeScript ($(first_dir "$cdk_files" || echo infra))" \
   "Explore (thoroughness: medium)" \
   "cloud-architect" \
-  "general-purpose (CFN diff via cdk synth + validate)" \
+  "$cdk_spec_cmd" \
   "typescript-pro" \
   "cloud-architect" \
   "general-purpose" \
   "context7: aws-cdk-lib (current construct APIs), aws-cloudformation"
 
-# Next.js / React web — frontend-developer + security-auditor for the
-# adversarial pass (the parent does Pass 8 inline, but security-auditor can
-# also be tagged in if Pass 8 surfaces XSS / CSP / OAuth concerns).
-[[ "$has_web" -gt 0 ]] && emit_block "Next.js / React (web/)" \
-  "Explore (thoroughness: medium)" \
-  "frontend-developer" \
-  "general-purpose (openapi spec ↔ types/api.generated.ts)" \
-  "frontend-developer" \
-  "frontend-developer" \
-  "general-purpose" \
-  "context7: next.js (App Router), react (Server Components), tanstack-query"
+# --- Next.js / React --------------------------------------------------------
+if [[ -n "$web_files" ]]; then
+  # Derive Context7 hints from the nearest package.json deps to the web files.
+  web_dir=$(first_dir "$web_files" || echo .)
+  pkg=""; probe="$repo_root/$web_dir"
+  while [[ "$probe" == "$repo_root"* ]]; do
+    [[ -f "$probe/package.json" ]] && { pkg="$probe/package.json"; break; }
+    [[ "$probe" == "$repo_root" ]] && break
+    probe=$(dirname "$probe")
+  done
+  web_ctx="context7:"
+  if [[ -n "$pkg" ]]; then
+    for lib in next react @tanstack/react-query next-auth tailwindcss zustand zod swr; do
+      grep -qE "\"$lib\"" "$pkg" 2>/dev/null && web_ctx+=" ${lib}"
+    done
+  fi
+  [[ "$web_ctx" == "context7:" ]] && web_ctx="context7: next.js (App Router), react (Server Components)"
+  emit_block "Next.js / React ($web_dir)" \
+    "Explore (thoroughness: medium)" \
+    "frontend-developer" \
+    "$web_spec_cmd" \
+    "frontend-developer" \
+    "frontend-developer" \
+    "general-purpose" \
+    "$web_ctx"
+fi
 
-# iOS Swift — no native specialist; use code-reviewer + Context7 for current
-# Apple framework semantics (the diff likely touches FoundationModels,
-# SpeechAnalyzer, or StoreKit2 — all moving APIs on iOS 26).
-[[ "$has_swift" -gt 0 ]] && emit_block "iOS Swift (ios/ReGist/)" \
+# --- Generic TypeScript / JS (neither CDK nor Next.js) ----------------------
+[[ -n "$ts_files" ]] && emit_block "TypeScript / JS (generic — $(first_dir "$ts_files" || echo .))" \
   "Explore (thoroughness: medium)" \
-  "code-reviewer" \
-  "general-purpose (validate against openapi.yaml ↔ APIService.swift)" \
-  "code-reviewer" \
-  "code-reviewer" \
+  "typescript-pro" \
   "general-purpose" \
-  "context7: swift (current syntax), apple-foundationmodels (LanguageModelSession), apple-speech (SpeechAnalyzer iOS 26), apple-storekit (StoreKit2)"
+  "typescript-pro" \
+  "typescript-pro" \
+  "general-purpose" \
+  "context7: (resolve from package.json deps the changed files import)"
 
-# Docs-only or openapi-only diff — lighter touch.
-if [[ "$has_go" -eq 0 && "$has_cdk" -eq 0 && "$has_web" -eq 0 && "$has_swift" -eq 0 ]]; then
-  if [[ "$has_openapi" -gt 0 || "$has_md" -gt 0 ]]; then
+# --- iOS / Apple Swift ------------------------------------------------------
+if [[ -n "$swift_files" ]]; then
+  # Derive Context7 hints from the frameworks the CHANGED Swift files import,
+  # skipping ubiquitous ones that don't need a doc-fetch.
+  imports=""
+  while IFS= read -r f; do
+    [[ -z "$f" || ! -f "$repo_root/$f" ]] && continue
+    imports+=$(grep -hoE "^[[:space:]]*import [A-Za-z_][A-Za-z0-9_]*" "$repo_root/$f" 2>/dev/null | sed -E 's/^[[:space:]]*import //' || true)$'\n'
+  done <<< "$swift_files"
+  noise='^(Foundation|Combine|OSLog|os|Dispatch|CoreFoundation|CoreGraphics|CoreData|UIKit|SwiftUI|Observation|Security|Darwin)$'
+  fw=$(echo "$imports" | grep -vE '^$' | grep -vE "$noise" | sort -u | tr '\n' ' ' | sed 's/ *$//')
+  swift_ctx="context7: swift (current syntax)"
+  [[ -n "$fw" ]] && swift_ctx+=" + the frameworks the diff imports: $fw"
+  emit_block "iOS / Apple Swift ($(first_dir "$swift_files" || echo ios))" \
+    "Explore (thoroughness: medium)" \
+    "code-reviewer" \
+    "$swift_spec_cmd" \
+    "code-reviewer" \
+    "code-reviewer" \
+    "general-purpose" \
+    "$swift_ctx"
+fi
+
+# --- OpenAPI-spec-only / docs-only lighter touch ----------------------------
+if [[ -z "$go_files$cdk_files$web_files$ts_files$swift_files" ]]; then
+  if [[ -n "$yaml_specs$md_files" ]]; then
     emit_block "Docs / spec only" \
       "(skip — no symbol removals possible)" \
       "(skip)" \
-      "general-purpose (validate-openapi.sh + grep for stale prose refs)" \
+      "${lint_target:+general-purpose ($lint_target + grep for stale prose refs)}" \
       "(skip)" \
       "(skip)" \
       "general-purpose" \
       ""
   fi
+fi
+
+# --- Unclassified — never drop silently -------------------------------------
+if [[ -n "$other_files" ]]; then
+  exts=$(echo "$other_files" | grep -oE '\.[A-Za-z0-9]+$' | sort -u | tr '\n' ' ' | sed 's/ *$//')
+  echo "--- Routing: Other / unclassified (${exts:-no extension}) ---"
+  echo "  No language specialist matched these. Review with general-purpose"
+  echo "  (+ code-reviewer for any executable code). Do NOT skip them."
+  echo
 fi
 
 echo "==========================================="
@@ -153,6 +293,6 @@ echo "  - All sub-agents launched with model: \"opus\" per chad-review policy."
 echo "  - Context7 hints are framework names — the agent should resolve to a"
 echo "    library ID and fetch docs at audit start, then reason against current"
 echo "    semantics (not pre-training knowledge that may be stale)."
-echo "  - For mixed-language diffs (e.g., Go + openapi.yaml), spawn one set of"
-echo "    agents per language block above. The 8-pass structure is per-language;"
-echo "    the parent merges findings into a single Final Report."
+echo "  - For mixed-language diffs, spawn one set of agents per language block"
+echo "    above. The 8-pass structure is per-language; the parent merges"
+echo "    findings into a single Final Report."
