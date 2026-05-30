@@ -1,6 +1,6 @@
 ---
 name: app-store-audit
-description: Pre-submission audit of an iOS/macOS Xcode project against the Apple App Store Review Guidelines. Use before submitting to App Review (or as a sanity check during development) to surface guideline violations and rejection risks. Detects empty/missing usage descriptions, Privacy Manifest gaps, tracking-SDK declaration mismatches, IAP avoidance, web-view-only apps, App Transport Security exceptions, placeholder metadata, and more. Reports findings rated CRITICAL / HIGH / MEDIUM / LOW with the exact guideline ID and quoted rule text.
+description: Pre-submission audit of an iOS/macOS Xcode project against the Apple App Store Review Guidelines. Use before submitting to App Review (or as a sanity check during development) to surface guideline violations and rejection risks. Detects empty/missing usage descriptions, Privacy Manifest gaps, tracking-SDK declaration mismatches, IAP avoidance, web-view-only apps, App Transport Security exceptions, placeholder metadata, and more. When App Store Connect access is available (an ASC API key) it also audits the live METADATA that ships alongside the binary — screenshots (incl. the no-prices/2.3.7 rule), Support/Privacy URLs, subscription localizations (MISSING_METADATA), the attached build, listing copy, and privacy labels. Reports findings rated CRITICAL / HIGH / MEDIUM / LOW with the exact guideline ID and quoted rule text.
 ---
 
 # App Store Audit — Pre-submission Risk Assessment
@@ -200,6 +200,52 @@ Quick checks for things that frequently trip up submissions:
 4. **Push notifications without entitlement** — if the app calls `UNUserNotificationCenter.current().requestAuthorization` but the entitlements file lacks `aps-environment`, flag CRITICAL.
 5. **HealthKit** — if `HealthKit.framework` is linked or `import HealthKit` appears, verify both usage description AND `com.apple.developer.healthkit` entitlement.
 
+## App Store Connect metadata passes (Pass L–Q)
+
+Passes A–K audit the **Xcode project + binary**. But a large share of rejections come from the **App Store Connect metadata** that ships *alongside* the build — screenshots, listing URLs, subscription localizations, the attached build, listing copy, and the privacy questionnaire. None of that lives in the project; it lives in ASC and must be checked there. Skipping it is the audit's biggest blind spot.
+
+**Access.** These passes need App Store Connect data. Use one of:
+- An **App Store Connect API key** (Issuer ID + key ID + `.p8`) against the ASC REST API (`https://api.appstoreconnect.apple.com`). Many projects keep a tiny helper that signs an ES256 JWT and does `GET/POST/PATCH` — detect one: `grep -rilE "appstoreconnect|asc-tool|AuthKey_.*\.p8" cmd/ scripts/ tools/ Makefile 2>/dev/null`. Reads are always safe; **before any write (PATCH/POST to production metadata) confirm with the user.**
+- The **ASC UI** — if there's no API access, run each pass below as a MANUAL checklist item for the operator.
+
+If no ASC access is available, mark Pass L–Q **MANUAL** and emit the checklist for the human — never skip them silently.
+
+### Pass L — Screenshots (Guideline 2.3.3, 2.3.7)
+
+**Rule (2.3.3):** "Screenshots should show the app in use, and not merely the title art, login page, or splash screen."
+**Rule (2.3.7):** "Metadata such as app names, subtitles, screenshots, and previews should not include prices, terms, or descriptions that are not specific to the metadata type."
+
+1. At least one screenshot for every advertised device size (6.9"/6.5" iPhone; 13" iPad if iPad-enabled). CRITICAL if a required size has none.
+2. **No prices, promo/discount, or "limited time" text** in screenshots (2.3.7). A **hardcoded price** ("$0.99/mo") is the classic trap — it goes stale on any price change and is wrong in every non-USD storefront (screenshots are static per-storefront metadata; StoreKit localizes prices, a PNG can't). HIGH for a hardcoded price or promo text. For a paywall screenshot, prefer tiers/value ("Monthly" / "Annual — best value", "Subscription required") and let StoreKit render the live price — or omit it (Apple requires only 1+ screenshot, not a paywall shot).
+3. **Currency:** screenshots must reflect the CURRENT shipping UI. If the build's UI changed but screenshots predate it → MEDIUM "screenshots stale — re-capture."
+
+### Pass M — Listing URLs (Guideline 2.3.1, 1.5.1)
+
+1. **Support URL** — REQUIRED; must resolve (HTTP 200), not 404: `curl -sS -o /dev/null -w '%{http_code}' <url>`. CRITICAL if missing/dead.
+2. **Privacy Policy URL** — REQUIRED for apps that collect data / use Sign in with Apple / subscriptions; must resolve. CRITICAL if missing/dead.
+3. **Marketing URL** — optional; if set must resolve, else blank. LOW.
+
+### Pass N — Subscription / IAP metadata (Guideline 3.1.2)
+
+Only if the app has IAP/subscriptions (StoreKit detected in Pass D):
+1. Every in-app purchase / subscription is in a **submittable state — NOT `MISSING_METADATA`** (it blocks the whole submission). The classic cause: the **subscription group has no localization** (customer-facing display name) and/or a subscription lacks its localized name + review screenshot. CRITICAL for any `MISSING_METADATA` product. (Check: `GET /v1/apps/{id}/subscriptionGroups` → `…/subscriptionGroupLocalizations` (empty = the bug) and each subscription's `state`.)
+2. On-purchase disclosures exist in the paywall (price, duration, renewal, "cancel anytime") — cross-check Pass J.
+
+### Pass O — Build attachment (Guideline 2.1)
+
+1. The in-flight App Store version has a **build attached**, it is **VALID** (finished processing), and it is the **intended/latest** build — not a stale earlier one. HIGH if no build attached, or if the attached build is older than the binary just audited (operator forgot to re-select after a new upload). (Check: `GET /v1/appStoreVersions/{id}/build`.)
+2. Version string + build number incremented vs the last released version.
+
+### Pass P — Listing copy & review notes (Guideline 2.3.1)
+
+1. Description / keywords / what's-new contain no placeholder ("Lorem ipsum", "TODO") and no **"coming soon"** for features not in this build — functionality must be available to App Review. HIGH for "coming soon"; MEDIUM for placeholder.
+2. Description claims match shipped features (don't describe a feature the build lacks — a frequent 2.3.1 rejection). MEDIUM "verify claims vs build."
+3. **Review notes** give demo access for any login-gated app (credentials, or instructions for Sign in with Apple / passkey) and don't reference unshipped features. MEDIUM.
+
+### Pass Q — Privacy nutrition labels (Guideline 5.1.1, 5.1.2)
+
+1. The ASC **App Privacy** answers must match the app's actual data collection AND the `PrivacyInfo.xcprivacy` manifest (Pass B). If the manifest sets `NSPrivacyTracking = false`, ASC "Data Used to Track You" must be **None**. The public API doesn't fully expose these answers → MEDIUM "verify ASC App Privacy matches the manifest + collected data types."
+
 ## Final Report
 
 After all passes, output a single consolidated report:
@@ -272,4 +318,4 @@ If `pandoc` is not installed: `brew install pandoc`.
 - ALWAYS include the guideline ID (e.g., "5.1.1.ii") in findings so the user can cite it in App Review responses.
 - If the saved guidelines are older than 90 days, offer to refresh BEFORE auditing.
 - If a check is ambiguous (e.g., "does this app provide meaningful native functionality"), flag as MEDIUM with a "needs human judgment" note rather than guessing.
-- The audit is one tool of several — also pair with manual review of: screenshots, app description, privacy questionnaire in App Store Connect, demo account access for review team.
+- Passes A–K audit the project/binary; Passes L–Q audit App Store Connect metadata (screenshots, URLs, subscription localizations, attached build, listing copy, privacy labels). When ASC API access isn't available, run L–Q as a MANUAL checklist for the operator — surface them, never drop them silently. The audit is still one input among several; pair it with a human read of the final ASC listing and a demo-account check for the review team.
