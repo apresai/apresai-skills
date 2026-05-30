@@ -25,6 +25,35 @@ This skill is project-agnostic. It detects the language and framework of the cha
    - `Chad Review — reviewing working tree (2 staged, 3 unstaged, 1 untracked)`
    - `Chad Review — reviewing last commit a1b2c3d "Fix credit refund race"`
 4. The captured diff is the input for all 8 passes. The changed files list drives Pass 4 test selection and Pass 5 coverage selection.
+5. **Route per-pass agents by language family.** Run the bundled
+   `chad-review-route.sh` script to detect which language families
+   appear in the changed-files list and print recommended per-pass
+   `subagent_type` + Context7 hints:
+
+   ```bash
+   # When installed as an apresai-skills plugin:
+   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/chad-review-route.sh"
+   # Or last-commit mode:
+   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/chad-review-route.sh" --last-commit
+   ```
+
+   The script emits one routing block per detected language (Go, CDK
+   TypeScript, Next.js/React, iOS Swift, docs-only). Use the routing it
+   recommends in Phase A sub-agent launches — these defaults beat the
+   one-size-fits-all suggestions in §"Execution Strategy" below because
+   they pick specialist agents (`cloud-architect` for CDK,
+   `frontend-developer` for Next.js, etc.) plus Context7 doc-fetch hints
+   for frameworks with fast-moving APIs (iOS 26 FoundationModels,
+   AWS CDK, Next.js App Router).
+
+   For **mixed-language diffs**, the script prints one routing block per
+   language and you spawn one set of Phase A sub-agents PER block
+   (a CDK + Go diff = 12 sub-agents launched in a single Agent batch).
+   Each language's findings flow into one shared Final Report.
+
+   If the script is missing (older install or non-plugin context), fall
+   back to the hardcoded defaults in §"Execution Strategy" — they're
+   correct for Go but only adequate for the other languages.
 
 ## Pass 1 — STRUCTURAL
 
@@ -533,13 +562,20 @@ Launch all six as sub-agents in ONE message (six `Agent` tool uses in a single r
 - Explicit output format (e.g. "Report under 300 words. Structure: findings list, each with severity, file:line, one-sentence explanation.").
 - **`model: "opus"`** on every Agent call.
 
-Suggested `subagent_type` per pass (all run on `model: "opus"`):
+**Preferred path: use `chad-review-route.sh` output** (see Pre-flight step 5) — it picks the right specialist per language family in the diff.
+
+**Fallback defaults** when the routing script is unavailable. These are Go-shaped: adequate for Go cmd Lambdas + shared packages, only OK for other languages. All run on `model: "opus"`:
 - **Pass 1 (STRUCTURAL)** → `Explore` with thoroughness `medium`. Fast grep-heavy work.
 - **Pass 2 (BEHAVIORAL)** → `feature-dev:code-reviewer` or `general-purpose`. Needs judgment, not speed.
 - **Pass 3 (SPEC DRIFT)** → `general-purpose`. Needs to both read files AND run project-specific commands like spec validators, regeneration scripts, route-parity tests. Include the project's specific commands and paths in the prompt — detect them from the project layout during pre-flight.
 - **Pass 5 (TEST COVERAGE)** → `Explore` with thoroughness `medium`. Locates test files and greps for references to new symbols.
 - **Pass 6 (OBSERVABILITY)** → `feature-dev:code-reviewer` or `general-purpose`. Judgment-heavy: what counts as sufficient logging varies by code path.
 - **Pass 7 (DOCUMENTATION)** → `general-purpose`. Needs to read doc files and compare against the diff; may need to check for presence of godoc/jsdoc/docstrings on new symbols.
+
+For non-Go diffs, the routing script's specialist picks generally produce more accurate findings:
+- **CDK TypeScript** → `cloud-architect` for behavioral / observability passes (knows IAM idioms, drift sources, asset-path conventions); `typescript-pro` for test coverage. Context7: `aws-cdk-lib`.
+- **Next.js / React** → `frontend-developer` for behavioral / test-coverage / observability (knows React rules-of-hooks, Server-vs-Client components, accessibility). Context7: `next.js`, `react`, `tanstack-query`.
+- **iOS Swift** → `code-reviewer` is the best generic match (no native Swift specialist agent exists). Context7: `swift`, plus the Apple frameworks the diff actually touches (`apple-foundationmodels`, `apple-speech`, `apple-storekit`).
 
 Wait for all six sub-agent results before proceeding.
 
