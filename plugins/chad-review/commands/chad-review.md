@@ -38,12 +38,20 @@ This skill is project-agnostic. It detects the language and framework of the cha
    ```
 
    The script emits one routing block per detected language (Go, CDK
-   TypeScript, Next.js/React, iOS Swift, docs-only). Use the routing it
-   recommends in Phase A sub-agent launches — these defaults beat the
-   one-size-fits-all suggestions in §"Execution Strategy" below because
-   they pick specialist agents (`cloud-architect` for CDK,
+   TypeScript, Next.js/React, generic TypeScript/JS, iOS Swift,
+   OpenAPI/docs, plus an explicit catch-all for anything unclassified —
+   it never silently drops a file). It is **project-agnostic**: it tells
+   CDK from Next.js by imports (`aws-cdk-lib` vs `next`/`react`) and marker
+   files (`cdk.json` / `next.config.*`), finds OpenAPI specs by an
+   `openapi:` key rather than an exact filename, and **derives** the
+   Context7 framework hints from the imports / `package.json` deps the
+   changed files actually use and the codegen hints from the project's
+   own Makefile targets — so it adapts to any repo layout, not a fixed one.
+   Use the routing it recommends in Phase A sub-agent launches — these
+   defaults beat the one-size-fits-all suggestions in §"Execution Strategy"
+   below because they pick specialist agents (`cloud-architect` for CDK,
    `frontend-developer` for Next.js, etc.) plus Context7 doc-fetch hints
-   for frameworks with fast-moving APIs (iOS 26 FoundationModels,
+   for frameworks with fast-moving APIs (StoreKit/Vision/FoundationModels,
    AWS CDK, Next.js App Router).
 
    For **mixed-language diffs**, the script prints one routing block per
@@ -572,10 +580,11 @@ Launch all six as sub-agents in ONE message (six `Agent` tool uses in a single r
 - **Pass 6 (OBSERVABILITY)** → `feature-dev:code-reviewer` or `general-purpose`. Judgment-heavy: what counts as sufficient logging varies by code path.
 - **Pass 7 (DOCUMENTATION)** → `general-purpose`. Needs to read doc files and compare against the diff; may need to check for presence of godoc/jsdoc/docstrings on new symbols.
 
-For non-Go diffs, the routing script's specialist picks generally produce more accurate findings:
+For non-Go diffs, the routing script's specialist picks generally produce more accurate findings. The Context7 hints below are *examples* — the script emits the actual frameworks/deps the changed files import, so use whatever it prints:
 - **CDK TypeScript** → `cloud-architect` for behavioral / observability passes (knows IAM idioms, drift sources, asset-path conventions); `typescript-pro` for test coverage. Context7: `aws-cdk-lib`.
-- **Next.js / React** → `frontend-developer` for behavioral / test-coverage / observability (knows React rules-of-hooks, Server-vs-Client components, accessibility). Context7: `next.js`, `react`, `tanstack-query`.
-- **iOS Swift** → `code-reviewer` is the best generic match (no native Swift specialist agent exists). Context7: `swift`, plus the Apple frameworks the diff actually touches (`apple-foundationmodels`, `apple-speech`, `apple-storekit`).
+- **Next.js / React** → `frontend-developer` for behavioral / test-coverage / observability (knows React rules-of-hooks, Server-vs-Client components, accessibility). Context7: derived from the project's `package.json` (e.g. `next`, `react`, `@tanstack/react-query`, `next-auth`).
+- **Generic TypeScript / JS** (a Node Lambda, CLI, or library — neither CDK nor Next.js) → `typescript-pro`. Context7: resolved from the deps the changed files import.
+- **iOS Swift** → `code-reviewer` is the best generic match (no native Swift specialist agent exists). Context7: `swift`, plus the Apple frameworks the diff actually imports — the script derives these per-diff (e.g. `StoreKit`, `Vision`, `AuthenticationServices`, `FoundationModels`), so they reflect the project under review rather than any fixed list.
 
 Wait for all six sub-agent results before proceeding.
 
