@@ -168,9 +168,9 @@ If an upload fails mid-way: run `make reset-bump` to restore `BUILD_NUMBER` and 
 
 **Never guess the build number.** Run `make info` to read from the file, and cross-check with App Store Connect before releasing.
 
-## Makefile Example (iOS, Cloud Signing)
+## Makefile Example (iOS, manual signing)
 
-Based on for-the-win's Makefile — the simplest production-ready pattern:
+The canonical manual-signing pattern — mirrors the `/release-testflight` reference Makefile (keep the two in sync). Archive is **Manual** with a pinned cert + team and **no `-allowProvisioningUpdates`** (which would silently mint profiles at build time and defeat provability); the export step keeps the ASC API key.
 
 ```makefile
 -include .env
@@ -210,10 +210,8 @@ archive: increment-build
 	xcodebuild -scheme $(SCHEME) -project $(PROJECT) \
 	    -configuration Release -destination 'generic/platform=iOS' \
 	    -archivePath $(ARCHIVE_PATH) \
-	    -allowProvisioningUpdates \
-	    -authenticationKeyPath $(ASC_KEY_PATH) \
-	    -authenticationKeyID $(ASC_KEY_ID) \
-	    -authenticationKeyIssuerID $(ASC_ISSUER_ID) \
+	    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple Distribution" \
+	    DEVELOPMENT_TEAM=$(TEAM_ID) \
 	    archive
 
 upload: archive

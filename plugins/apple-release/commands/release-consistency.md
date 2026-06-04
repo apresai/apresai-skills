@@ -116,7 +116,7 @@ Build-verify the **exported** artifact is `KZ4VK235YL`-signed (when a build is i
 | Hardcoded profile **UUIDs** / "pin by UUID" guidance | reference by **stable Name** `<App> App Store` |
 | "for-the-win / regist use cloud signing", "no profiles needed" | they are **manual + named**; stay signing-agnostic, read `signingStyle` from each ExportOptions |
 | `eleven9s.messages` / iMessage-extension profile (`PROVISIONING_PROFILE_NAME_MESSAGES`) | dropped for v1 — remove |
-| `renew-all-profiles`, "2-cert cap" stories | account-wide **`renew-portfolio-profiles`** self-cleaning flow |
+| "2-cert cap" stories; pre-consolidation single-cert rotation runbooks | account-wide **`renew-portfolio-profiles`** self-cleaning flow (NB: `renew-all-profiles` — eleven9s main+Share re-mint — is a *live, distinct* target, not stale) |
 
 ## Verdict rubric
 
