@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "apple-release",
-      "description": "Apple app release automation for TestFlight and App Store Connect. Includes /release, /release-testflight, /release-xcodecloud, and /app-store-audit (pre-submission risk audit against the full App Store Review Guidelines — project/binary AND App Store Connect metadata). Supports iOS, macOS, watchOS, visionOS.",
+      "description": "Apple app release automation for TestFlight and App Store Connect. Includes /release, /release-testflight, /release-consistency, /release-xcodecloud, and /app-store-audit (pre-submission risk audit against the full App Store Review Guidelines — project/binary AND App Store Connect metadata). Supports iOS, macOS, watchOS, visionOS.",
       "version": "1.5.0",
       "author": {
         "name": "apresai"

@@ -24,6 +24,17 @@ Quick TestFlight upload (no infrastructure deployment):
 4. Verify upload success
 5. Report results
 
+### `/release-consistency`
+
+Audit + standardize signing, release tooling, and docs across all apresai apps so `/release-testflight`
+works identically everywhere:
+1. Per app, classify 🟢/🟡/🔴 against one canonical model (manual archive+export, generic `Apple
+   Distribution` cert, profiles by stable Name, no Fastlane, no UUID pinning)
+2. Run `/release-testflight` in verify-only mode to confirm a `KZ4VK235YL`-signed export
+3. Fix tooling deviations (manual archive, profile-name convergence) via per-repo PRs
+4. Audit + scrub cert/signing/Fastlane drift from every repo's docs
+5. Report where it already works vs where tooling/docs were fixed
+
 ### `/release-xcodecloud`
 
 Tag-triggered Xcode Cloud build:
@@ -94,28 +105,17 @@ Clipz is the canonical reference implementation for this `.env` pattern.
 
 The API key must have at least the **App Manager** role in App Store Connect. Developer-only keys fail at upload or cloud-signing with a permissions error.
 
-## Signing Styles
+## Signing
 
-### Cloud Signing (Automatic) — Simpler
+Every App Store app uses **manual signing**: the export step signs the shipped artifact with the
+shared distribution cert `KZ4VK235YL` (*Apple Distribution: Apres AI LLC*, team `CNRU7L924E`),
+referenced by a **stable provisioning-profile Name** (`"<App> App Store"`) — never by UUID, never
+via Fastlane. This is what makes the artifact *provably* signed by the shared cert and keeps annual
+cert rotation a no-edit chore. (`/release-testflight` stays signing-agnostic — it reads each
+project's `signingStyle` rather than assuming one.)
 
-Xcode manages signing via the API key. No local certificates or provisioning profiles needed. Used by for-the-win and regist.
-
-`ExportOptions.plist`:
-```xml
-<plist version="1.0"><dict>
-    <key>method</key><string>app-store-connect</string>
-    <key>teamID</key><string>CNRU7L924E</string>
-    <key>signingStyle</key><string>automatic</string>
-    <key>uploadSymbols</key><true/>
-    <key>destination</key><string>upload</string>
-</dict></plist>
-```
-
-### Manual Signing — More Control
-
-You manage certificates and provisioning profiles. Required when you need extension targets (Share, iMessage, Widget) with separate bundle IDs, each needing its own profile. Used by eleven9s and Clipz.
-
-`ExportOptions.plist` (eleven9s multi-extension pattern, rendered from template by Makefile):
+`ExportOptions.plist` — manual, generic cert, profile by Name; multi-target apps add one entry per
+bundle ID (a Share extension, a Watch app, widgets):
 ```xml
 <plist version="1.0"><dict>
     <key>method</key><string>app-store-connect</string>
@@ -125,7 +125,6 @@ You manage certificates and provisioning profiles. Required when you need extens
     <dict>
         <key>dev.apresai.eleven9s</key><string>Eleven9s App Store</string>
         <key>dev.apresai.eleven9s.share</key><string>Eleven9s Share App Store</string>
-        <key>dev.apresai.eleven9s.messages</key><string>Eleven9s Messages App Store</string>
     </dict>
     <key>signingCertificate</key><string>Apple Distribution</string>
     <key>uploadSymbols</key><true/>
@@ -133,7 +132,18 @@ You manage certificates and provisioning profiles. Required when you need extens
 </dict></plist>
 ```
 
-Clipz uses **Fastlane Match** for certificate storage. Match keeps encrypted certs in a private git repo (`~/dev/sophie-fastlane-match/`). Profile names follow the Match convention: `match AppStore dev.apresai.clipz macos`.
+**Cert reference.** The generic `"Apple Distribution"` name is the target, valid once exactly one
+"Apple Distribution" identity exists in the keychain. While superseded identities linger, an app may
+pin its cert by SHA-1 (`CODE_SIGN_CERT_SHA1` in `.env`, e.g. eleven9s) to disambiguate — that is
+correct, not a defect.
+
+**Archive style.** Archive Manual too (`CODE_SIGN_STYLE=Manual`, `DEVELOPMENT_TEAM=CNRU7L924E`,
+**no `-allowProvisioningUpdates` on the archive step**). Automatic + `-allowProvisioningUpdates`
+silently mints/modifies profiles at build time, so the embedded profile isn't declared or provable.
+
+No Fastlane / `match` anywhere — all signing is ASC-direct via `xcodebuild` (or `flutter build ipa`
+for Flutter apps) + the ASC API key. See `/release-consistency` for the full model + the once-a-year
+rotation runbook.
 
 ## Build Number Pattern
 
@@ -261,5 +271,6 @@ For macOS apps distributed via Sparkle (auto-update, outside App Store), use Dev
 ```
 /release              # Full release with infrastructure deploy + App Store submission
 /release-testflight   # Quick TestFlight upload only
+/release-consistency  # Audit + standardize signing/tooling/docs across all apps
 /release-xcodecloud   # Tag-triggered Xcode Cloud build
 ```
