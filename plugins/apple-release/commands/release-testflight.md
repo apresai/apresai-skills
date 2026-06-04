@@ -1,173 +1,187 @@
 ---
 name: release-testflight
-description: Quick TestFlight upload - archive and upload app to App Store Connect without infrastructure deployment. Use when user just wants to push a new build to TestFlight.
+description: Quick TestFlight upload - archive and upload app to App Store Connect without infrastructure deployment. Use when user just wants to push a new build to TestFlight. Project-detecting driver over a standardized Makefile interface; signing-agnostic.
 ---
 
 # Release to TestFlight
 
-Build, archive, and upload app to TestFlight (skips infrastructure deployment).
+Build, archive, and upload an app to TestFlight (skips infrastructure deployment).
 
-## Step 1: Validate Requirements
+This skill is a **thin, project-detecting driver over a standardized `make upload` / `make info`
+interface**. It does not prescribe a signing style or a build-number policy — it reads each from the
+project and delegates the mechanics to the project's Makefile. Every apresai App Store app signs
+ASC-direct (no Fastlane); the shipped artifact is signed by the shared distribution cert
+`KZ4VK235YL` (*Apple Distribution: Apres AI LLC*, team `CNRU7L924E`).
 
-Before proceeding, check all requirements. Stop and ask the user to provide any missing values.
+## Step 0: Detect the project type (route correctly)
 
-### 1.1 Check for Makefile
+Not every app is a TestFlight target, and the entrypoint differs per repo. Detect before doing anything.
 
 ```bash
-test -f Makefile && echo "Makefile found" || echo "Makefile NOT found"
+# Non-App-Store (Developer ID / Sparkle) — e.g. codexbar: NOT a TestFlight target.
+# Signs with an upstream Developer ID identity, ships via notarize + appcast, not ASC.
+ls *.xcodeproj >/dev/null 2>&1 && grep -rql "SUFeedURL\|Sparkle" . 2>/dev/null \
+  && ! ls ExportOptions*.plist ios/ExportOptions*.plist >/dev/null 2>&1 \
+  && echo "SPARKLE/Developer-ID app — STOP: use notarytool, not TestFlight"
+
+# Flutter — e.g. sophie: build via the Flutter toolchain, not xcodebuild directly.
+test -f pubspec.yaml && echo "FLUTTER app — use the Flutter upload target (e.g. make mobile)"
 ```
 
-If Makefile is missing, ask:
-> "No Makefile found. This skill requires a Makefile with `upload` and `info` targets. Would you like me to help create one?"
+- **Sparkle / Developer ID app** (no `app-store-connect` ExportOptions): **stop** — it has no
+  TestFlight path. Route to `xcrun notarytool` + appcast, out of scope for this skill.
+- **Flutter app**: the repo wraps `flutter build ipa` + upload behind a Makefile target (e.g.
+  `make mobile`). Use that target wherever the steps below say `make upload`.
 
-### 1.2 Check Makefile Targets
+### Find the upload + info targets (they are not always at the repo root)
 
 ```bash
-grep -q "^upload:" Makefile && echo "upload target found" || echo "upload target NOT found"
-grep -q "^info:" Makefile && echo "info target found" || echo "info target NOT found"
+# Prefer a root target; fall back to an ios/ subdirectory Makefile.
+if grep -qE '^(upload|ios-upload):' Makefile 2>/dev/null; then
+  grep -qE '^upload:'     Makefile && UP="make upload"      || UP="make ios-upload"
+  grep -qE '^info:'       Makefile && INFO="make info"      || INFO="make ios-info"
+elif test -f ios/Makefile && grep -qE '^upload:' ios/Makefile; then
+  UP="make -C ios upload"; INFO="make -C ios info"
+else
+  echo "No upload/ios-upload target found — ask the user which target builds+uploads this app."
+fi
+echo "upload target: $UP   info target: $INFO"
 ```
 
-If any target is missing, inform the user which targets are needed. Some projects split `upload` into `archive-upload` (increment + archive) and `upload-only` (export + upload) — both are valid; the skill works with either pattern.
+Use the detected `$UP` / `$INFO` in every step below. (Standardizing every repo on bare
+`make upload` / `make info` is the goal — until then, detect.)
 
-### 1.3 Check App Store Connect API Key Configuration
+## Step 1: Validate requirements
 
-**Key storage convention**: All ASC API keys live in `~/dev/certs/api-keys/` as `AuthKey_<KEY_ID>.p8`, with symlinks mirrored in `~/private_keys/`. Each project's `.env` (gitignored) defines `ASC_KEY_ID` and `ASC_ISSUER_ID`; the Makefile constructs `ASC_KEY_PATH` from those variables. Keys are never hardcoded in the Makefile.
+### 1.1 App Store Connect API key
+
+**Convention:** ASC keys live in `~/dev/certs/api-keys/AuthKey_<KEY_ID>.p8` (symlinked in
+`~/private_keys/`). Each project's `.env` (gitignored) defines `ASC_KEY_ID` + `ASC_ISSUER_ID`; the
+Makefile constructs `ASC_KEY_PATH`. Never hardcode key IDs.
 
 ```bash
-# The correct source is .env, not the Makefile
 grep -E "^ASC_KEY_ID|^ASC_ISSUER_ID" .env 2>/dev/null
-
-# Verify the Makefile loads .env
-grep -E "include .env|-include .env" Makefile 2>/dev/null
 ```
 
-Required variables (from `.env`):
-- `ASC_KEY_ID` — must be `WT7YRT8J32` for uploads (cloud signing enabled)
-- `ASC_ISSUER_ID` — `69a6de8d-e64d-47e3-e053-5b8c7c11a4d1`
-- `ASC_KEY_PATH` — constructed as `$(HOME)/dev/certs/api-keys/AuthKey_$(ASC_KEY_ID).p8`
-
-**Key `62T8FXA8J7` cannot upload** — it is for API queries only. If the project's `.env` uses this key, the upload will fail with a permissions error.
-
-If any are missing or set to placeholder values, ask the user:
-> "Missing App Store Connect configuration. Your `.env` should define:
-> - `ASC_KEY_ID=WT7YRT8J32` (the key with cloud signing enabled)
-> - `ASC_ISSUER_ID=69a6de8d-e64d-47e3-e053-5b8c7c11a4d1`
-> The key file lives at `~/dev/certs/api-keys/AuthKey_WT7YRT8J32.p8`."
-
-The API key must have at least the **App Manager** role. A Developer-only key fails at the upload or cloud-signing step with a permissions error. Verify under App Store Connect → Users and Access → Keys.
-
-### 1.4 Verify API Key File Exists
+- `ASC_KEY_ID` **must be `WT7YRT8J32`** (cloud-signing-enabled, App Manager role). `62T8FXA8J7` is
+  query-only and **cannot upload**.
+- `ASC_ISSUER_ID` = `69a6de8d-e64d-47e3-e053-5b8c7c11a4d1`.
 
 ```bash
 KEY_ID=$(grep "^ASC_KEY_ID" .env 2>/dev/null | cut -d= -f2 | tr -d ' ')
-KEY_PATH="$HOME/dev/certs/api-keys/AuthKey_${KEY_ID}.p8"
-test -f "$KEY_PATH" && echo "Key file found: $KEY_PATH" || echo "Key file NOT found at $KEY_PATH"
+test -f "$HOME/dev/certs/api-keys/AuthKey_${KEY_ID}.p8" \
+  || test -f "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
+  && echo "Key file OK" || echo "Key file NOT found for $KEY_ID"
 ```
 
-If the key file doesn't exist at `~/dev/certs/api-keys/`, also check `~/private_keys/` (some projects symlink there):
+### 1.2 Signing — stay agnostic; read it, don't assume it
+
+Apps differ, and the export step is what signs the shipped artifact. **Do not assume a signing
+style and do not assert "no profiles needed."** Read the actual style from the project's
+ExportOptions (it may be `ExportOptions.plist`, `ExportOptionsRelease.plist`, or `ios/ExportOptions.plist`):
+
 ```bash
-test -f "$HOME/private_keys/AuthKey_${KEY_ID}.p8" && echo "Found in ~/private_keys/" || echo "Not found"
+for f in ExportOptions.plist ExportOptionsRelease.plist ios/ExportOptions*.plist; do
+  [ -f "$f" ] && echo "$f:" && /usr/libexec/PlistBuddy -c 'Print :signingStyle' "$f" 2>/dev/null \
+    && /usr/libexec/PlistBuddy -c 'Print :provisioningProfiles' "$f" 2>/dev/null
+done
 ```
 
-### 1.5 Check Signing Setup
+The portfolio standard is **manual export + generic `"Apple Distribution"` + provisioning profiles
+referenced by stable Name** (e.g. `dev.apresai.myapp = "MyApp App Store"`). Multi-target apps carry
+one profile per bundle ID (e.g. a Share extension → `"<App> Share App Store"`). If a project still
+has a SHA-1-pinned cert (`CODE_SIGN_CERT_SHA1` in `.env`, e.g. eleven9s), that is valid — it
+disambiguates among multiple keychain identities. If the project exposes `make check-signing`
+(or `make -C ios check-signing`), run it to preflight certs + profiles before archiving.
 
-Projects use one of two signing styles:
-
-**Cloud signing** (automatic, via API key): The Makefile passes `-authenticationKeyPath`, `-authenticationKeyID`, and `-authenticationKeyIssuerID` directly to `xcodebuild -exportArchive`. `ExportOptions.plist` sets `signingStyle = automatic`. No local certificates or provisioning profiles are needed. This is the simpler path — for-the-win and regist use this.
-
-**Manual signing** (local certs + profiles): The Makefile requires `CODE_SIGN_CERT_SHA1` (SHA1 of the "Apple Distribution" cert in your keychain) and provisioning profile names in `.env`. `ExportOptions.plist` sets `signingStyle = manual` with explicit `provisioningProfiles` per bundle ID. eleven9s uses this pattern. Clipz uses a Fastlane Match-managed profile (`match AppStore dev.apresai.clipz macos`).
-
-Check which style the project uses:
-```bash
-grep -E "signingStyle|manual|automatic" ExportOptions.plist 2>/dev/null
-```
-
-For manual signing, run `make check-signing` (if the target exists) to preflight certificates and profiles before archiving.
-
-### 1.6 Check Xcode Version
+### 1.3 Xcode version
 
 ```bash
 xcodebuild -version 2>/dev/null || echo "Xcode CLI tools not installed"
 ```
 
-If not installed, inform the user:
-> "Xcode command line tools required. Install with: `xcode-select --install`"
+Apple requires **Xcode 14+** for all uploads (enforced 2026); **Xcode 26 + iOS 26 SDK** for new App
+Store submissions from April 2026. Warn if below requirement.
 
-Parse the major version from the output. Apple requires Xcode 14 or later for all uploads (enforced 2026). Starting April 2026, new App Store submissions must be built with Xcode 26 and the iOS 26 SDK. Warn the user if their Xcode version does not meet the current requirement.
-
-## Step 2: Check Current Version
-
-Only proceed here after all requirements are validated.
+## Step 2: Check current version
 
 ```bash
-make info
+$INFO   # e.g. make info / make ios-info / make -C ios info
 ```
 
-Note the current version and build number before upload. The build number comes from the `BUILD_NUMBER` file on disk. If it differs from what ASC shows, check ASC before proceeding to avoid a build number conflict.
+Note the current version + build number. The build number comes from the `BUILD_NUMBER` file. If it
+differs from what ASC shows, check ASC first to avoid a build-number conflict.
 
-## Step 3: Build and Upload
+## Step 3: Build and upload
 
 ```bash
-make upload 2>&1 | tee /tmp/upload_output.txt
+$UP 2>&1 | tee /tmp/upload_output.txt   # e.g. make upload / make ios-upload / make mobile
 ```
 
-This command:
-1. Increments build number in `BUILD_NUMBER` and syncs `project.yml`
-2. Runs `xcodegen generate` to refresh the `.xcodeproj`
-3. Creates release archive with `xcodebuild archive`
-4. Verifies archive version via `PlistBuddy` (projects that follow the Clipz pattern)
-5. Runs `xcodebuild -exportArchive` with `ExportOptions.plist` to sign and upload directly to App Store Connect
+**The Makefile owns the mechanics** — increment + `xcodegen generate` + `xcodebuild archive` +
+`xcodebuild -exportArchive` (signing per the project's ExportOptions) + ASC upload. It also owns the
+**build-number / commit policy**: some repos commit the bump *after* a successful upload, some bump
+before archive, some inside the upload target. Do not impose a generic bump/commit narrative — let
+each Makefile do what it does. If a repo splits into `archive-upload` + `upload-only` (or
+`archive-only` + `upload-only`), run them in sequence so a transient upload failure can retry without
+re-archiving.
 
-If the project splits these into `make archive-upload` + `make upload-only`, run them in sequence. The split allows retrying the upload without re-archiving on transient network failures.
-
-**Build number commit**: eleven9s commits the `BUILD_NUMBER` and `project.yml` bump *after* a successful upload (via `make commit-bump`), not before. If the upload fails, run `make reset-bump` to restore the files to HEAD before retrying.
-
-## Step 4: Verify Upload
+## Step 4: Verify upload
 
 ```bash
-grep -E "Upload succeeded|EXPORT SUCCEEDED" /tmp/upload_output.txt
+grep -E "EXPORT SUCCEEDED|Upload succeeded" /tmp/upload_output.txt
 grep -E "ERROR|errors returned by the App Store" /tmp/upload_output.txt
 ```
 
-Look for:
-- `EXPORT SUCCEEDED` in the xcodebuild output
-- Absence of any `ERROR` lines
+Treat the build as uploaded only if `EXPORT SUCCEEDED` is present and no `ERROR` lines appear.
 
-With Xcode 26, `altool` may exit 0 while the upload silently failed (fastlane issue #29743). If the success strings are absent or any error strings appear, treat the upload as failed rather than relying on the exit code. Verify the build appears in App Store Connect → TestFlight within a few minutes as a secondary check.
+**Xcode 26 altool silent-failure:** `altool` may exit 0 while the upload silently failed (fastlane
+issue #29743 — a tracked altool bug report, *not* a Fastlane dependency). Do not trust the exit code
+alone; rely on the success/error strings and confirm the build appears in App Store Connect →
+TestFlight within a few minutes.
 
-**Direct TestFlight link**: If the project's Makefile defines `ASC_APP_ID`, the upload output will print a direct link like `https://appstoreconnect.apple.com/apps/{ASC_APP_ID}/testflight/ios`.
+## Step 5: Report
 
-## Step 5: Report Results
-
-After completion, report:
-- Version and build number uploaded (run `make info` to confirm)
-- Upload success/failure
-- Any build warnings
-- TestFlight link: `https://appstoreconnect.apple.com/apps` (or the direct link if available)
+- Version + build number uploaded (`$INFO` to confirm)
+- Upload success/failure + any warnings
+- TestFlight link: `https://appstoreconnect.apple.com/apps` (or the direct
+  `…/apps/{ASC_APP_ID}/testflight/ios` if the Makefile defines `ASC_APP_ID`)
 
 ## Notes
 
-- TestFlight processing by Apple takes 10-30 minutes after upload
-- Email notification arrives when build is ready for testing
-- Internal testers can install immediately; external testers require a review (usually fast)
+- Apple processes TestFlight builds 10–30 min after upload; email arrives when ready.
+- Internal testers install immediately; external testers need a (usually fast) review.
 
-## Common Failure Modes
+## Common failure modes
 
-**Wrong API key**: Upload fails with a cloud signing or permission-denied error. Confirm `.env` has `ASC_KEY_ID=WT7YRT8J32` — `62T8FXA8J7` cannot upload.
+**Wrong API key** — upload fails with a cloud-signing / permission error. Confirm
+`ASC_KEY_ID=WT7YRT8J32`; `62T8FXA8J7` cannot upload.
 
-**Stale `.xcodeproj`**: Archive picks up old `MARKETING_VERSION` because `xcodegen generate` wasn't run after bumping `project.yml`. The `make archive` target in Clipz runs `make generate` first to guard against this.
+**Stale `.xcodeproj`** — archive picks up an old `MARKETING_VERSION` because `xcodegen generate`
+wasn't run after bumping `project.yml`. Well-formed `archive` targets run `generate` first.
 
-**Provisioning profile expired**: Manual-signing projects fail at export with "No certificate for team". Run `make renew-profile` or `make renew-all-profiles` (eleven9s), then retry.
+**Build number already exists** — ASC rejects "CFBundleVersion already exists." Set `BUILD_NUMBER`
+to one above the highest build in ASC and re-run.
 
-**Build number already exists**: ASC rejects with "CFBundleVersion already exists." Manually set `BUILD_NUMBER` to one above the highest build in ASC and re-run.
+**`EXPORT SUCCEEDED` absent, exit 0** — the Xcode 26 altool silent failure above. Check
+`/tmp/upload_output.txt` for error strings; retry the `upload-only` half if the archive is still
+present, else re-archive + upload.
 
-**`EXPORT SUCCEEDED` absent, exit 0**: Xcode 26 altool silent failure. Check `/tmp/upload_output.txt` for error strings. Retry with `make upload-only` if the archive is still present; otherwise `make archive-upload` + `make upload-only`.
+**Export resolves the wrong / an expired provisioning profile** — happens when two installed
+profiles share the same Name (a stale cert dupe next to the current one). The rotation tooling
+(`renew-profile.sh`) self-cleans to one-profile-per-Name; if you hit this, decode
+`~/Library/MobileDevice/Provisioning Profiles/*` by `:Name` and remove the stale duplicate.
 
-**Extension targets missing profiles**: Multi-extension apps (Share, iMessage, Widget) need one provisioning profile per bundle ID. eleven9s uses `PROVISIONING_PROFILE_NAME`, `PROVISIONING_PROFILE_NAME_SHARE`, and `PROVISIONING_PROFILE_NAME_MESSAGES` in `.env`, all rendered into `ExportOptions.plist` via template substitution.
+**"No certificate for team" at export** — the named profile's cert isn't in the keychain, or the
+profile expired. For projects with rotation tooling (eleven9s: `make -C ios renew-profile` /
+`renew-portfolio-profiles`), re-mint and retry. For others, re-mint the profile via the ASC API.
 
-## Makefile Template
+**Extension targets missing profiles** — multi-target apps (Share, Widget, Watch) need one
+provisioning profile per bundle ID, each referenced by Name in `ExportOptions.plist`.
 
-A minimal working Makefile for a single-target iOS app (based on for-the-win's pattern):
+## Reference: standard Makefile shape (manual signing, by-name profile)
+
+The portfolio standard — manual export, generic `"Apple Distribution"`, profile by stable Name:
 
 ```makefile
 -include .env
@@ -179,78 +193,47 @@ PROJECT       := MyApp.xcodeproj
 BUILD_DIR     := build
 ARCHIVE_PATH  := $(BUILD_DIR)/MyApp.xcarchive
 EXPORT_PATH   := $(BUILD_DIR)/export
-BUILD_NUMBER_FILE := BUILD_NUMBER
 TEAM_ID       := CNRU7L924E
+BUILD         := $(shell cat BUILD_NUMBER 2>/dev/null || echo "0")
+VERSION       := 1.0.$(BUILD)
 
-MAJOR         := 1
-MINOR         := 0
-BUILD         := $(shell cat $(BUILD_NUMBER_FILE) 2>/dev/null || echo "0")
-VERSION       := $(MAJOR).$(MINOR).$(BUILD)
-
-# .env must define ASC_KEY_ID and ASC_ISSUER_ID
+# .env defines ASC_KEY_ID (=WT7YRT8J32) + ASC_ISSUER_ID
 ASC_KEY_ID    ?= WT7YRT8J32
 ASC_ISSUER_ID ?= 69a6de8d-e64d-47e3-e053-5b8c7c11a4d1
 ASC_KEY_PATH  ?= $(HOME)/dev/certs/api-keys/AuthKey_$(ASC_KEY_ID).p8
 
 info:
 	@echo "$(APP_NAME) v$(VERSION) (build $(BUILD))"
-	@echo "  ASC Key ID: $(ASC_KEY_ID)"
-	@if [ -f "$(ASC_KEY_PATH)" ]; then echo "  Key file: OK"; else echo "  Key file: MISSING"; fi
 
 increment-build:
-	@OLD=$$(cat $(BUILD_NUMBER_FILE) 2>/dev/null || echo "0"); NEW=$$((OLD + 1)); \
-	echo $$NEW > $(BUILD_NUMBER_FILE); \
+	@OLD=$$(cat BUILD_NUMBER 2>/dev/null || echo "0"); NEW=$$((OLD + 1)); \
+	echo $$NEW > BUILD_NUMBER; \
 	sed -i '' "s/CURRENT_PROJECT_VERSION: \"[^\"]*\"/CURRENT_PROJECT_VERSION: \"$$NEW\"/g" project.yml; \
-	sed -i '' "s/MARKETING_VERSION: \"[^\"]*\"/MARKETING_VERSION: \"$(MAJOR).$(MINOR).$$NEW\"/g" project.yml; \
-	xcodegen generate > /dev/null; \
-	echo "Build: $$OLD -> $$NEW"
+	xcodegen generate > /dev/null; echo "Build: $$OLD -> $$NEW"
 
+# Manual archive: pin the cert + team explicitly; NO -allowProvisioningUpdates here
+# (it would let xcodebuild silently mint profiles, defeating provability).
 archive: increment-build
 	@rm -rf $(ARCHIVE_PATH) && mkdir -p $(BUILD_DIR)
-	xcodebuild -scheme $(SCHEME) -project $(PROJECT) \
-	    -configuration Release -destination 'generic/platform=iOS' \
-	    -archivePath $(ARCHIVE_PATH) \
-	    -allowProvisioningUpdates \
-	    -authenticationKeyPath $(ASC_KEY_PATH) \
-	    -authenticationKeyID $(ASC_KEY_ID) \
-	    -authenticationKeyIssuerID $(ASC_ISSUER_ID) \
-	    archive
+	xcodebuild -scheme $(SCHEME) -project $(PROJECT) -configuration Release \
+	    -destination 'generic/platform=iOS' -archivePath $(ARCHIVE_PATH) \
+	    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple Distribution" \
+	    DEVELOPMENT_TEAM=$(TEAM_ID) archive
 
 upload: archive
 	@mkdir -p $(EXPORT_PATH)
-	@OUTPUT=$$(xcodebuild -exportArchive \
-	    -archivePath $(ARCHIVE_PATH) \
-	    -exportOptionsPlist ExportOptions.plist \
-	    -exportPath $(EXPORT_PATH) \
+	@OUTPUT=$$(xcodebuild -exportArchive -archivePath $(ARCHIVE_PATH) \
+	    -exportOptionsPlist ExportOptions.plist -exportPath $(EXPORT_PATH) \
 	    -allowProvisioningUpdates \
-	    -authenticationKeyPath $(ASC_KEY_PATH) \
-	    -authenticationKeyID $(ASC_KEY_ID) \
-	    -authenticationKeyIssuerID $(ASC_ISSUER_ID) \
-	    2>&1); \
+	    -authenticationKeyPath $(ASC_KEY_PATH) -authenticationKeyID $(ASC_KEY_ID) \
+	    -authenticationKeyIssuerID $(ASC_ISSUER_ID) 2>&1); \
 	echo "$$OUTPUT" > /tmp/upload_output.txt; \
-	if echo "$$OUTPUT" | grep -q "EXPORT SUCCEEDED"; then \
-	    echo "$$OUTPUT" | tail -10; echo "Upload complete."; \
-	else \
-	    echo "$$OUTPUT"; echo "Upload failed."; exit 1; \
-	fi
+	echo "$$OUTPUT" | grep -q "EXPORT SUCCEEDED" && echo "Upload complete. v$(VERSION)" \
+	    || { echo "$$OUTPUT"; echo "Upload failed."; exit 1; }
 ```
 
-**`ExportOptions.plist` for cloud signing (automatic)**:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>method</key><string>app-store-connect</string>
-    <key>teamID</key><string>CNRU7L924E</string>
-    <key>signingStyle</key><string>automatic</string>
-    <key>uploadSymbols</key><true/>
-    <key>destination</key><string>upload</string>
-</dict>
-</plist>
-```
+`ExportOptions.plist` (commit it — never gitignore the manual config):
 
-**`ExportOptions.plist` for manual signing** (use when you have specific provisioning profiles in the keychain — see eleven9s):
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -270,29 +253,12 @@ upload: archive
 </plist>
 ```
 
-## Fastlane Match for Certificate Storage
+> Annual cert rotation re-mints every named profile onto the new shared cert and self-cleans to
+> one-profile-per-Name — so this `ExportOptions.plist` never changes across rotations (the Name is
+> stable; only the UUID + cert underneath rotate). See `/release-consistency` for the model and the
+> rotation runbook.
 
-Some projects (Clipz) use Fastlane Match to store certificates and provisioning profiles in an encrypted private Git repository (`~/dev/sophie-fastlane-match/`). Match manages the cert lifecycle: it generates, encrypts, and syncs certificates across machines.
+## App Store submission
 
-When a project uses Match, the provisioning profile name in `ExportOptions.plist` follows the Match naming convention:
-```
-match AppStore dev.apresai.clipz macos     # macOS App Store profile
-match Development dev.apresai.clipz macos  # macOS development profile
-match AppStore dev.apresai.myapp           # iOS App Store profile
-```
-
-Most projects in this portfolio use **manual signing without Match** (directly managing `.mobileprovision` files via the ASC API and `make renew-profile`). Match is only relevant if the project explicitly references it in `project.yml` or `ExportOptions.plist`.
-
-## macOS Notarization (Non-App-Store Distribution)
-
-For macOS apps distributed **outside** the App Store (Developer ID signing), notarization uses `xcrun notarytool`, not altool. Per Apple TN3147, `altool --notarize-app` was retired in November 2023.
-
-```bash
-xcrun notarytool submit MyApp.zip \
-    --key ~/dev/certs/api-keys/AuthKey_WT7YRT8J32.p8 \
-    --key-id WT7YRT8J32 \
-    --issuer 69a6de8d-e64d-47e3-e053-5b8c7c11a4d1 \
-    --wait
-```
-
-This is **not** needed for App Store uploads — `xcodebuild -exportArchive` with `method = app-store-connect` handles everything. The Sparkle auto-update pattern (used by codexbar) is an entirely separate distribution path.
+This skill stops at TestFlight. For full submission (review), use `/release` (the `reviewSubmissions`
+three-step API flow with polling + "What's New").
