@@ -1,7 +1,7 @@
 {
   "name": "chad-review",
-  "version": "1.5.1",
-  "description": "8-pass autonomous pre-commit code review skill. Runs structural, behavioral, spec-drift, test, test-coverage, observability, documentation, and adversarial analysis on uncommitted working-tree changes (or the last commit if clean). Parallel sub-agent execution, read-only, never edits or commits.",
+  "version": "1.6.0",
+  "description": "9-pass autonomous pre-commit code review skill. Runs structural, behavioral, spec-drift, test, test-coverage, observability, documentation, adversarial, and dependency-freshness analysis on uncommitted working-tree changes (or the last commit if clean). Parallel sub-agent execution, read-only, never edits or commits.",
   "author": {
     "name": "Chad Neal",
     "email": "chad.neal@gmail.com"

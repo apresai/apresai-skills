@@ -2,7 +2,7 @@
 # chad-review-route.sh — pick per-pass subagents based on what's in the diff.
 #
 # WHY THIS EXISTS
-# chad-review's 8-pass STRUCTURE is language-agnostic, but the right reviewer
+# chad-review's 9-pass STRUCTURE is language-agnostic, but the right reviewer
 # for each pass depends on the codebase under review. Go cmd Lambdas review
 # well with `feature-dev:code-reviewer`; CDK TypeScript wants `cloud-architect`
 # for behavioral + adversarial passes; Next.js React wants `frontend-developer`;
@@ -294,5 +294,7 @@ echo "  - Context7 hints are framework names — the agent should resolve to a"
 echo "    library ID and fetch docs at audit start, then reason against current"
 echo "    semantics (not pre-training knowledge that may be stale)."
 echo "  - For mixed-language diffs, spawn one set of agents per language block"
-echo "    above. The 8-pass structure is per-language; the parent merges"
+echo "    above. Passes 1, 2, 3, 5, 6, 7 are per-language; the parent merges"
 echo "    findings into a single Final Report."
+echo "  - Pass 9 FRESHNESS is whole-project: launch it once per review, not"
+echo "    per language block, and not from the routing above."
