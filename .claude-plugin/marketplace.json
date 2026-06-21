@@ -67,6 +67,16 @@
       },
       "source": "./plugins/chad-review",
       "category": "code-quality"
+    },
+    {
+      "name": "codex-br",
+      "description": "Run OpenAI Codex on Amazon Bedrock (model openai.gpt-5.5, provider amazon-bedrock) instead of the default ChatGPT backend, via a `br` Codex profile. Adds /codex-br task (delegate a coding/diagnosis/research task), /codex-br review (built-in reviewer), and /codex-br adversarial-review (steerable challenge review). Defaults to maximum reasoning effort (xhigh).",
+      "version": "1.6.0",
+      "author": {
+        "name": "Chad Neal"
+      },
+      "source": "./plugins/codex-br",
+      "category": "ai-tooling"
     }
   ]
 }
