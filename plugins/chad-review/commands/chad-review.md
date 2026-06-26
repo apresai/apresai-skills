@@ -502,11 +502,19 @@ Recommend **UPGRADE** when ANY hold:
 
 ### Severity mapping for this pass
 
+Severity reflects RISK; the **disposition** (do-now / schedule / hold / backlog) is the more important output. Outdated frameworks are a finding to ACTION, not debt to launder into a backlog nobody reads — keeping dependencies current is continuous maintenance, and every safe upgrade you defer compounds into a riskier big-bang migration later. That is the whole reason this pass exists.
+
 - **CRITICAL**: current version has a known CVE, or the runtime or framework major is end-of-life or unsupported. Recommendation: UPGRADE NOW. Overrides any HOLD.
 - **HIGH**: a core framework or runtime is one or more majors behind AND the current major is in its support sunset, window closing, even without a CVE yet.
-- **MEDIUM**: exactly one major behind, latest is mature, no security or EOL pressure. Upgrade when convenient (backlog).
-- **LOW**: only minor or patch behind.
-- **HOLD** is a recommendation, not a severity. Non-blocking, "too early to upgrade". Attach a revisit signal ("after x.2" or "+90d").
+- **MEDIUM**: a core framework or important direct dependency is meaningfully behind (a major behind, OR several minors, OR years stale) and the upgrade is SAFE — the target is mature and there is no breaking HOLD. This is the bread-and-butter finding of the pass; it is **do-now**, not "someday".
+- **LOW**: a single patch behind with no accumulation, on a non-core dependency. Reserve LOW for genuinely trivial lag — a *stack* of "only a minor/patch behind" deps is NOT trivial in aggregate; surface the batch.
+- **HOLD** is a recommendation, not a severity. Non-blocking, "too early to upgrade" (a brand-new breaking major). Attach a revisit signal ("after x.2" or "+90d").
+
+**Disposition — decide one per flagged dependency (this is the point of the pass):**
+- **UPGRADE NOW (safe)** — the DEFAULT for any HIGH/MEDIUM whose target is mature and not under a breaking HOLD (most stale frameworks land here). Do **not** file it to the backlog. Surface it prominently, recommend doing it in this change or an immediate fast-follow, and **offer to perform it** (bump → build → run the affected test/integration suite). If you catch yourself sending a mature, safe framework upgrade to the backlog, re-classify it as UPGRADE NOW.
+- **SCHEDULE** — a CRITICAL/EOL the diff did not touch and can't be done safely inside this commit → a required, dated follow-up, never silent backlog.
+- **HOLD** — a brand-new breaking major; the only disposition that genuinely means "wait", with a revisit signal.
+- **BACKLOG** — reserved for LOW trivial lag only.
 
 ### Report format
 
@@ -515,14 +523,17 @@ One row per direct dependency that is behind or flagged (current-and-clean deps 
 | Dependency | Current | Latest | Δ behind | Maturity / Released | Security | Recommendation |
 |---|---|---|---|---|---|---|
 | next | 14.2.30 | 15.0.1 | 1 major | shipped ~3 wks ago, 1 patch, large App Router migration | clean | HOLD (too early; revisit after 15.2 or +90d) |
-| react | 18.3.1 | 19.1.0 | 1 major | mature: ~9 mo ago, at 19.1.x, modest migration | clean | UPGRADE (overdue), MEDIUM |
+| react | 18.3.1 | 19.1.0 | 1 major | mature: ~9 mo ago, at 19.1.x, modest migration | clean | UPGRADE NOW (safe), MEDIUM |
+| mark3labs/mcp-go | v0.46.0 | v0.55.1 | 9 pre-1.0 minors | mature line, no migration guide needed | clean | UPGRADE NOW (safe), MEDIUM — bump + re-run the integration suite |
+| typescript (dev) | 4.9.3 | 5.9.3 (5.x) | 1 major behind; 6.0 exists but is days old | 5.x mature; 6.0 brand-new = HOLD | clean | UPGRADE NOW (safe) to 5.9.3; HOLD 6.0 |
 | golang.org/x/net | v0.21.0 | v0.38.0 | several minors | n/a | CVE reachable per govulncheck | UPGRADE NOW, CRITICAL (overrides hold) |
 | some_dart_pkg | 0.8.1 | 0.9.0 | 0.x minor = major-equiv | shipped ~2 wks ago, 0 patches | clean | HOLD (0.x churn, brand-new) |
 | node (runtime) | 18.x | 22.x LTS | runtime, 18 EOL 2025-04-30 | n/a | EOL | UPGRADE NOW, CRITICAL (EOL) |
 
-Then list CRITICAL and HIGH findings as severity lines, for example:
+Then list CRITICAL and HIGH findings AND every **UPGRADE NOW (safe)** finding as severity lines (safe upgrades are the headline value of this pass — do not bury them), for example:
 - `FRESHNESS [security]: golang.org/x/net v0.21.0 is affected by a known CVE (reachable per govulncheck); upgrade to v0.38.0.`
 - `FRESHNESS [eol]: Node 18 runtime reached end-of-life 2025-04-30; upgrade to 22 LTS.`
+- `FRESHNESS [upgrade-now]: mark3labs/mcp-go is 9 pre-1.0 minors behind (v0.46.0 → v0.55.1), target is mature and clean; bump now and re-run the MCP integration suite. Safe, recommended this change.`
 - `FRESHNESS [hold]: next 15.0.1 shipped ~3 weeks ago with a large migration surface; hold at 14.2.x, revisit after 15.2.`
 
 Tag any dependency the current diff touched with `(diff-touched)`.
@@ -622,17 +633,19 @@ After all 9 passes, output a single consolidated report:
 - **CRITICAL (CVE or EOL) on a dependency the diff touched or introduced → NO-GO.** The change is adjacent to a known-vulnerable or end-of-life dependency; fix before committing.
 - **CRITICAL (CVE or EOL) that is pre-existing and NOT touched by the diff → CONDITIONAL**, with a prominent callout: the current change is safe to commit, but the project carries a CRITICAL dependency issue that must be scheduled now.
 - **HIGH (sunsetting major) → CONDITIONAL** if urgent, otherwise advisory with a recommendation to schedule.
-- **MEDIUM / LOW staleness, and any HOLD → advisory only, never blocks.** These appear in the report and feed the BACKLOG; a GO stays a GO.
+- **MEDIUM safe-upgrade findings (UPGRADE NOW) → never silently backlogged.** A GO stays a GO (a safe upgrade rarely needs to block a commit), but the report MUST surface these prominently and the post-report Fix Prompt MUST list them as recommended actions with a verify step — and you should OFFER to perform them in this change or an immediate fast-follow. Defaulting a mature framework upgrade to the backlog is the failure mode this pass exists to prevent.
+- **HOLD, and genuinely-trivial single-patch LOW lag → advisory only, never blocks.** These appear in the report; only these feed the BACKLOG.
 
 ## After the Report — Fix Prompt
 
-If the verdict is NO-GO or CONDITIONAL, offer to generate a **fix prompt** the user can use to kick off a planning session. The fix prompt must:
+If the verdict is NO-GO or CONDITIONAL — **or** if Pass 9 produced any **UPGRADE NOW (safe)** framework/dependency findings even on a GO — offer to generate a **fix prompt** the user can use to kick off a planning session. The fix prompt must:
 
 1. **List every finding that needs action** — include the pass, severity, file path, and line numbers.
 2. **Describe what each fix should accomplish** — not the implementation, but the outcome (e.g., "ghost.go should use Eastern time for the race date, matching how live races work").
 3. **Reference existing patterns** — point to code that already does the right thing in the codebase.
 4. **Separate required fixes from optional improvements** — CRITICAL and HIGH are required, MEDIUM and LOW are optional. One exception: a Pass 9 FRESHNESS CRITICAL that the diff did not touch (a pre-existing CVE or end-of-life runtime) is a required follow-up to schedule now, not a blocker for this specific commit. List it under required fixes but label it "schedule now, does not block this commit", consistent with the CONDITIONAL verdict rule.
-5. **End with a verification step** — "After fixing, run `/chad-review` again to confirm all issues are resolved."
+5. **Add a "Recommended — safe to do now" section for Pass 9 UPGRADE NOW (safe) findings** — every mature, non-breaking framework/dependency upgrade gets a line with its concrete bump (`current → target`) and a verify step (the build plus the test/integration suite that exercises it). These are not commit blockers, but they are the headline value of the freshness pass, so they get their own heading — never folded into "optional polish" and never dropped to the backlog. Explicitly **offer to perform them now** (in this change or an immediate fast-follow) rather than just listing them. Keep HOLD items out of this section (they carry a revisit signal instead).
+6. **End with a verification step** — "After fixing, run `/chad-review` again to confirm all issues are resolved."
 
 Present the prompt in a copyable code block, then ask the user:
 
