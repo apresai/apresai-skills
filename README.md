@@ -10,13 +10,14 @@ Production-ready Claude Code skills, mined from real production projects.
 
 After Claude Code reloads, the skills below are available via slash commands.
 
-## Plugins (6)
+## Plugins (7)
 
 | Plugin | Slash commands | What it does |
 |---|---|---|
 | **[apple-release](./plugins/apple-release/)** | `/release` · `/release-testflight` · `/release-xcodecloud` · `/app-store-audit` | iOS/macOS release automation to TestFlight + App Store Connect, plus a pre-submission audit against the **full saved App Store Review Guidelines** (1,832 lines, fetched from `developer.apple.com`). Audit detects empty usage descriptions, Privacy Manifest gaps, non-StoreKit payments in digital-content apps, web-view-only apps, ATS exceptions, and more — every finding cites the exact guideline ID with verbatim rule text. |
 | **[bubbletea-design](./plugins/bubbletea-design/)** | (skill auto-triggers) | Build beautiful Go TUIs with **Bubble Tea v2 / Bubbles v2 / Lip Gloss v2**. Architecture patterns, component catalog, styling recipes, async/streaming patterns, v1→v2 migration map, 33 gotchas, 13 patterns. Includes real-world recipes mined from production CLIs. |
 | **[chad-review](./plugins/chad-review/)** | `/chad-review` | 9-pass autonomous pre-commit code review — structural, behavioral, spec-drift, test, test-coverage, observability, documentation, adversarial, dependency-freshness. Project-agnostic (detects OpenAPI / codegen / route-parity conventions, marks sub-checks N/A when absent). Diff-shape aware: docs-only / config-only / deps-only / tiny diffs skip the full sub-agent fan-out. Sonnet/opus model tiering. Cross-language: Go, TypeScript, Swift, Python. ~2-minute target on a standard diff, well under a minute on small shapes. |
+| **[codex-br](./plugins/codex-br/)** | `/codex-br task` · `/codex-br review` · `/codex-br adversarial-review` | Run **OpenAI Codex on Amazon Bedrock** (`openai.gpt-5.5`, provider `amazon-bedrock`) instead of the default ChatGPT backend, via a `br` Codex profile. Delegate tasks, run the built-in reviewer, or run a steerable adversarial challenge review — all at max reasoning effort (`xhigh`), output returned verbatim. The Bedrock twin of OpenAI's `codex:*` plugin; includes one-time setup for the profile, the `~/.codex/.env` token pin, and the `codex-br` shell alias. |
 | **[go-lambda](./plugins/go-lambda/)** | `/go-lambda-builder` | Go on AWS Lambda done right: `provided.al2023` + ARM64/Graviton2 + AWS SDK v2. Includes production patterns from 8+ real Lambda projects: bounded-timeout `LoadDefaultConfig`, STS session policies via `json.Marshal`, `TestSchemaDrift` reflection, ULID over UUID v4, OpenAPI-first via `oapi-codegen`, single-table DynamoDB with typed structs. |
 | **[image-encoding](./plugins/image-encoding/)** | `/image-encoding` | Modern web image encoding with **AVIF** (primary, ~95% browser support) and **WebP** (fallback) via the `<picture>` cascade. Covers `cwebp` / `dwebp` / `avifenc` CLIs with current defaults, JPEG XL status, Next.js Image integration. |
 | **[nextjs-opennext](./plugins/nextjs-opennext/)** | `/nextjs-deploy` | Next.js on AWS via **OpenNext v4 + CDK**. Includes production-mined patterns: `CachePolicyId` override (`4135ea2d-…`) required or CloudFront caches SSR forever, `WARM_PARAMS` env shape, Server-Components-only auth (no middleware / no Lambda@Edge), `__Secure-` vs `__Host-` cookie prefix behavior, cost-tag schema, NextAuth.js v5 RBAC, ISR DynamoDB GSI naming. |
@@ -34,7 +35,7 @@ plugins/<name>/
 ├── .claude-plugin/plugin.json   # plugin manifest
 ├── README.md                     # human-facing overview
 ├── commands/<name>.md            # slash command(s) + skill content
-├── skills/<name>/                # multi-file skill (bubbletea-design only)
+├── skills/<name>/                # multi-file skill (e.g. bubbletea-design, codex-br)
 └── resources/                    # static assets (apple-release ships the
                                   # full App Store Review Guidelines here)
 ```
