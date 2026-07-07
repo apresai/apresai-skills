@@ -112,6 +112,27 @@ $INFO   # e.g. make info / make ios-info / make -C ios info
 Note the current version + build number. The build number comes from the `BUILD_NUMBER` file. If it
 differs from what ASC shows, check ASC first to avoid a build-number conflict.
 
+**No `$INFO` target?** Read the build number directly from the project instead of assuming: for
+xcodegen projects, `grep CURRENT_PROJECT_VERSION project.yml`; otherwise
+`grep -m1 CURRENT_PROJECT_VERSION <project>.xcodeproj/project.pbxproj`. Always verify against the
+actual project config, never against memory of the last release.
+
+## Step 2.5: Pre-upload gates
+
+Run these before any archive/upload; they exist to prevent stale-build-number uploads and
+accidental churn:
+
+1. **Stale-build hygiene** — if the previous archive for this project failed or behaved oddly,
+   clear derived data first: `rm -rf ~/Library/Developer/Xcode/DerivedData/<project>*`. Skip when
+   the last build was clean (a full rebuild costs minutes).
+2. **Confirmation gate** — show the user the app, version, and current build number, and get an
+   explicit yes before running the upload. If the Makefile bumps the build number inside the
+   upload target itself (see Step 3), say so: "current build N, upload will carry N+1". Never
+   proceed on inference.
+3. **Nth-upload pushback** — if this is the 2nd+ TestFlight upload this session, push back:
+   "This is upload #N this session. Are all changes tested? Should we batch more fixes first?"
+   Proceed only if the user confirms.
+
 ## Step 3: Build and upload
 
 ```bash
