@@ -289,7 +289,8 @@ fi
 
 echo "==========================================="
 echo "Notes:"
-echo "  - All sub-agents launched with model: \"opus\" per chad-review policy."
+echo "  - Model tiering per the chad-review Execution Strategy: model: \"sonnet\" for"
+echo "    Passes 1/3/5/6/7/9, model: \"opus\" for Pass 2 (BEHAVIORAL). Never haiku."
 echo "  - Context7 hints are framework names — the agent should resolve to a"
 echo "    library ID and fetch docs at audit start, then reason against current"
 echo "    semantics (not pre-training knowledge that may be stale)."

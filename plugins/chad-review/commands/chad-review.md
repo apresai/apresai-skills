@@ -1,13 +1,18 @@
 ---
 name: chad-review
 description: 9-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs structural, behavioral, spec-drift, test, test-coverage, observability, documentation, adversarial, and dependency-freshness analysis.
+model: opus
 ---
 
 # Chad Review — 9-Pass Code Review
 
 Autonomous review of uncommitted working-tree changes — or the last commit if the tree is clean. Read-only except for running tests and type regeneration. Never edit source files, never commit.
 
+The `model: opus` frontmatter pins the review's parent turn (pre-flight, Pass 4, Pass 8, report assembly) to Opus regardless of the session model: a review does not need a premium-tier session model, and per-pass sub-agents carry their own explicit `model` per the tiering in §"Execution Strategy". To force a premium-model review of a high-stakes change, say so explicitly and the parent model can be overridden for that run.
+
 This skill is project-agnostic. It detects the language and framework of the changes under review and adapts. For project-specific spec/contract checks, it relies on conventions (OpenAPI spec at `api.yaml` or `openapi.yaml`, generated type artifacts at conventional paths, route-parity tests if they exist). When a convention doesn't match the current project, the corresponding sub-check is reported as "N/A — project convention not detected" rather than failing.
+
+Every `resources/...` reference in this document resolves relative to the skill/plugin root, NOT the project under review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`. Read them from there.
 
 ## Pre-flight
 
@@ -25,7 +30,25 @@ This skill is project-agnostic. It detects the language and framework of the cha
    - `Chad Review — reviewing working tree (2 staged, 3 unstaged, 1 untracked)`
    - `Chad Review — reviewing last commit a1b2c3d "Fix credit refund race"`
 4. The captured diff is the input for Passes 1 through 8. The changed files list drives Pass 4 test selection and Pass 5 coverage selection. Pass 9 (FRESHNESS) is whole-project: it audits the project's dependencies regardless of the diff, and reads the changed files list only to prioritize and tag deps the change touched.
-5. **Route per-pass agents by language family.** Run the bundled
+5. **Classify the diff shape** from the changed-files list. Ambiguity always falls to `standard`:
+   - `docs-only`: every file matches `*.md`, `*.txt`, `docs/**`, LICENSE, or images. Exceptions that force `standard`: `CLAUDE.md`, any `*/SKILL.md`, anything under `.claude/`, a `prompts/` dir, or a plugin's `commands/`, `agents/`, or `skills/` dir (in this ecosystem those are executable behavior, not prose).
+   - `config-only`: only `.github/**`, `.gitignore`, `.editorconfig`, or linter configs. Not dependency manifests, not IaC.
+   - `deps-only`: only dependency manifests/lockfiles (`go.mod`/`go.sum`, `package.json` + lockfile, `pubspec.*`, `Package.swift`/`Package.resolved`, `Cargo.*`, `pyproject.toml`/`requirements*.txt`).
+   - `tiny`: at most 2 files AND at most 10 changed lines of production code.
+   - `standard`: everything else.
+
+   Per-shape pass matrix. Every one of the 9 passes still appears as a heading in the Final Report; non-`standard` shapes replace the sub-agent fan-out with the listed treatment:
+
+   | Shape | Sub-agents | Treatment |
+   |---|---|---|
+   | docs-only | 0-1 | Passes 1, 2, 4, 5, 6: report the literal line "N/A — not applicable to this diff shape (docs-only)". Pass 3: only 3f, and only if a data-model doc changed. Pass 7 runs INLINE in the parent (the doc change itself is the review subject: accuracy vs code, staleness). Pass 8: brief inline probe (secrets/PII/wrong commands in the new text). Pass 9: cache path (step 0). |
+   | config-only | 0-1 | Passes 2 and 8 run inline in the parent (CI/workflow changes are behavior, e.g. `pull_request_target` foot-guns). 1, 3, 4, 5: N/A. 6, 7: inline quick checks. 9: cache path. |
+   | deps-only | 1 | Pass 9 runs FULLY FRESH as a sub-agent (this is the shape it exists for), every dep tagged `(diff-touched)`. Pass 4 runs in the parent (bumps break tests). 1, 2, 3, 5, 6, 7: N/A or one-line inline notes. |
+   | tiny | 0-1 | All 9 dimensions still evaluated, but Passes 1, 2, 3, 5, 6, 7 run INLINE in the parent turn instead of as sub-agents (a 10-line diff does not justify 7 agent bootstraps). Pass 9: cache path. |
+   | standard | full fan-out | Phase A/B/C strategy below, with model tiering and the freshness cache applied. |
+
+   Print `Diff shape: <shape>` in the report header. When the shape is not `standard`, add: "rerun with `/chad-review --full` to force the complete fan-out". `--full` (or the user asking for a full review) skips classification and treats the diff as `standard`.
+6. **Route per-pass agents by language family.** Run the bundled
    `chad-review-route.sh` script to detect which language families
    appear in the changed-files list and print recommended per-pass
    `subagent_type` + Context7 hints:
@@ -77,42 +100,7 @@ Goal: Every removed symbol has zero remaining references in the codebase.
    ```
 4. If zero issues found, report "STRUCTURAL: Clean — no dangling references."
 
-### Language-specific grep patterns
-
-Use the patterns below to construct the grep command for each removed symbol. Restrict file extensions with `--include` to reduce noise and false positives.
-
-**Go** — different symbol kinds warrant different patterns:
-- Function or method removed: `grep -rn "SymbolName" . --include="*.go"` — matches calls, type assertions, and func values
-- Type or struct removed: `grep -rn "\bSymbolName\b" . --include="*.go"` — word-boundary match avoids partial hits on `SymbolNameExtended`
-- Interface removed: also check for `var _ SymbolName =` compile-time interface guards
-- Constant or variable removed: `grep -rn "SymbolName" . --include="*.go"` — also check `iota` blocks for enum holes
-- Unexported symbol (lowercase): scope the search to the same package directory only; no need to scan the whole repo
-
-**TypeScript / JavaScript** — export style determines where references live:
-- Named export removed (`export function Foo`, `export const Foo`, `export type Foo`): `grep -rn "Foo" . --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx"`; also check barrel files (`index.ts`) that re-export it
-- Default export removed: search for `import Foo from`, `import { default as Foo }`, and the file path in dynamic `import()` expressions
-- Type-only import removed (`import type { Foo }`): grep in `.ts` and `.tsx` only; these can't appear in `.js` at runtime but can still break build
-
-**Swift** — visibility level changes the search scope:
-- `public` or `open` symbol removed: search the entire workspace including consuming targets: `grep -rn "SymbolName" . --include="*.swift"`
-- `internal` symbol removed: search only files in the same module/target directory
-- Protocol removed: also search for conformances (`extension X: RemovedProtocol`) and `any RemovedProtocol` / `some RemovedProtocol` usage
-
-**Python**:
-- Function or class removed: `grep -rn "SymbolName" . --include="*.py"` — also check `from module import SymbolName` forms
-- `__all__` entries: if the file defines `__all__`, check it still exports the right names and downstream `from module import *` consumers aren't silently broken
-
-### When to use a language server instead of grep
-
-Grep produces false positives (string literals, comments, unrelated symbols that share a name). Escalate to a language server when:
-- The symbol name is short or generic (e.g., `Get`, `Handler`, `Config`, `Error`) where grep returns too many hits to triage manually
-- The change involves method renaming on an interface with multiple implementations — `gopls references` or `tsserver findAllReferences` gives precise call sites
-- A TypeScript type is removed and you need to confirm no inferred usages remain (TypeScript's structural typing means grep misses widened uses)
-
-Practical commands:
-- Go: `gopls references -format=json <file>:<line>:<col>` (requires `gopls` in PATH)
-- TypeScript: `npx tsgo --findAllReferences` or let `npx tsc --noEmit` surface the error (fastest for CI)
-- Swift: `sourcekit-lsp` via `xcrun sourcekit-lsp` — prefer `xcodebuild build` to surface missing-symbol errors directly
+> Language-specific grep patterns and language-server escalation guidance: `resources/pass-reference.md` § Pass 1. Paste only the sections for the detected language families into this pass's sub-agent prompt.
 
 ## Pass 2 — BEHAVIORAL
 
@@ -169,40 +157,14 @@ Goal: Every API-visible change in the diff under review is reflected in the proj
 
 ### 3d. Generated Type Freshness
 
-1. Look for type-generation scripts in the project using the language-specific detection patterns below.
+1. Look for type-generation scripts in the project using the language-specific detection patterns in `pass-reference.md` § Pass 3.
 2. If found, run the relevant target/script.
 3. Run `git diff` on the generated artifact paths (look for files matching `*.generated.{ts,go,swift,kt}`, `*_gen.*`, `generated/`, `**/types/api.*`).
 4. If any generated file has uncommitted changes after regeneration → types are stale.
 5. Report: `SPEC DRIFT [types]: <path>/api.generated.ts is stale — regeneration produced changes` or "Generated types are fresh."
-6. If no codegen is detected by any pattern below, mark "3d: N/A — no codegen detected."
+6. If no codegen is detected by any pattern in that section, mark "3d: N/A — no codegen detected."
 
-#### Codegen detection by language/tool
-
-**Go — oapi-codegen:**
-- Config file: look for `oapi-codegen.yaml`, `oapi-codegen.yml`, or any `.yaml` containing `package:` and `generate:` keys at top level (oapi-codegen v2 config format)
-- Also check: `//go:generate oapi-codegen` directives in any `.go` file (`grep -rn "go:generate.*oapi-codegen" . --include="*.go"`)
-- Makefile targets: `grep -n "oapi-codegen\|generate-types\|gen-types" Makefile`
-- Output paths: typically `internal/api/*.gen.go`, `pkg/api/*.gen.go`, or wherever `output` is set in the config
-- Run command: `go generate ./...` (respects `//go:generate` directives) or `make <target>`
-
-**TypeScript — openapi-typescript / hey-api:**
-- `package.json` scripts: look for keys matching `openapi-ts`, `openapi-typescript`, `generate`, `codegen`, `gen:types` — `grep -A1 '"scripts"' package.json | grep -E "openapi|codegen|gen"` or parse with `jq '.scripts | to_entries[] | select(.value | test("openapi|codegen|openapi-ts"))' package.json`
-- Config file: `openapi-ts.config.ts`, `openapi-ts.config.js`, or `hey-api` config block in `package.json`
-- Run command: `npm run generate` / `pnpm openapi-ts` / `npx openapi-typescript openapi.yaml -o src/types/api.d.ts`
-- Output paths: typically `src/types/api.d.ts`, `src/lib/api.ts`, `generated/`
-
-**Swift — swift-openapi-generator:**
-- Plugin presence: check `Package.swift` for `.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")`
-- Config file: `openapi-generator-config.yaml` in the target's source directory (required by the plugin — its absence means the plugin won't run)
-- Input spec: `openapi.yaml` co-located with the config file in the same target directory
-- Generated output: artifacts are produced at build time into `.build/` and are not committed — so "freshness" here means checking that `openapi.yaml` and `openapi-generator-config.yaml` are in sync with any handwritten types that duplicate generated ones
-- Run command: `swift build` (plugin runs automatically); no separate generation step needed
-
-**Python — Pydantic model/spec sync:**
-- No standard auto-generation tooling comparable to oapi-codegen; Pydantic models are usually written by hand and must be kept in sync with the OpenAPI spec manually
-- Detection: look for `generate_openapi_schema`, `app.openapi()`, or `schema_json()` calls that export the spec from models — if found, the spec is derived from models (models are the source of truth, not the other way around)
-- For FastAPI projects: the generated spec at `/openapi.json` reflects live models; drift is detected by running `pytest` and checking the spec endpoint, not by a separate codegen step
-- If a project uses `datamodel-code-generator` (generates Pydantic models from spec): `grep -rn "datamodel-codegen" Makefile package.json scripts/ 2>/dev/null`
+> Codegen detection patterns by language/tool: `resources/pass-reference.md` § Pass 3.
 
 ### 3e. Route Parity
 
@@ -237,34 +199,11 @@ Goal: Run only the tests that cover modified files. Propose fixes for failures b
    - Python: `test_*.py` or `*_test.py` in the same or `tests/` directory
    - Swift: test targets that import the modified module
    - Rust: `#[cfg(test)]` blocks in the same file, or `tests/` integration tests
-2. Run only those tests using the project's test runner. Use the scoping commands below to avoid running the entire suite:
+2. Run only those tests using the project's test runner. Use the per-language scoping commands in `pass-reference.md` § Pass 4 to avoid running the entire suite:
 
-**Go — package-level scoping:**
-- Run the package(s) that contain modified files: `go test ./internal/mypackage/... -count=1`
-- To scope further to specific tests by name: `go test ./internal/mypackage/... -run TestFunctionName -count=1`
-- `go list ./...` lists all packages; cross-reference against the changed file paths to identify affected packages
-- The `-count=1` flag disables the test cache, ensuring you get a fresh run even if inputs haven't changed on disk
-- For table-driven tests, `-run TestName/SubtestName` targets a specific `t.Run` case (slashes separate parent and sub-test names)
+> Test-scoping commands per language: `resources/pass-reference.md` § Pass 4. This pass runs in the parent: Read that section at execution time.
 
-**TypeScript — related-file targeting:**
-- Vitest (preferred): `npx vitest related --run <changed-source-file1> <changed-source-file2>` — Vitest traces the import graph and runs only tests that transitively import the changed files
-- Vitest with staged changes: `npx vitest --changed --run` (defaults to uncommitted changes) or `npx vitest --changed HEAD~1 --run` for the last commit
-- lint-staged integration pattern: `vitest related --run` in `lint-staged` config covers staged files automatically
-- Jest fallback: `npx jest --findRelatedTests <file1> <file2> --passWithNoTests`
-- Single test file: `npx vitest run path/to/component.test.ts`
 
-**Swift — target and class scoping:**
-- Run a specific test class: `xcodebuild test -scheme <Scheme> -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:<TestTarget>/<TestClass>`
-- Run a specific test method: `xcodebuild test -scheme <Scheme> -destination '...' -only-testing:<TestTarget>/<TestClass>/<testMethodName>`
-- For Swift Package Manager projects (no Xcode scheme): `swift test --filter <TestClassName>` or `swift test --filter <TestClassName>/<methodName>`
-- Note: `-only-testing:` accepts a slash-separated path; the test target name comes from the scheme's test action, not the module name
-
-**Python — file and mark-based scoping:**
-- Single file: `pytest path/to/test_file.py -v`
-- Single test function: `pytest path/to/test_file.py::test_function_name -v`
-- Single test class method: `pytest path/to/test_file.py::TestClass::test_method -v`
-- By mark: `pytest -m "unit" -v` (requires marks defined in `pytest.ini` or `pyproject.toml`)
-- Related imports (approximate): `pytest --co -q` to collect without running, then inspect
 
 3. If **all tests pass**: report "TEST: All affected tests pass."
 4. If **any test fails**:
@@ -279,8 +218,8 @@ Goal: Every new or modified behavior has test coverage. Not just "tests pass" (P
 
 1. For each file in the changed files list, locate the corresponding test file(s) using the conventions in Pass 4.
 2. For each new or modified exported/public function, handler, or method, check whether any test references it by name.
-3. For each new code branch, error case, feature flag, or conditional path, check whether a test exercises it — see the language-specific patterns below for what "covered" looks like in each language.
-4. For bug fixes: verify a **regression test** exists — a test that would have failed before the fix and passes after.
+3. For each new code branch, error case, feature flag, or conditional path, check whether a test exercises it — see `pass-reference.md` § Pass 5 for what "covered" looks like in each language.
+4. For bug fixes: verify a **regression test** exists — a test that would have failed before the fix and passes after. For ALL new or modified tests, confirm the test can fail: the assertion depends on the changed code path, is not tautological, and the subject is not mocked away. A test that cannot fail counts as missing coverage.
 5. Flag missing coverage:
    - **CRITICAL**: New public API endpoint, HTTP handler, Lambda entry point, or cron entry point with zero tests
    - **HIGH**: New business-logic branch (new error case, new conditional, new feature flag) with no test
@@ -291,30 +230,7 @@ Goal: Every new or modified behavior has test coverage. Not just "tests pass" (P
 
 If zero issues, report "TEST COVERAGE: Clean — all changes have corresponding tests."
 
-### What counts as "covered" per language
-
-**Go:**
-- The idiomatic standard is **table-driven tests**: a slice of structs (usually named `tests` or `cases`) iterated with `for _, tc := range tests { t.Run(tc.name, func(t *testing.T) { ... }) }`. A new code branch is covered if it has at least one row in the table that exercises it.
-- `t.Run` subtests are the primary mechanism — check that subtests are named descriptively enough to identify which branch they cover (e.g., `"error: missing field"`, `"success: cache hit"`)
-- A function with no `t.Run` subtests and a single code path is acceptable only if the behavior is truly trivial; anything with an `if`/`switch`/error return needs at least two cases
-- Check `t.Helper()` usage — helper functions should call `t.Helper()` so failures point to the calling test, not the helper
-
-**TypeScript (Vitest / Jest):**
-- Coverage is `describe` / `it` (or `test`) blocks that call the modified function or render the modified component
-- Parameterized coverage uses `it.each` (Vitest/Jest): `it.each([[input1, expected1], [input2, expected2]])('description %s', (input, expected) => { ... })` — look for `it.each` or `test.each` tables when multiple branches exist
-- For React components: `@testing-library/react` render + assertion is the minimum; check that user-visible branches (loading state, error state, empty state) each have a `render` + assertion pair
-- Type-level coverage: if a type was changed, check for `expectTypeOf` or `assertType` calls (Vitest supports these natively)
-
-**Swift:**
-- XCTest parameterization: `XCTestCase.invokeTest` can be overridden to run the same test with multiple parameters, but this is uncommon. More commonly, multiple `func test<CaseName>()` methods cover individual branches.
-- swift-testing (available iOS 17+ / Swift 5.9+): `@Test(arguments: [value1, value2])` parameterizes a test function — each argument becomes a separate test run. Look for `@Test` attribute and `#expect` / `#require` macros instead of `XCTAssert*`.
-- A new `public` function with no corresponding `func test*` method in any test target is an automatic HIGH gap.
-- Check `@Suite` groupings in swift-testing — suites should map to the module under test, making coverage gaps visible by structure.
-
-**Python:**
-- `pytest.mark.parametrize` is the standard parameterization decorator: `@pytest.mark.parametrize("input,expected", [(val1, exp1), (val2, exp2)])`. A new branch without a corresponding parametrize case is a gap.
-- Check for fixture reuse — fixtures in `conftest.py` that set up the system under test should be updated when new initialization parameters are added
-- `unittest`-style: `subTest` context manager (`with self.subTest(case=name):`) serves the same role as table-driven tests; check that new branches have a `subTest` block
+> What counts as "covered" per language (table-driven tests, it.each, @Test arguments, parametrize): `resources/pass-reference.md` § Pass 5.
 
 ## Pass 6 — OBSERVABILITY
 
@@ -339,30 +255,7 @@ Goal: Production issues in this code can be debugged without a repro. Logs, metr
 
 If zero issues, report "OBSERVABILITY: Clean — new code paths are debuggable."
 
-### Language-specific observability patterns
-
-**Go:**
-- Preferred logger is `log/slog` (standard library since Go 1.21). Check that handlers use `slog.With(ctx, ...)` to attach context-derived fields rather than constructing ad-hoc string messages
-- For Lambda: the `lambda.NewLogHandler()` function (from `github.com/aws/aws-lambda-go/lambda`) returns a `slog.Handler` that injects `requestId` from the Lambda context automatically and respects `AWS_LAMBDA_LOG_FORMAT` / `AWS_LAMBDA_LOG_LEVEL`. A new Lambda handler that uses `slog.Default()` without setting this handler will produce unstructured logs in CloudWatch.
-- Error wrapping: `fmt.Errorf("operation failed: %w", err)` is the correct idiom. Flag any use of `errors.Wrap` from `github.com/pkg/errors` — that package is deprecated; the stdlib `%w` verb replaces it. Also flag bare `return err` without context in functions that could fail for multiple reasons.
-- Goroutine-spawning code: confirm the spawned goroutine logs its own errors — errors returned to a closed channel or silently dropped goroutine panics are invisible without explicit logging inside the goroutine body.
-
-**TypeScript / Node.js:**
-- Preferred structured loggers: `pino` (lowest overhead, JSON by default, ideal for Lambda and container workloads) or `winston` with JSON transport. Flag `console.log` / `console.error` in production code paths — these produce unstructured output that CloudWatch Logs Insights cannot query by field.
-- For Node.js Lambda: ensure the logger writes to stdout/stderr (pino's default); AWS collects stdout. Confirm `requestId` from the Lambda context is bound to the logger instance at handler entry: `const log = logger.child({ requestId: context.awsRequestId })`.
-- Promise rejection: check every `async` function for unhandled rejection paths. A `.catch()` that only logs without re-throwing is often acceptable; a `.catch(() => {})` or a missing `.catch()` on a fire-and-forget chain that could fail is a CRITICAL gap.
-- Next.js Server Components / Route Handlers: `console.error` is acceptable for server-side logging in Next.js but loses structure; prefer a pino instance imported from a shared logger module.
-
-**Swift (iOS / macOS):**
-- Preferred API: `Logger` from the `OSLog` framework (available iOS 14+, macOS 11+). Flag `print()` statements in production code — they write to stdout but are not captured by the unified logging system and are stripped in release builds.
-- Logger instances should declare a subsystem (reverse-DNS, e.g., `com.myapp.networking`) and category (e.g., `"API"`, `"Auth"`). This enables filtering in Console.app and `log stream` during debugging.
-- Privacy: `Logger` automatically redacts interpolated values in release builds unless marked `.public`. Logging a value that must be visible in production (e.g., a request ID, an error code) must use `\(value, privacy: .public)`. Check that PII (names, emails, tokens) is NOT marked `.public`.
-- `os_signpost` for performance: new code paths involving animation, image decode, or network round-trips benefit from signpost intervals (`OSSignposter`) for Instruments profiling — flag absence as LOW in performance-sensitive paths.
-
-**Python:**
-- Preferred structured logger: `structlog` (produces JSON or key-value output, integrates with stdlib `logging`). Flag bare `logging.info("message %s" % val)` — use `log.info("message", key=val)` with structlog's bound logger for queryable fields.
-- Error chaining: `raise ValueError("context") from original_exc` is the correct idiom. Flag bare `raise ValueError("context")` inside an `except` block — it loses the original traceback.
-- FastAPI / Lambda: confirm the request ID or correlation ID is extracted from the event/request and bound to the logger at handler entry.
+> Language-specific observability patterns (slog/pino/OSLog/structlog idioms, Lambda logging): `resources/pass-reference.md` § Pass 6.
 
 ## Pass 7 — DOCUMENTATION
 
@@ -373,7 +266,7 @@ Goal: Every user-visible, operator-visible, or API-visible change is documented.
    - **API specs** — `api.yaml` / `openapi.yaml` endpoint, schema, and example updates
    - **Architecture / design docs** — files under `docs/`, ADRs, runbooks
    - **Data model docs** — `docs/data-model.md`, `docs/dynamodb-data-model.md`, or equivalent
-   - **Inline doc comments** — godoc on exported Go symbols, TSDoc/JSDoc on exported TS symbols, Swift doc comments on public APIs, Python docstrings — see language conventions below
+   - **Inline doc comments** — godoc on exported Go symbols, TSDoc/JSDoc on exported TS symbols, Swift doc comments on public APIs, Python docstrings — see `pass-reference.md` § Pass 7
    - **CHANGELOG / release notes** — user-facing behavior changes
    - **Infrastructure/runbook docs** — CDK stack diagrams, Terraform docs, deployment runbooks, on-call playbooks
    - **`.env.example`** — any new environment variable
@@ -393,39 +286,7 @@ Goal: Every user-visible, operator-visible, or API-visible change is documented.
 
 If zero issues, report "DOCUMENTATION: Clean — all changes are documented."
 
-### Language-specific doc comment conventions
-
-**Go — godoc:**
-- Every exported identifier (function, type, method, constant, variable, package) must have a doc comment that begins with the identifier's name: `// FetchUser retrieves a user by ID from DynamoDB.`
-- Package-level comments go in a file named `doc.go` or at the top of the main file in the package: `// Package billing handles subscription lifecycle and Stripe webhooks.`
-- Multi-paragraph comments are fine; use blank `//` lines to separate paragraphs. Avoid markdown inside godoc — it renders as plain text on pkg.go.dev.
-- Flag: exported symbol added or modified without a preceding `// SymbolName ...` comment.
-
-**TypeScript — TSDoc:**
-- Use `/** ... */` block comments (not `//`) directly above the exported symbol. TSDoc tags: `@param name - description`, `@returns description`, `@throws ErrorType - when X`, `@example` with a fenced code block.
-- `@example` blocks are especially valuable for utility functions and hooks — check that non-trivial new exports include at least one.
-- For React components: document props via the interface/type's JSDoc block, not on the component function itself.
-- Flag: exported function, class, or type added without a `/** ... */` block.
-
-**Swift — documentation comments:**
-- Use `///` (triple-slash) for inline doc comments on each line, or `/** ... */` for block comments. `///` is the Apple-idiomatic style.
-- Standard tags (rendered by Xcode Quick Help): `- Parameter name: description`, `- Returns: description`, `- Throws: ErrorType — when X`, `- Note: additional context`, `- Warning: important caveat`.
-- Example:
-  ```swift
-  /// Fetches the leaderboard for a given group.
-  ///
-  /// - Parameter groupID: The ULID of the group to query.
-  /// - Returns: An array of `LeaderboardEntry` sorted by score descending.
-  /// - Throws: `APIError.notFound` if the group does not exist.
-  func fetchLeaderboard(groupID: String) async throws -> [LeaderboardEntry]
-  ```
-- Flag: new `public` or `open` function, type, or property without `///` doc comments.
-
-**Python — docstrings:**
-- Use triple-quoted strings (`"""..."""`) immediately after the `def` or `class` statement.
-- Preferred styles (pick one per project, be consistent): **Google style** (`Args:`, `Returns:`, `Raises:` sections), **NumPy style** (underlined section headers), or **Sphinx style** (`:param name:`, `:type name:`, `:returns:`, `:rtype:`).
-- Minimum for a public function: one-line summary + `Args` + `Returns` + `Raises` (if it raises).
-- Flag: new public function or class without a docstring, or existing docstring that no longer matches the updated signature (wrong param name, missing new param).
+> Language-specific doc comment conventions (godoc, TSDoc, Swift ///, docstrings): `resources/pass-reference.md` § Pass 7.
 
 ## Pass 8 — ADVERSARIAL
 
@@ -433,6 +294,7 @@ Goal: Try to break the changes. Think like a malicious user, a race condition, o
 
 For each significant change, probe these angles:
 
+- **Requirements attack**: read the spec/ticket as a hostile lawyer. Do any two rules contradict? Is a stated absolute ("always", "never") revoked by another clause? Does the requested interface conflict with the requested behavior? If the diff silently resolves a spec contradiction, that is a finding (MEDIUM or higher): state the resolution chosen and flag it for the author. A flawless implementation of a broken spec is still broken.
 - **Auth/permissions**: What request would produce a 401 or 403 that didn't before? What if the user's token is expired, missing, or from a different provider?
 - **Empty/nil data**: What if the input is empty, nil, zero-length, or missing optional fields? What about empty arrays vs null?
 - **Production vs test data**: Are there assumptions about data shape that hold in tests but not in production? Old records missing new fields? Records with unexpected enum values?
@@ -441,30 +303,9 @@ For each significant change, probe these angles:
 - **Boundary conditions**: Max values, very long strings, Unicode, special characters, time zones, midnight edge cases?
 - **Injection / untrusted input**: SQL/NoSQL injection, command injection, XSS, path traversal, SSRF in any new code path that consumes user input?
 
-Also probe these **language-specific gotchas** that the generic checklist above misses:
+> Language-specific gotchas (Go nil maps/goroutine leaks, TS hydration/undefined-vs-null/as-assertions, Swift IUO/Sendable/actor reentrancy, Python mutable defaults/async exceptions): `resources/pass-reference.md` § Pass 8. This pass runs in the parent: Read that section at execution time.
 
-**Go:**
-- **Nil map write**: assigning to a nil map (`var m map[string]int; m["key"] = 1`) panics. Check any new map variable that is declared but not initialized with `make`. Reading from a nil map is safe (returns zero value) — writing is not.
-- **Nil slice vs empty slice**: a nil slice marshals to JSON `null`; a non-nil zero-length slice marshals to `[]`. If the API contract requires `[]` on empty results (common for REST list endpoints), check that handlers return `make([]T, 0)` not `var result []T` when the query produces no rows.
-- **Goroutine leak**: any new `go func()` call must have a clear exit path. The goroutine must either read from a done channel, respect a `context.Context` cancellation, or be bounded by a `sync.WaitGroup`. A goroutine that blocks on a channel send with no receiver, or on a network call with no timeout, leaks. Flag: new goroutine without context cancellation or explicit termination condition.
-- **Context cancellation not checked**: new code that calls `ctx.Done()` or passes `ctx` to a library but then ignores the returned error (`_ = db.QueryContext(ctx, ...)`) defeats the purpose. Check that context errors are propagated.
-- **`errors.Wrap` from `pkg/errors`**: deprecated. Should be `fmt.Errorf("context: %w", err)`.
 
-**TypeScript / Next.js:**
-- **`undefined` vs `null` conflation**: TypeScript distinguishes `undefined` (variable not set) from `null` (explicitly empty), but JSON serialization and optional chaining can blur this. A field typed `string | undefined` that becomes `null` at runtime (from a DB or API) will pass the type check but break `=== undefined` guards. Flag new optional fields that lack `?? null` normalization.
-- **Next.js hydration mismatch**: any value computed differently on server vs client (current date/time, `Math.random()`, `window` access, user-agent detection, cookies/localStorage) will cause a hydration error if used during render. Flag new code in Server Components or page render that touches non-deterministic browser-only values without `useEffect` or `dynamic(() => ..., { ssr: false })`.
-- **Unhandled promise rejection**: a `Promise` returned from an async function that is not `await`ed and has no `.catch()` silently swallows errors. In Node.js Lambda, unhandled rejections terminate the process. Flag: `someAsyncFn()` called without `await` in a non-void fire-and-forget context where failures should be observable.
-- **`as` type assertion without validation**: `const data = response as MyType` bypasses runtime checking. If the data comes from an external source (API response, JSON.parse, URL params), flag the missing runtime validation (Zod, type guard, etc.).
-
-**Swift:**
-- **Implicitly-unwrapped optionals (`!`)**: new `var foo: SomeType!` declarations are a smell — they crash at runtime if accessed before initialization. Flag any new IUO outside of `@IBOutlet` patterns (where they're forced by the storyboard lifecycle). Prefer `guard let` or `if let` unwrapping.
-- **`Sendable` conformance for concurrency**: any type passed across actor boundaries (`async`/`await`, `Task`, `actor`) must be `Sendable`. New types that hold reference-type properties and are passed to `Task { }` or sent to an actor without `@unchecked Sendable` will produce a compiler warning in Swift 5.9+ strict concurrency mode and an error in Swift 6. Flag new types used in concurrency contexts that lack explicit `Sendable` or `@unchecked Sendable` with an explanation.
-- **Actor reentrancy**: code that reads state, `await`s, then acts on the stale state is a reentrancy bug. After any `await` inside an actor method, other tasks may have mutated the actor's state. Flag new actor methods with logic of the form "read state → await → act on state" without re-checking the state post-await.
-
-**Python:**
-- **Mutable default arguments**: `def fn(items=[])` shares the same list across all calls. Any new function with a mutable default (list, dict, set) is a HIGH bug. The fix is `def fn(items=None): if items is None: items = []`.
-- **Async exception propagation**: `asyncio.create_task()` schedules a coroutine but exceptions in the task are silently discarded unless the task is awaited or the exception handler is attached via `task.add_done_callback`. Flag new `create_task()` calls without an exception handler or subsequent `await`.
-- **`except Exception` too broad**: catching `Exception` (or bare `except`) and only logging swallows unexpected errors. If a new `except` block logs and continues, verify it's intentional and the logged error is actionable.
 
 Rate each finding:
 - **CRITICAL**: Will cause data loss, security bypass, or crash in production
@@ -478,6 +319,10 @@ Goal: Every direct dependency, framework, and language runtime is current enough
 
 Unlike the other passes, Pass 9 is a WHOLE-PROJECT audit. It runs on every chad-review regardless of what the diff touches. It reads the changed-files list only to prioritize and to tag dependencies the current change touched, never to gate whether the pass runs.
 
+0. **Cache check.** Cache file: `~/.claude/chad-review-cache/<sha256 of git remote get-url origin>.json` (home-dir keyed by origin URL so all worktrees of a repo share it and nothing touches the repo). Schema: `{ generatedAt, manifests: {<repo-relative path>: <sha256 of content>}, manifestSet: [sorted paths], table: <markdown table verbatim>, severityLines: [...], scannerUsed, lastLocalScanClean }`.
+   - Run manifest discovery (step 1's glob with the prune list) and hash each discovered manifest AND its lockfile.
+   - **FULL RUN** (steps 1-5 as written, then write the cache) if ANY: cache file missing or unparseable; discovered manifest set differs from cached `manifestSet`; any hash differs; `generatedAt` older than 7 days; diff shape is `deps-only` or the diff touches any manifest.
+   - **CACHE HIT** otherwise: do NOT launch the FRESHNESS sub-agent and do NOT call context7/WebSearch. In the parent, re-run ONLY the local CVE scan (`osv-scanner -r .` or the ecosystem scanner: it is local, cheap, and preserves same-day detection of newly published CVEs against unchanged deps). If the scan is clean, report the cached table under Pass 9 with the header "FRESHNESS (cached <date>, manifests unchanged; local CVE scan re-run this review: clean)". If the scan finds anything new, invalidate the cache and do a FULL RUN. The 7-day TTL is safe because the security signal is never delayed; the only cached intelligence is latest-version/maturity data, whose consumers are the 60-90-day HOLD/UPGRADE windows.
 1. **Manifest discovery.** Find every dependency manifest in the project, pruning `vendor/`, `node_modules/`, `.git/`, `target/`, `build/`, `dist/`, `.next/`, `cdk.out/`, `DerivedData/`, `Pods/`. Use the ecosystem table below. If no recognized manifest exists, report N/A and stop. Read each manifest and extract DIRECT dependencies plus the runtime constraint (`go` directive, `engines.node`, `environment: sdk`, `swift-tools-version`, `requires-python`, `rust-version`). Skip transitive deps for version resolution; step 3 still scans them for CVEs.
 2. **Version resolution via context7.** For each direct dependency, read the pinned or current version from the manifest or lockfile, then resolve the latest version and migration intelligence from context7 (`resolve-library-id`, then `query-docs` with a topic like "latest version, migration guide, breaking changes"). Capture the three things context7 is good at: latest version, whether a migration guide exists, and how large the breaking surface is (count of breaking changes, codemods required). context7 is weak on exact release DATES: where you need release recency or patch-count and context7 does not surface it, fall back to a lightweight WebSearch ("<lib> <version> release date") purely to gauge recency. context7 stays the primary source. Soft-cap the number of context7 lookups (about 12 to 15), prioritizing runtimes, core frameworks, security-relevant deps, and diff-touched deps; list anything beyond the cap as "not individually version-checked this run."
 3. **Security and EOL check.** Run the ecosystem's CVE scanner (govulncheck, npm/pnpm audit, pip-audit, cargo audit, `dart pub outdated --mode=security`) or the language-agnostic `osv-scanner -r .` over the lockfiles. If no scanner is installed, say so ("security scan unavailable: install osv-scanner/govulncheck") rather than reporting clean. Cross-reference the runtime against end-of-life data (endoflife.date for Node, Python, Go; the framework's own support window for majors). A current version with a known CVE, or a runtime or framework major past support, is CRITICAL and OVERRIDES any "too early" hold from step 4.
@@ -540,29 +385,15 @@ Tag any dependency the current diff touched with `(diff-touched)`.
 
 If zero issues, report "FRESHNESS: Clean. All direct dependencies are current or within a safe lag, no CVE and no end-of-life runtime." If no manifest is recognized, report "FRESHNESS: N/A — no recognized manifest detected."
 
-### Ecosystem-specific manifest, version, and security sources
-
-`osv-scanner -r .` is a language-agnostic CVE fallback that reads most lockfiles at once and is the cheapest single scan.
-
-**Go (go.mod):** find `go.mod` (skip `vendor/`); direct deps are `require` entries NOT marked `// indirect`; runtime is the `go 1.xx` directive (Go supports the two latest majors). Security: `govulncheck ./...` or `osv-scanner --lockfile=go.mod`. Runtime EOL: endoflife.date/go.
-
-**Node / TypeScript (package.json):** find `package.json` (skip `node_modules/`, `.next/`); current from `dependencies` / `devDependencies` plus the lockfile; runtime from `engines.node` or `.nvmrc`. Resolve `next`, `react`, and the framework deps the route script already surfaces. Security: `npm audit` / `pnpm audit` or `osv-scanner -r .`. Node EOL: endoflife.date/nodejs. Next.js patches the current and previous major.
-
-**Flutter / Dart (pubspec.yaml):** find `pubspec.yaml` (skip `.dart_tool/`, `build/`); current from `dependencies` plus `pubspec.lock`; SDK from `environment:`. Security: `dart pub outdated --mode=security` or `osv-scanner --lockfile=pubspec.lock`.
-
-**Swift / SPM (Package.swift, Package.resolved):** find `Package.swift` (skip `.build/`) plus the sibling `Package.resolved` (exact pinned versions, git-tag based); toolchain from `swift-tools-version`. Security: no first-party scanner; use `osv-scanner --lockfile=Package.resolved` plus Dependabot advisories.
-
-**Python (pyproject.toml, requirements.txt):** find them (skip `.venv/`); current from `[project.dependencies]` / `[tool.poetry.dependencies]` plus `poetry.lock` / `uv.lock`; runtime from `requires-python`. Security: `pip-audit` or `osv-scanner -r .`. Python EOL: endoflife.date/python.
-
-**Rust (Cargo.toml):** find `Cargo.toml` (skip `target/`); current from `[dependencies]` plus `Cargo.lock`; MSRV from `rust-version`. Security: `cargo audit` or `osv-scanner --lockfile=Cargo.lock`.
+> Ecosystem-specific manifest, version, and security sources (Go/Node/Dart/Swift/Python/Rust): `resources/pass-reference.md` § Pass 9.
 
 ## Performance Budget
 
-The review should complete in under 60 seconds for a typical PR (5-10 file changes). The parallel Phase A fan-out is the primary lever — seven sub-agents running concurrently means the wall-clock time is dominated by the slowest single pass, not the sum.
+Target: under ~2 minutes wall-clock for a typical single-language PR (5-10 file changes) with a warm freshness cache; non-standard diff shapes (docs-only, config-only, tiny) should finish well under a minute. The parallel Phase A fan-out is one lever — seven sub-agents running concurrently means the wall-clock time is dominated by the slowest single pass, not the sum. The diff-shape matrix (Pre-flight step 5) and the freshness cache (Pass 9 step 0) are the bigger levers: most runs should launch far fewer than seven agents and zero network version lookups.
 
 If the review is running long, cut in this order:
 
-1. **Pass 9 (FRESHNESS)**: the context7 version-resolution loop is network-bound and is the first thing to cap when the review runs long. Reduce the soft-cap, or resolve versions only for runtimes and core frameworks. NEVER skip the local security and EOL scan (`osv-scanner` / `govulncheck` / `pip-audit`): a CVE or EOL runtime is CRITICAL and the scan is cheap.
+1. **Pass 9 (FRESHNESS)**: the cache (step 0) is the primary lever — a warm cache removes the entire network-bound version-resolution loop. On a forced full run, the context7 loop is the first thing to cap when the review runs long. Reduce the soft-cap, or resolve versions only for runtimes and core frameworks. NEVER skip the local security and EOL scan (`osv-scanner` / `govulncheck` / `pip-audit`): a CVE or EOL runtime is CRITICAL and the scan is cheap.
 2. **Pass 3 (SPEC DRIFT)**: sub-checks 3d and 3g (type regeneration and spec lint) are the most expensive because they compile or invoke external tools. If the diff has no handler changes, mark 3a–3c N/A immediately without running the generators.
 3. **Pass 4 (TEST)**: if the project's test suite is slow (full compile + integration tests), scope to `-run TestFunctionName` rather than `./...`. Only run the packages that contain changed files.
 4. **Pass 1 (STRUCTURAL)**: on diffs with many removed symbols, grep can be slow on large codebases. Scope grep to `--include="*.go"` / `--include="*.ts"` rather than all file types; skip `vendor/` and `node_modules/` aggressively.
@@ -596,6 +427,7 @@ After all 9 passes, output a single consolidated report:
 
 ```
 ## Chad Review — Report
+Diff shape: <shape>
 
 ### Pass 1 — STRUCTURAL
 [findings or "Clean"]
@@ -628,6 +460,8 @@ After all 9 passes, output a single consolidated report:
 [1-2 sentence summary of whether to commit as-is, fix something first, or stop and rethink]
 ```
 
+Each sub-agent pass section ends with its self-refutation tally line (`Self-refutation: X raised, Y refuted, Z reported`); refuted CRITICALs stay visible as "raised then refuted: <evidence>" so the parent can double-check them.
+
 **How Pass 9 affects the verdict.** Because Pass 9 is whole-project and always-on, a pre-existing dependency issue unrelated to the diff should not hard-block an unrelated commit:
 
 - **CRITICAL (CVE or EOL) on a dependency the diff touched or introduced → NO-GO.** The change is adjacent to a known-vulnerable or end-of-life dependency; fix before committing.
@@ -647,18 +481,17 @@ If the verdict is NO-GO or CONDITIONAL — **or** if Pass 9 produced any **UPGRA
 5. **Add a "Recommended — safe to do now" section for Pass 9 UPGRADE NOW (safe) findings** — every mature, non-breaking framework/dependency upgrade gets a line with its concrete bump (`current → target`) and a verify step (the build plus the test/integration suite that exercises it). These are not commit blockers, but they are the headline value of the freshness pass, so they get their own heading — never folded into "optional polish" and never dropped to the backlog. Explicitly **offer to perform them now** (in this change or an immediate fast-follow) rather than just listing them. Keep HOLD items out of this section (they carry a revisit signal instead).
 6. **End with a verification step** — "After fixing, run `/chad-review` again to confirm all issues are resolved."
 
-Present the prompt in a copyable code block, then ask the user:
+Present the prompt in a copyable code block. Then:
 
-> "Want me to enter plan mode with this prompt, or do you want to edit it first?"
-
-- If **enter plan mode**: enter plan mode using the generated fix prompt as the task.
-- If **edit first**: show the prompt and wait for the user to modify it, then enter plan mode with the edited version.
+- Ask "Want me to enter plan mode with this prompt, or do you want to edit it first?" ONLY when BOTH hold: the verdict is NO-GO or CONDITIONAL, AND this is a direct interactive session with the user. If **enter plan mode**: enter plan mode with the fix prompt as the task. If **edit first**: wait for the user's edit, then enter plan mode with the edited version.
+- On a GO verdict, print the report (including any "Recommended — safe to do now" section) and end the turn without asking.
+- When running as a subagent, inside another skill (e.g. /wrapup), or in any headless/autonomous invocation, never block on a question: the full fix prompt is already in the report body; return and let the caller act on the verdict.
 
 ## Execution Strategy
 
 **Delegate passes to sub-agents in parallel.** Passes that only read the diff are self-contained and can run concurrently via the Agent tool. Single-message multi-tool-use batches the launches in parallel.
 
-**Model requirement: every sub-agent launched by this skill MUST pass `model: "opus"`.** Code review is high-judgment work where reasoning quality matters more than speed, so Opus is the default. Never launch a chad-review sub-agent on haiku or sonnet.
+**Model tiering: ALWAYS pass an explicit `model` on every Agent launch.** Mechanical, rubric-driven passes run on **sonnet**: Pass 1 STRUCTURAL, Pass 3 SPEC DRIFT, Pass 5 TEST COVERAGE, Pass 6 OBSERVABILITY, Pass 7 DOCUMENTATION, Pass 9 FRESHNESS. (Pass 6 is checklist-driven against the observability patterns in `resources/pass-reference.md` § Pass 6, so it rides the sonnet tier.) The judgment pass runs on **opus**: Pass 2 BEHAVIORAL — the highest-stakes finder (data corruption, authz, backward compatibility). Never haiku. Escalation: if a sonnet pass reports any CRITICAL finding, or reports that it could not confidently classify something, the parent re-verifies that specific finding inline before it enters the verdict. (Standing rule regardless of install context: review agents run on sonnet or opus, never haiku.)
 
 ### Phase A — Passes 1, 2, 3, 5, 6, 7 (per language) plus Pass 9 FRESHNESS (whole-project) in parallel (single Agent call batch)
 
@@ -667,23 +500,23 @@ Launch all seven as sub-agents in ONE message (seven `Agent` tool uses in a sing
 - The changed files list.
 - A clear, self-contained brief — the sub-agent cannot see the parent conversation, so repeat project context it needs (e.g. "this project uses an OpenAPI spec at `docs/openapi.yaml`, validated via `make validate-openapi`").
 - Explicit output format (e.g. "Report under 300 words. Structure: findings list, each with severity, file:line, one-sentence explanation.").
-- **`model: "opus"`** on every Agent call.
+- An explicit **`model`** on every Agent call, per the tiering above (sonnet for Passes 1/3/5/6/7, opus for Pass 2).
 
 **Pass 9 (FRESHNESS) is whole-project: launch it once per review, not once per language block.** Passes 1, 2, 3, 5, 6, 7 fan out per language block from the routing script; FRESHNESS is added once to the same batch no matter how many language blocks the script emits. Its brief:
 - The dependency manifests discovered project-wide (or instruct it to discover them with the prune list in Pass 9).
 - The changed files list, used ONLY to prioritize and tag `(diff-touched)` deps. State explicitly that the audit is whole-project and does not depend on the diff.
 - context7 as the primary source for latest version and migration intelligence; a lightweight WebSearch only as a release-recency probe.
 - Output: the recommendation table plus CRITICAL/HIGH severity lines, under about 350 words.
-- **`model: "opus"`**, read-only, never edit or commit.
+- **`model: "sonnet"`** (rubric-driven version/table assembly), read-only, never edit or commit.
 
 **Preferred path: use `chad-review-route.sh` output** (see Pre-flight step 5) — it picks the right specialist per language family in the diff.
 
-**Fallback defaults** when the routing script is unavailable. These are Go-shaped: adequate for Go cmd Lambdas + shared packages, only OK for other languages. All run on `model: "opus"`:
+**Fallback defaults** when the routing script is unavailable. These are Go-shaped: adequate for Go cmd Lambdas + shared packages, only OK for other languages. All take an explicit `model` per the tiering above:
 - **Pass 1 (STRUCTURAL)** → `Explore` with thoroughness `medium`. Fast grep-heavy work.
 - **Pass 2 (BEHAVIORAL)** → `feature-dev:code-reviewer` or `general-purpose`. Needs judgment, not speed.
 - **Pass 3 (SPEC DRIFT)** → `general-purpose`. Needs to both read files AND run project-specific commands like spec validators, regeneration scripts, route-parity tests. Include the project's specific commands and paths in the prompt — detect them from the project layout during pre-flight.
 - **Pass 5 (TEST COVERAGE)** → `Explore` with thoroughness `medium`. Locates test files and greps for references to new symbols.
-- **Pass 6 (OBSERVABILITY)** → `feature-dev:code-reviewer` or `general-purpose`. Judgment-heavy: what counts as sufficient logging varies by code path.
+- **Pass 6 (OBSERVABILITY)** → `feature-dev:code-reviewer` or `general-purpose`. Checklist-driven against the per-language observability patterns in `resources/pass-reference.md`; sonnet handles it well.
 - **Pass 7 (DOCUMENTATION)** → `general-purpose`. Needs to read doc files and compare against the diff; may need to check for presence of godoc/jsdoc/docstrings on new symbols.
 
 For non-Go diffs, the routing script's specialist picks generally produce more accurate findings. The Context7 hints below are *examples* — the script emits the actual frameworks/deps the changed files import, so use whatever it prints:
@@ -700,13 +533,14 @@ Do not delegate tests. Run `go test` / `npx vitest` / `pytest` / etc. directly i
 
 ### Phase C — Pass 8 (ADVERSARIAL) in the parent turn
 
-Do not delegate. Pass 8 is informed by *everything* the prior passes found — the parent has all that context already, and spinning up a sub-agent would either duplicate the diff read or lose the prior findings. Run adversarial probes inline, using any targeted tool calls (grep, file reads) needed to confirm edge cases.
+Do not delegate. Pass 8 is informed by *everything* the prior passes found — the parent has all that context already, and spinning up a sub-agent would either duplicate the diff read or lose the prior findings. Run adversarial probes inline, using any targeted tool calls (grep, file reads) needed to confirm edge cases. Apply the same self-refutation discipline required of the sub-agents before any Pass 8 finding enters the report.
 
 ### Writing sub-agent prompts
 
 Each sub-agent prompt MUST be self-contained:
 - State the goal in one sentence.
 - Include the full diff or a specific file list (sub-agents cannot see your conversation).
+- Read `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md` and paste ONLY the section(s) for this pass and the language families the routing script detected. This step is mandatory: skipping it silently degrades sub-agent quality.
 - Name the project's specific spec files / validation commands / test harness / doc locations (detect these during pre-flight; if not found, tell the sub-agent the convention is absent and to mark sub-checks N/A).
 - Specify the output format and word budget.
 - Remind them: read-only, never edit or commit.
@@ -730,6 +564,8 @@ Project-specific context (detected during pre-flight):
 Your job:
 <numbered steps specific to this pass>
 
+Before reporting, attempt to refute every finding you raised: re-read the surrounding code and check the classic false-positive causes (grep hit inside a comment, string literal, test fixture, or generated file; a "missing test" actually covered by a differently named or integration test; a "stale doc" statement that still holds; a behavior change explicitly intended per an adjacent comment or the commit message). A finding may be dropped ONLY on concrete evidence (a file:line that disproves it), never on plausibility. Refuted CRITICALs are not deleted: report them as "raised then refuted: <evidence>". End your output with the line: Self-refutation: X raised, Y refuted, Z reported.
+
 Output: <format + word budget>. Read-only — do not edit files or run commits.
 ```
 
@@ -739,7 +575,7 @@ Example Agent tool call (model is REQUIRED):
 {
   "description": "Pass 1 STRUCTURAL review",
   "subagent_type": "Explore",
-  "model": "opus",
+  "model": "sonnet",
   "prompt": "<self-contained prompt as above>"
 }
 ```
@@ -749,8 +585,8 @@ Example Agent tool call (model is REQUIRED):
 - NEVER edit any source file
 - NEVER commit anything
 - NEVER apply proposed fixes — only show them
-- NEVER skip a pass — run all 9 even if early passes find nothing (mark "Clean" or "N/A" as appropriate)
-- ALWAYS pass `model: "opus"` on every Agent sub-agent launch — code review is a judgment task
+- NEVER silently skip a pass: all 9 passes appear as headings in every Final Report. A pass may return early per the diff-shape matrix (Pre-flight step 5), but only with the explicit line "N/A — not applicable to this diff shape (<shape>)", never by omission
+- ALWAYS pass an explicit `model` per the Execution Strategy tiering (sonnet: Passes 1/3/5/6/7/9; opus: Pass 2); never haiku
 - Pass 3 may run type generators, spec validators, and route-parity tests — these are non-destructive
 - If the diff is enormous (50+ files), ask the user if they want to scope the review to specific directories
 - If the project's conventions don't match any of the sub-check patterns, mark "N/A" and continue — don't fail the pass

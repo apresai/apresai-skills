@@ -60,8 +60,8 @@
     },
     {
       "name": "chad-review",
-      "description": "9-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across structural, behavioral, spec-drift, test, test-coverage, observability, documentation, adversarial, and dependency-freshness dimensions. Parallel sub-agent execution, read-only.",
-      "version": "1.6.0",
+      "description": "9-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across structural, behavioral, spec-drift, test, test-coverage, observability, documentation, adversarial, and dependency-freshness dimensions. Diff-shape aware (small diffs skip the full fan-out), sonnet/opus model tiering, parallel sub-agent execution, read-only.",
+      "version": "1.8.0",
       "author": {
         "name": "Chad Neal"
       },
