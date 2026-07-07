@@ -25,6 +25,10 @@ All three default to **maximum reasoning effort (`xhigh`)** and return Codex's
 output verbatim. Pass `--effort <low|medium|high|xhigh>` to dial it down,
 `--model <id>` to override the model.
 
+**Cost:** every invocation bills `openai.gpt-5.5` usage to your AWS account's
+Bedrock spend, and `xhigh` is the most expensive effort setting. `--effort medium`
+is the economical choice for routine passes.
+
 ## Requirements
 
 - **Node.js 18.18+** and the Codex CLI: `npm install -g @openai/codex`
@@ -63,21 +67,27 @@ this is on-demand, not global.
 ### 2. Pin the token in `~/.codex/.env`
 
 The Codex CLI reads `~/.codex/.env` **even in clean / headless shells**. This is
-what lets the skill authenticate without you sourcing anything first. Write the
-token there (and lock the file down):
+what lets the skill authenticate without you sourcing anything first. Set the
+token there **without clobbering other keys the file may already hold** (a bare
+`> ~/.codex/.env` would wipe them), and lock the file down:
 
 ```bash
-printf 'AWS_BEARER_TOKEN_BEDROCK=%s\n' "$YOUR_BEDROCK_TOKEN" > ~/.codex/.env
+mkdir -p ~/.codex && touch ~/.codex/.env
+grep -v '^AWS_BEARER_TOKEN_BEDROCK=' ~/.codex/.env > ~/.codex/.env.tmp || true
+printf 'AWS_BEARER_TOKEN_BEDROCK=%s\n' "$YOUR_BEDROCK_TOKEN" >> ~/.codex/.env.tmp
+mv ~/.codex/.env.tmp ~/.codex/.env
 chmod 600 ~/.codex/.env
 ```
 
-Re-run this after the Bedrock token rotates.
+Re-run this after the Bedrock token rotates — it replaces only the
+`AWS_BEARER_TOKEN_BEDROCK` line and preserves everything else.
 
 ### 3. Add the `codex-br` shell alias (for interactive use)
 
-The skill works without the alias (it sources `~/.codex/.env` itself), but the
-alias is the convenient way to use the same backend yourself in a terminal. Add
-it to `~/.zshrc` (or `~/.bashrc`):
+The skill works without the alias (Codex loads `~/.codex/.env` natively; the
+skill never sources the credential file into its shell), but the alias is the
+convenient way to use the same backend yourself in a terminal. Add it to
+`~/.zshrc` (or `~/.bashrc`):
 
 ```bash
 # >>> codex-br bedrock profile >>>
@@ -133,10 +143,15 @@ ln -s ~/dev/apresai-skills/plugins/codex-br/skills/codex-br \
       ~/.claude/skills/codex-br
 ```
 
+The marketplace install is the right default. A symlink serves whatever branch
+the clone has checked out — switch branches (or check out one where this plugin
+doesn't exist) and the skill silently changes or dangles. Use it only while
+actively developing the skill.
+
 ## Gotchas (learned the hard way)
 
-- **`openai.gpt-5.5` is invisible to `aws bedrock list-foundation-models`.** The
-  frontier GPT-5.x models live on a separate Bedrock "mantle" endpoint
+- **`openai.gpt-5.5` is invisible to `aws bedrock list-foundation-models`** (as
+  of 2026-06). The frontier GPT-5.x models live on a separate Bedrock "mantle" endpoint
   (`bedrock-mantle.us-east-2.api.aws`, OpenAI Responses API), not the standard
   runtime surface. Use the curl check above to confirm access, not
   `list-foundation-models` (which returns only the open-weight `gpt-oss-*`).
