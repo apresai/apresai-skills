@@ -1,14 +1,13 @@
 ---
 name: chad-review
 description: 9-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs structural, behavioral, spec-drift, test, test-coverage, observability, documentation, adversarial, and dependency-freshness analysis.
-model: opus
 ---
 
 # Chad Review — 9-Pass Code Review
 
 Autonomous review of uncommitted working-tree changes — or the last commit if the tree is clean. Read-only except for running tests and type regeneration. Never edit source files, never commit.
 
-The `model: opus` frontmatter pins the review's parent turn (pre-flight, Pass 4, Pass 8, report assembly) to Opus regardless of the session model: a review does not need a premium-tier session model, and per-pass sub-agents carry their own explicit `model` per the tiering in §"Execution Strategy". To force a premium-model review of a high-stakes change, say so explicitly and the parent model can be overridden for that run.
+**Model tiering is session-relative, not hardcoded.** There is deliberately NO `model:` frontmatter pin: the parent turn (pre-flight, Pass 4, report assembly) inherits the session model, and each sub-agent pass carries an explicit `model` computed from the session model per §"Model Tiering". This means chad-review never force-upgrades a cheap session upward for orchestration, and escalates to a premium model only where merge-gating judgment lives. (This reverses the older "pin opus so a Fable session isn't under-powered" rule: a Fable parent is now intended — judgment escalates to opus per-pass instead of the whole turn riding opus.)
 
 This skill is project-agnostic. It detects the language and framework of the changes under review and adapts. For project-specific spec/contract checks, it relies on conventions (OpenAPI spec at `api.yaml` or `openapi.yaml`, generated type artifacts at conventional paths, route-parity tests if they exist). When a convention doesn't match the current project, the corresponding sub-check is reported as "N/A — project convention not detected" rather than failing.
 
@@ -26,15 +25,16 @@ Every `resources/...` reference in this document resolves relative to the skill/
      - Run `git log -1 --format='%H %s'` to identify it. If the repo has no commits, tell the user "Nothing to review — working tree is clean and there is no commit history" and STOP.
      - Run `git show --stat HEAD` and `git show HEAD` to capture the summary and full diff.
      - Build the **changed files list** from the files touched by that commit.
-3. Announce the target to the user in one line, e.g.:
-   - `Chad Review — reviewing working tree (2 staged, 3 unstaged, 1 untracked)`
-   - `Chad Review — reviewing last commit a1b2c3d "Fix credit refund race"`
+3. **Determine the session model tier and announce the target** in one line. Read your own session model from the environment/system context, map it to MECH/JUDGE tiers per §"Model Tiering", and print both, e.g.:
+   - `Chad Review — reviewing working tree (2 staged, 3 unstaged, 1 untracked) — opus session → MECH=sonnet, JUDGE=opus`
+   - `Chad Review — reviewing last commit a1b2c3d "Fix credit refund race" — fable session → MECH=opus, JUDGE=opus`
+   If you cannot determine the session model, use the `unknown` row (MECH=sonnet, JUDGE=opus) and say so.
 4. The captured diff is the input for Passes 1 through 8. The changed files list drives Pass 4 test selection and Pass 5 coverage selection. Pass 9 (FRESHNESS) is whole-project: it audits the project's dependencies regardless of the diff, and reads the changed files list only to prioritize and tag deps the change touched.
 5. **Classify the diff shape** from the changed-files list. Ambiguity always falls to `standard`:
    - `docs-only`: every file matches `*.md`, `*.txt`, `docs/**`, LICENSE, or images. Exceptions that force `standard`: `CLAUDE.md`, any `*/SKILL.md`, anything under `.claude/`, a `prompts/` dir, or a plugin's `commands/`, `agents/`, or `skills/` dir (in this ecosystem those are executable behavior, not prose).
    - `config-only`: only `.github/**`, `.gitignore`, `.editorconfig`, or linter configs. Not dependency manifests, not IaC.
    - `deps-only`: only dependency manifests/lockfiles (`go.mod`/`go.sum`, `package.json` + lockfile, `pubspec.*`, `Package.swift`/`Package.resolved`, `Cargo.*`, `pyproject.toml`/`requirements*.txt`).
-   - `tiny`: at most 2 files AND at most 10 changed lines of production code.
+   - `tiny`: at most 4 files AND at most 40 changed lines of non-test production code. (Widened from the original 2 files / 10 lines so more everyday small PRs run all passes INLINE in the parent and skip the fan-out entirely — the executable-file exceptions below still force `standard`.)
    - `standard`: everything else.
 
    Per-shape pass matrix. Every one of the 9 passes still appears as a heading in the Final Report; non-`standard` shapes replace the sub-agent fan-out with the listed treatment:
@@ -44,8 +44,8 @@ Every `resources/...` reference in this document resolves relative to the skill/
    | docs-only | 0-1 | Passes 1, 2, 4, 5, 6: report the literal line "N/A — not applicable to this diff shape (docs-only)". Pass 3: only 3f, and only if a data-model doc changed. Pass 7 runs INLINE in the parent (the doc change itself is the review subject: accuracy vs code, staleness). Pass 8: brief inline probe (secrets/PII/wrong commands in the new text). Pass 9: cache path (step 0). |
    | config-only | 0-1 | Passes 2 and 8 run inline in the parent (CI/workflow changes are behavior, e.g. `pull_request_target` foot-guns). 1, 3, 4, 5: N/A. 6, 7: inline quick checks. 9: cache path. |
    | deps-only | 1 | Pass 9 runs FULLY FRESH as a sub-agent (this is the shape it exists for), every dep tagged `(diff-touched)`. Pass 4 runs in the parent (bumps break tests). 1, 2, 3, 5, 6, 7: N/A or one-line inline notes. |
-   | tiny | 0-1 | All 9 dimensions still evaluated, but Passes 1, 2, 3, 5, 6, 7 run INLINE in the parent turn instead of as sub-agents (a 10-line diff does not justify 7 agent bootstraps). Pass 9: cache path. |
-   | standard | full fan-out | Phase A/B/C strategy below, with model tiering and the freshness cache applied. |
+   | tiny | 0-1 | All 9 dimensions still evaluated, but Passes 1, 2, 3, 5, 6, 7 run INLINE in the parent turn instead of as sub-agents (a small diff does not justify agent bootstraps). Pass 9: cache path. |
+   | standard | bundled fan-out (3 per language block) | Phase A/B/C strategy below: one mechanical-bundle agent (Passes 1,3,5,6,7) + one Pass 2 specialist per language block, plus one whole-project Pass 9, with session-relative model tiering and the freshness cache applied. |
 
    Print `Diff shape: <shape>` in the report header. When the shape is not `standard`, add: "rerun with `/chad-review --full` to force the complete fan-out". `--full` (or the user asking for a full review) skips classification and treats the diff as `standard`.
 6. **Route per-pass agents by language family.** Run the bundled
@@ -78,11 +78,17 @@ Every `resources/...` reference in this document resolves relative to the skill/
    AWS CDK, Next.js App Router).
 
    For **mixed-language diffs**, the script prints one routing block per
-   language and you spawn one set of Phase A sub-agents PER block, plus
-   ONE whole-project FRESHNESS agent for the review overall (a CDK + Go
-   diff = 12 per-language sub-agents + 1 FRESHNESS agent = 13 launched in
-   a single Agent batch). Each language's findings flow into one shared
-   Final Report.
+   language. Per block you spawn the bundled Phase A set — ONE mechanical
+   bundle agent (Passes 1,3,5,6,7) + ONE Pass 2 specialist — plus ONE
+   whole-project FRESHNESS agent for the review overall (a CDK + Go diff =
+   2 bundle + 2 Pass 2 + 1 FRESHNESS = 5 launched in a single Agent batch,
+   down from 13 in the old per-pass fan-out). **Scope the diff per block:**
+   each language's two agents receive ONLY that language's hunks (partition
+   the captured diff by the routing-script classification), not the full
+   cross-language diff — this halves the duplication penalty on mixed diffs.
+   Pass 1's whole-codebase grep is scope-independent, and the parent Pass 8
+   plus the whole-project Pass 9 still see the full diff. Each language's
+   findings flow into one shared Final Report.
 
    If the script is missing (older install or non-plugin context), fall
    back to the hardcoded defaults in §"Execution Strategy" — they're
@@ -106,7 +112,7 @@ Goal: Every removed symbol has zero remaining references in the codebase.
 
 Goal: Every behavior change is intentional and safe for existing data.
 
-1. For each modified file, explain in 1-2 sentences what **behavior** changed (not what lines changed — what the code *does* differently now).
+1. Assess what **behavior** changed in each modified file (not what lines changed — what the code *does* differently now). To keep output crisp, narrate (1 sentence) ONLY files that carry a CRITICAL or HIGH flag below; summarize the rest as a one-line count (e.g. "6 other files: behavior-preserving refactors, no risk flags").
 2. Flag as **CRITICAL** if any change could:
    - Corrupt existing database records (wrong defaults, changed attribute types, renamed keys)
    - Break backward compatibility with older clients (removed fields, changed response shapes, modified enums)
@@ -389,7 +395,7 @@ If zero issues, report "FRESHNESS: Clean. All direct dependencies are current or
 
 ## Performance Budget
 
-Target: under ~2 minutes wall-clock for a typical single-language PR (5-10 file changes) with a warm freshness cache; non-standard diff shapes (docs-only, config-only, tiny) should finish well under a minute. The parallel Phase A fan-out is one lever — seven sub-agents running concurrently means the wall-clock time is dominated by the slowest single pass, not the sum. The diff-shape matrix (Pre-flight step 5) and the freshness cache (Pass 9 step 0) are the bigger levers: most runs should launch far fewer than seven agents and zero network version lookups.
+Target: under ~2 minutes wall-clock for a typical single-language PR (5-10 file changes) with a warm freshness cache; non-standard diff shapes (docs-only, config-only, tiny) should finish well under a minute. The bundled Phase A fan-out is one lever — three sub-agents (mechanical bundle + Pass 2 + FRESHNESS) running concurrently means the wall-clock time is dominated by the slowest single agent, not the sum. The diff-shape matrix (Pre-flight step 5) and the freshness cache (Pass 9 step 0) are the bigger levers: most runs launch just those few agents and zero network version lookups.
 
 If the review is running long, cut in this order:
 
@@ -397,7 +403,7 @@ If the review is running long, cut in this order:
 2. **Pass 3 (SPEC DRIFT)**: sub-checks 3d and 3g (type regeneration and spec lint) are the most expensive because they compile or invoke external tools. If the diff has no handler changes, mark 3a–3c N/A immediately without running the generators.
 3. **Pass 4 (TEST)**: if the project's test suite is slow (full compile + integration tests), scope to `-run TestFunctionName` rather than `./...`. Only run the packages that contain changed files.
 4. **Pass 1 (STRUCTURAL)**: on diffs with many removed symbols, grep can be slow on large codebases. Scope grep to `--include="*.go"` / `--include="*.ts"` rather than all file types; skip `vendor/` and `node_modules/` aggressively.
-5. **Phase B / Phase C (TEST + ADVERSARIAL)**: these run in the parent turn. If the sub-agents in Phase A are still running, proceed to Phase C adversarial reasoning (no tool calls needed) so it's ready to report when Phase A completes.
+5. **Phase B / Phase C (TEST + ADVERSARIAL)**: Pass 4 runs in the parent; Pass 8 runs inline in the parent on opus/sonnet sessions (a Fable session delegates it to a JUDGE sub-agent after Phase A). When Pass 8 is inline and the Phase A sub-agents are still running, proceed to its adversarial reasoning (no tool calls needed) so it's ready to report when Phase A completes.
 
 Never skip a pass to meet the time budget. Mark slow passes with a note ("3d skipped — codegen takes > 30s; run manually with `make generate-types` and check `git diff`") rather than silently omitting them.
 
@@ -460,7 +466,7 @@ Diff shape: <shape>
 [1-2 sentence summary of whether to commit as-is, fix something first, or stop and rethink]
 ```
 
-Each sub-agent pass section ends with its self-refutation tally line (`Self-refutation: X raised, Y refuted, Z reported`); refuted CRITICALs stay visible as "raised then refuted: <evidence>" so the parent can double-check them.
+Each sub-agent pass section ends with its self-refutation tally line (`Self-refutation: X raised, Y refuted, Z reported`); refuted CRITICALs stay visible as "raised then refuted: <evidence>" so the parent can double-check them. When assembling the report, carry the sub-agents' finding lines and tallies verbatim but **strip any process narration** an agent emitted despite the output contract (methodology, "I checked…", restated diff) — findings in the deliverable, never the process.
 
 **How Pass 9 affects the verdict.** Because Pass 9 is whole-project and always-on, a pre-existing dependency issue unrelated to the diff should not hard-block an unrelated commit:
 
@@ -491,59 +497,87 @@ Present the prompt in a copyable code block. Then:
 
 **Delegate passes to sub-agents in parallel.** Passes that only read the diff are self-contained and can run concurrently via the Agent tool. Single-message multi-tool-use batches the launches in parallel.
 
-**Model tiering: ALWAYS pass an explicit `model` on every Agent launch.** Mechanical, rubric-driven passes run on **sonnet**: Pass 1 STRUCTURAL, Pass 3 SPEC DRIFT, Pass 5 TEST COVERAGE, Pass 6 OBSERVABILITY, Pass 7 DOCUMENTATION, Pass 9 FRESHNESS. (Pass 6 is checklist-driven against the observability patterns in `resources/pass-reference.md` § Pass 6, so it rides the sonnet tier.) The judgment pass runs on **opus**: Pass 2 BEHAVIORAL — the highest-stakes finder (data corruption, authz, backward compatibility). Never haiku. Escalation: if a sonnet pass reports any CRITICAL finding, or reports that it could not confidently classify something, the parent re-verifies that specific finding inline before it enters the verdict. (Standing rule regardless of install context: review agents run on sonnet or opus, never haiku.)
+### Model Tiering (session-relative)
 
-### Phase A — Passes 1, 2, 3, 5, 6, 7 (per language) plus Pass 9 FRESHNESS (whole-project) in parallel (single Agent call batch)
+**ALWAYS pass an explicit `model` on every Agent launch** — computed from the session model, not hardcoded. This is load-bearing: since Claude Code v2.1.198 an Agent/`Explore` launch with NO explicit `model` inherits the *parent* (session) model, so an omitted model silently rides the parent tier. Do not soften this "ALWAYS" without understanding that.
 
-Launch all seven as sub-agents in ONE message (seven `Agent` tool uses in a single response for a single-language diff). Each sub-agent gets:
-- The full diff captured in pre-flight (inline, as part of the prompt).
-- The changed files list.
-- A clear, self-contained brief — the sub-agent cannot see the parent conversation, so repeat project context it needs (e.g. "this project uses an OpenAPI spec at `docs/openapi.yaml`, validated via `make validate-openapi`").
-- Explicit output format (e.g. "Report under 300 words. Structure: findings list, each with severity, file:line, one-sentence explanation.").
-- An explicit **`model`** on every Agent call, per the tiering above (sonnet for Passes 1/3/5/6/7, opus for Pass 2).
+Two tiers, both derived from the session model **M** (read your own model from environment/system context during pre-flight):
+- **MECH** — the rote, rubric-driven passes: **1 STRUCTURAL, 3 SPEC DRIFT, 5 TEST COVERAGE, 6 OBSERVABILITY, 7 DOCUMENTATION, 9 FRESHNESS**, plus the parent's own orchestration.
+- **JUDGE** — the merge-gating judgment passes: **2 BEHAVIORAL, 8 ADVERSARIAL, and CRITICAL re-verification**.
 
-**Pass 9 (FRESHNESS) is whole-project: launch it once per review, not once per language block.** Passes 1, 2, 3, 5, 6, 7 fan out per language block from the routing script; FRESHNESS is added once to the same batch no matter how many language blocks the script emits. Its brief:
+| Session **M** | Parent turn | MECH (1,3,5,6,7,9) | JUDGE (2, 8, CRITICAL re-verify) |
+|---|---|---|---|
+| **opus** | opus | **sonnet** | **opus** |
+| **sonnet** | sonnet | sonnet | **sonnet** (trusted for judgment; no escalation) |
+| **fable** | fable | **opus** | **opus** |
+| unknown / haiku / other | = M | **sonnet** (floor) | **opus** |
+
+Reading: an opus session keeps judgment on opus and drops the rote passes to sonnet; a sonnet session stays sonnet everywhere; a **Fable session keeps only the cheap orchestration shell on Fable and escalates every real review pass to opus** — the quality floor wins for that unusual case, so a Fable-session review costs about like an opus review by design. **Never haiku for any pass** — sonnet is the review floor.
+
+**CRITICAL-escalation re-verification** runs at the JUDGE tier: if a MECH pass reports any CRITICAL, or says it could not confidently classify something, that specific finding is re-verified before it enters the verdict — inline in the parent when the parent is already at the JUDGE tier (opus/sonnet sessions), else folded into the dedicated JUDGE (opus) Pass 8 agent (see Phase C).
+
+### Phase A — bundled sub-agents in parallel (single Agent call batch)
+
+Per language block the routing script emits, launch exactly **two** sub-agents, plus **one** whole-project FRESHNESS agent for the review overall — all in ONE message (single-language diff = **3** Agent tool uses; a CDK + Go diff = 2 bundle + 2 Pass 2 + 1 FRESHNESS = **5**):
+
+**1. Mechanical bundle agent — Passes 1, 3, 5, 6, 7 → `general-purpose`, MECH tier.** One agent owns all five rote passes for the block (`general-purpose` because Pass 3 must run generators / spec validators / route-parity tests, not just grep). It reads the diff ONCE and emits **each pass as its own labeled section** (`## Pass 1 — STRUCTURAL`, etc.), findings-or-`Clean` per the output contract, then ONE combined self-refutation tally. Preserving the five distinct headings is what keeps the 9-heading report invariant intact.
+
+**2. Pass 2 BEHAVIORAL → the language specialist, JUDGE tier.** The one pass whose domain knowledge earns a heavyweight specialist (see picks below). For **CDK**, the `cloud-architect` Pass 2 brief ALSO sanity-checks IaC observability (log retention, X-Ray, alarms) since it already reads the CDK diff — this recovers the one specialist signal the bundle would otherwise dilute; the CDK bundle agent still runs Pass 6 for non-IaC-specific gaps.
+
+Each sub-agent gets: the relevant diff (for a single-language diff, the whole diff inline; for a **mixed-language** diff, ONLY this block's hunks per Pre-flight step 6); the changed-files list; a self-contained brief repeating project context it needs (the sub-agent cannot see the parent conversation); the strict output contract (see "Writing sub-agent prompts"); and an explicit **`model`** computed from §"Model Tiering" (MECH for the bundle, JUDGE for Pass 2).
+
+**3. Pass 9 FRESHNESS is whole-project → `general-purpose`, MECH tier.** Launch it ONCE per review, not per language block, added to the same batch no matter how many blocks the script emits. Its brief:
 - The dependency manifests discovered project-wide (or instruct it to discover them with the prune list in Pass 9).
 - The changed files list, used ONLY to prioritize and tag `(diff-touched)` deps. State explicitly that the audit is whole-project and does not depend on the diff.
 - context7 as the primary source for latest version and migration intelligence; a lightweight WebSearch only as a release-recency probe.
-- Output: the recommendation table plus CRITICAL/HIGH severity lines, under about 350 words.
-- **`model: "sonnet"`** (rubric-driven version/table assembly), read-only, never edit or commit.
+- Output: the recommendation table plus CRITICAL/HIGH/UPGRADE-NOW severity lines (per the Pass 9 report format), under about 350 words.
+- read-only, never edit or commit.
 
-**Preferred path: use `chad-review-route.sh` output** (see Pre-flight step 5) — it picks the right specialist per language family in the diff.
+**Preferred path: use `chad-review-route.sh` output** (see Pre-flight step 6) — it prints the mechanical-bundle row plus the right Pass 2 specialist and Context7 hints per language family.
 
-**Fallback defaults** when the routing script is unavailable. These are Go-shaped: adequate for Go cmd Lambdas + shared packages, only OK for other languages. All take an explicit `model` per the tiering above:
-- **Pass 1 (STRUCTURAL)** → `Explore` with thoroughness `medium`. Fast grep-heavy work.
-- **Pass 2 (BEHAVIORAL)** → `feature-dev:code-reviewer` or `general-purpose`. Needs judgment, not speed.
-- **Pass 3 (SPEC DRIFT)** → `general-purpose`. Needs to both read files AND run project-specific commands like spec validators, regeneration scripts, route-parity tests. Include the project's specific commands and paths in the prompt — detect them from the project layout during pre-flight.
-- **Pass 5 (TEST COVERAGE)** → `Explore` with thoroughness `medium`. Locates test files and greps for references to new symbols.
-- **Pass 6 (OBSERVABILITY)** → `feature-dev:code-reviewer` or `general-purpose`. Checklist-driven against the per-language observability patterns in `resources/pass-reference.md`; sonnet handles it well.
-- **Pass 7 (DOCUMENTATION)** → `general-purpose`. Needs to read doc files and compare against the diff; may need to check for presence of godoc/jsdoc/docstrings on new symbols.
+**Fallback picks** when the routing script is unavailable:
+- **Mechanical bundle (Passes 1,3,5,6,7)** → `general-purpose` at MECH tier, for every language. Fast grep + checklist + generator work; the lean built-in avoids the heavyweight-specialist system-prompt overhead that rote passes don't need.
+- **Pass 2 BEHAVIORAL** → the language specialist at JUDGE tier: **Go** `feature-dev:code-reviewer`; **CDK TypeScript** `cloud-architect` (+ IaC observability, Context7 `aws-cdk-lib`); **Next.js / React** `frontend-developer` (Context7 from `package.json`: `next`, `react`, `@tanstack/react-query`, `next-auth`, …); **generic TypeScript / JS** `typescript-pro` (Context7 from imported deps); **iOS Swift** `code-reviewer` (Context7 `swift` + the Apple frameworks the diff imports, per the script). If none matches, `general-purpose`.
 
-For non-Go diffs, the routing script's specialist picks generally produce more accurate findings. The Context7 hints below are *examples* — the script emits the actual frameworks/deps the changed files import, so use whatever it prints:
-- **CDK TypeScript** → `cloud-architect` for behavioral / observability passes (knows IAM idioms, drift sources, asset-path conventions); `typescript-pro` for test coverage. Context7: `aws-cdk-lib`.
-- **Next.js / React** → `frontend-developer` for behavioral / test-coverage / observability (knows React rules-of-hooks, Server-vs-Client components, accessibility). Context7: derived from the project's `package.json` (e.g. `next`, `react`, `@tanstack/react-query`, `next-auth`).
-- **Generic TypeScript / JS** (a Node Lambda, CLI, or library — neither CDK nor Next.js) → `typescript-pro`. Context7: resolved from the deps the changed files import.
-- **iOS Swift** → `code-reviewer` is the best generic match (no native Swift specialist agent exists). Context7: `swift`, plus the Apple frameworks the diff actually imports — the script derives these per-diff (e.g. `StoreKit`, `Vision`, `AuthenticationServices`, `FoundationModels`), so they reflect the project under review rather than any fixed list.
-
-Wait for all Phase A sub-agent results (the per-language passes plus the single FRESHNESS agent) before proceeding.
+Wait for all Phase A sub-agent results (the per-language bundle + Pass 2 agents plus the single FRESHNESS agent) before proceeding.
 
 ### Phase B — Pass 4 (TEST) in the parent turn
 
 Do not delegate tests. Run `go test` / `npx vitest` / `pytest` / etc. directly in the parent so test output streams to the user. Tests may reveal failures that need immediate follow-up, and the parent has the full context to propose fixes.
 
-### Phase C — Pass 8 (ADVERSARIAL) in the parent turn
+### Phase C — Pass 8 (ADVERSARIAL) at the JUDGE tier
 
-Do not delegate. Pass 8 is informed by *everything* the prior passes found — the parent has all that context already, and spinning up a sub-agent would either duplicate the diff read or lose the prior findings. Run adversarial probes inline, using any targeted tool calls (grep, file reads) needed to confirm edge cases. Apply the same self-refutation discipline required of the sub-agents before any Pass 8 finding enters the report.
+Pass 8 is informed by *everything* the prior passes found, and it plus CRITICAL-escalation re-verification run at the **JUDGE tier**. Its execution mode depends on whether the parent is already at that tier:
+
+- **Parent already at the JUDGE tier (opus & sonnet sessions) → run Pass 8 INLINE in the parent.** The parent holds all prior-pass context; running inline avoids re-reading the diff or losing findings. Run adversarial probes inline with any targeted tool calls (grep, file reads) needed to confirm edge cases.
+- **Parent below the JUDGE tier (Fable / unknown sessions) → delegate Pass 8 to a dedicated JUDGE (opus) sub-agent** after Phase A completes. Feed it the full diff plus each prior pass's capped self-refutation digest (the findings + tallies, not raw scratch) so it inherits what it needs; have it also perform the CRITICAL-escalation re-verification for any MECH-pass CRITICALs.
+
+Either way, apply the same self-refutation discipline required of the sub-agents before any Pass 8 finding enters the report.
 
 ### Writing sub-agent prompts
 
 Each sub-agent prompt MUST be self-contained:
-- State the goal in one sentence.
-- Include the full diff or a specific file list (sub-agents cannot see your conversation).
-- Read `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md` and paste ONLY the section(s) for this pass and the language families the routing script detected. This step is mandatory: skipping it silently degrades sub-agent quality.
+- State the goal in one sentence (for the bundle agent: name the five passes it owns).
+- Include the diff (sub-agents cannot see your conversation): the full diff for a single-language review, or ONLY this language block's hunks for a mixed-language review (Pre-flight step 6).
+- Read `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md` ONCE during prompt assembly and paste ONLY the section(s) for the pass(es) this agent owns and the language families the routing script detected — for the bundle agent that is the §Pass 1/3/5/6/7 sections for its language, pasted once. This step is mandatory: skipping it silently degrades sub-agent quality.
 - Name the project's specific spec files / validation commands / test harness / doc locations (detect these during pre-flight; if not found, tell the sub-agent the convention is absent and to mark sub-checks N/A).
-- Specify the output format and word budget.
+- Include the strict output contract below (it replaces any word budget).
 - Remind them: read-only, never edit or commit.
+
+**Strict output contract (paste verbatim into every sub-agent prompt).** This keeps sub-agent output — and the parent's cost to ingest it — minimal, and enforces "findings in the deliverable, never the process":
+
+```
+Output — STRICT, no exceptions:
+- Zero preamble, zero restated diff, zero methodology narration.
+- One line per finding: SEVERITY | file:line | <=15-word finding
+- A pass with no findings outputs exactly: Clean
+- A refuted CRITICAL stays visible: SEVERITY | file:line | finding [refuted: <=10-word evidence]
+- End with exactly: Self-refutation: X raised, Y refuted, Z reported
+(Bundle agent: emit one "## Pass N — NAME" heading per owned pass with its
+ finding lines or "Clean" underneath, then ONE combined Self-refutation line.)
+(Pass 9: emit the recommendation table (that is data), then its severity/
+ UPGRADE-NOW lines as TAG | dep | <=15-word rec, then the tally.)
+```
 
 Example sub-agent prompt skeleton:
 
@@ -564,18 +598,18 @@ Project-specific context (detected during pre-flight):
 Your job:
 <numbered steps specific to this pass>
 
-Before reporting, attempt to refute every finding you raised: re-read the surrounding code and check the classic false-positive causes (grep hit inside a comment, string literal, test fixture, or generated file; a "missing test" actually covered by a differently named or integration test; a "stale doc" statement that still holds; a behavior change explicitly intended per an adjacent comment or the commit message). A finding may be dropped ONLY on concrete evidence (a file:line that disproves it), never on plausibility. Refuted CRITICALs are not deleted: report them as "raised then refuted: <evidence>". End your output with the line: Self-refutation: X raised, Y refuted, Z reported.
+Before reporting, attempt to refute every finding you raised: re-read the surrounding code and check the classic false-positive causes (grep hit inside a comment, string literal, test fixture, or generated file; a "missing test" actually covered by a differently named or integration test; a "stale doc" statement that still holds; a behavior change explicitly intended per an adjacent comment or the commit message). A finding may be dropped ONLY on concrete evidence (a file:line that disproves it), never on plausibility. Refuted CRITICALs are not deleted: report them per the contract.
 
-Output: <format + word budget>. Read-only — do not edit files or run commits.
+<paste the strict output contract here>. Read-only — do not edit files or run commits.
 ```
 
-Example Agent tool call (model is REQUIRED):
+Example Agent tool call (model is REQUIRED — the value comes from §"Model Tiering" for the current session; the bundle rides MECH, Pass 2 rides JUDGE):
 
 ```json
 {
-  "description": "Pass 1 STRUCTURAL review",
-  "subagent_type": "Explore",
-  "model": "sonnet",
+  "description": "Mechanical bundle (Passes 1,3,5,6,7)",
+  "subagent_type": "general-purpose",
+  "model": "<MECH tier for this session — e.g. sonnet on an opus session, opus on a fable session>",
   "prompt": "<self-contained prompt as above>"
 }
 ```
@@ -586,7 +620,7 @@ Example Agent tool call (model is REQUIRED):
 - NEVER commit anything
 - NEVER apply proposed fixes — only show them
 - NEVER silently skip a pass: all 9 passes appear as headings in every Final Report. A pass may return early per the diff-shape matrix (Pre-flight step 5), but only with the explicit line "N/A — not applicable to this diff shape (<shape>)", never by omission
-- ALWAYS pass an explicit `model` per the Execution Strategy tiering (sonnet: Passes 1/3/5/6/7/9; opus: Pass 2); never haiku
+- ALWAYS pass an explicit `model` on every Agent launch, computed from the session model per §"Model Tiering" (MECH for the bundle + Pass 9; JUDGE for Pass 2 + Pass 8); never haiku. The explicit model is load-bearing — an omitted one silently inherits the parent/session tier (since Claude Code v2.1.198).
 - Pass 3 may run type generators, spec validators, and route-parity tests — these are non-destructive
 - If the diff is enormous (50+ files), ask the user if they want to scope the review to specific directories
 - If the project's conventions don't match any of the sub-check patterns, mark "N/A" and continue — don't fail the pass
