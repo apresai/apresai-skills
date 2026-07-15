@@ -2,12 +2,14 @@
 # chad-review-route.sh — pick per-pass subagents based on what's in the diff.
 #
 # WHY THIS EXISTS
-# chad-review's 9-pass STRUCTURE is language-agnostic, but the right reviewer
-# for each pass depends on the codebase under review. Go cmd Lambdas review
-# well with `feature-dev:code-reviewer`; CDK TypeScript wants `cloud-architect`
-# for behavioral + adversarial passes; Next.js React wants `frontend-developer`;
-# iOS Swift has no native specialist agent so we fall back to `code-reviewer`
-# enriched with Context7 docs for the Apple frameworks the diff actually uses.
+# chad-review's 9-pass STRUCTURE is language-agnostic. The rote passes (1,3,5,6,7)
+# now collapse into ONE lean general-purpose "mechanical bundle" agent per language
+# (the MECH tier), so this script's per-language specialization applies to just the
+# Pass 2 BEHAVIORAL pick — the one pass whose domain knowledge earns a heavyweight
+# specialist. Go behavioral review wants `feature-dev:code-reviewer`; CDK TypeScript
+# wants `cloud-architect` (which also covers IaC observability); Next.js React wants
+# `frontend-developer`; iOS Swift has no native specialist so we fall back to
+# `code-reviewer`, enriched with Context7 docs for the frameworks the diff imports.
 #
 # PROJECT-AGNOSTIC BY DESIGN
 # This script does NOT assume fixed directory names. It adapts to whatever the
@@ -157,20 +159,22 @@ echo "Files detected:"
 [[ -n "$other_files" ]] && echo "  Other / unclassified     : $(cnt "$other_files")"
 echo
 
-# emit_block <lang> <p1> <p2> <p3> <p5> <p6> <p7> <ctx>
+# emit_block <lang> <pass2_specialist> <spec_hint> <ctx>
+# BUNDLING MODEL: the rote passes (1,3,5,6,7) collapse into ONE general-purpose
+# agent at the MECH tier; only Pass 2 BEHAVIORAL keeps a per-language specialist,
+# at the JUDGE tier. <spec_hint> is the SPEC-DRIFT command hint for the bundle's
+# Pass 3 (regen/validate/route-parity), surfaced on the bundle row.
 emit_block() {
-  local lang="$1" p1="$2" p2="$3" p3="$4" p5="$5" p6="$6" p7="$7" ctx="$8"
+  local lang="$1" pass2="$2" spec_hint="$3" ctx="$4"
   cat <<EOF
 --- Routing: $lang ---
-  Pass 1 STRUCTURAL          → $p1
-  Pass 2 BEHAVIORAL          → $p2
-  Pass 3 SPEC DRIFT          → $p3
-  Pass 5 TEST COVERAGE       → $p5
-  Pass 6 OBSERVABILITY       → $p6
-  Pass 7 DOCUMENTATION       → $p7
+  Mechanical bundle (Passes 1,3,5,6,7) → general-purpose        [MECH tier]
+      Pass 3 SPEC DRIFT hint             : $spec_hint
+  Pass 2 BEHAVIORAL                    → $pass2   [JUDGE tier]
 EOF
-  [[ -n "$ctx" ]] && echo "  Context7 enrichment        → $ctx"
-  echo "  (Pass 4 TEST runs in parent; Pass 8 ADVERSARIAL runs in parent)"
+  [[ "$lang" == CDK* ]] && echo "      (+ IaC observability: log retention / X-Ray / alarms folded into the Pass 2 brief)"
+  [[ -n "$ctx" ]] && echo "  Context7 enrichment                  → $ctx"
+  echo "  (Pass 4 TEST → parent; Pass 8 ADVERSARIAL → parent on opus/sonnet, else JUDGE sub-agent)"
   echo
 }
 
@@ -186,22 +190,14 @@ cdk_spec_cmd="general-purpose (cdk synth + cdk diff after build; or tsc --noEmit
 
 # --- Go ---------------------------------------------------------------------
 [[ -n "$go_files" ]] && emit_block "Go" \
-  "Explore (thoroughness: medium)" \
   "feature-dev:code-reviewer" \
   "$go_spec_cmd" \
-  "Explore (thoroughness: medium)" \
-  "feature-dev:code-reviewer" \
-  "general-purpose" \
   ""
 
 # --- CDK TypeScript ---------------------------------------------------------
 [[ -n "$cdk_files" ]] && emit_block "CDK TypeScript ($(first_dir "$cdk_files" || echo infra))" \
-  "Explore (thoroughness: medium)" \
   "cloud-architect" \
   "$cdk_spec_cmd" \
-  "typescript-pro" \
-  "cloud-architect" \
-  "general-purpose" \
   "context7: aws-cdk-lib (current construct APIs), aws-cloudformation"
 
 # --- Next.js / React --------------------------------------------------------
@@ -222,23 +218,15 @@ if [[ -n "$web_files" ]]; then
   fi
   [[ "$web_ctx" == "context7:" ]] && web_ctx="context7: next.js (App Router), react (Server Components)"
   emit_block "Next.js / React ($web_dir)" \
-    "Explore (thoroughness: medium)" \
     "frontend-developer" \
     "$web_spec_cmd" \
-    "frontend-developer" \
-    "frontend-developer" \
-    "general-purpose" \
     "$web_ctx"
 fi
 
 # --- Generic TypeScript / JS (neither CDK nor Next.js) ----------------------
 [[ -n "$ts_files" ]] && emit_block "TypeScript / JS (generic — $(first_dir "$ts_files" || echo .))" \
-  "Explore (thoroughness: medium)" \
   "typescript-pro" \
-  "general-purpose" \
-  "typescript-pro" \
-  "typescript-pro" \
-  "general-purpose" \
+  "tsc --noEmit; regen API types if the project defines codegen" \
   "context7: (resolve from package.json deps the changed files import)"
 
 # --- iOS / Apple Swift ------------------------------------------------------
@@ -255,12 +243,8 @@ if [[ -n "$swift_files" ]]; then
   swift_ctx="context7: swift (current syntax)"
   [[ -n "$fw" ]] && swift_ctx+=" + the frameworks the diff imports: $fw"
   emit_block "iOS / Apple Swift ($(first_dir "$swift_files" || echo ios))" \
-    "Explore (thoroughness: medium)" \
     "code-reviewer" \
     "$swift_spec_cmd" \
-    "code-reviewer" \
-    "code-reviewer" \
-    "general-purpose" \
     "$swift_ctx"
 fi
 
@@ -268,12 +252,8 @@ fi
 if [[ -z "$go_files$cdk_files$web_files$ts_files$swift_files" ]]; then
   if [[ -n "$yaml_specs$md_files" ]]; then
     emit_block "Docs / spec only" \
-      "(skip — no symbol removals possible)" \
-      "(skip)" \
-      "${lint_target:+general-purpose ($lint_target + grep for stale prose refs)}" \
-      "(skip)" \
-      "(skip)" \
-      "general-purpose" \
+      "(skip — docs carry no behavioral pass; docs-only diff shape runs inline)" \
+      "${lint_target:+$lint_target + }grep for stale prose refs; Pass 7 DOCUMENTATION is the real work" \
       ""
   fi
 fi
@@ -289,13 +269,17 @@ fi
 
 echo "==========================================="
 echo "Notes:"
-echo "  - Model tiering per the chad-review Execution Strategy: model: \"sonnet\" for"
-echo "    Passes 1/3/5/6/7/9, model: \"opus\" for Pass 2 (BEHAVIORAL). Never haiku."
+echo "  - Model tiering is SESSION-RELATIVE (chad-review §Model Tiering): compute"
+echo "    MECH and JUDGE from the current session model. opus session → MECH=sonnet,"
+echo "    JUDGE=opus; sonnet → both sonnet; fable → MECH=opus, JUDGE=opus. Never haiku."
+echo "    The bundle (Passes 1,3,5,6,7) + Pass 9 ride MECH; Pass 2 + Pass 8 ride JUDGE."
+echo "  - Pass 9 FRESHNESS → general-purpose [MECH], whole-project: launch it ONCE"
+echo "    per review, not per language block, and not from the routing above."
+echo "  - Pass 4 TEST → parent. Pass 8 ADVERSARIAL → inline in the parent on an"
+echo "    opus/sonnet session, else a dedicated JUDGE (opus) sub-agent (fable)."
 echo "  - Context7 hints are framework names — the agent should resolve to a"
 echo "    library ID and fetch docs at audit start, then reason against current"
 echo "    semantics (not pre-training knowledge that may be stale)."
-echo "  - For mixed-language diffs, spawn one set of agents per language block"
-echo "    above. Passes 1, 2, 3, 5, 6, 7 are per-language; the parent merges"
-echo "    findings into a single Final Report."
-echo "  - Pass 9 FRESHNESS is whole-project: launch it once per review, not"
-echo "    per language block, and not from the routing above."
+echo "  - For mixed-language diffs, spawn the bundle + Pass 2 agents per language"
+echo "    block above (each scoped to ONLY that block's hunks), plus one whole-"
+echo "    project Pass 9; the parent merges findings into a single Final Report."
