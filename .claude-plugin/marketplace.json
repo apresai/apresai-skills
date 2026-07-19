@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "apresai-skills",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Production-ready skills and plugins for Claude Code by apresai",
   "owner": {
     "name": "apresai",
@@ -11,7 +11,7 @@
     {
       "name": "apple-release",
       "description": "Apple app release automation for TestFlight and App Store Connect. Includes /release, /release-testflight, /release-consistency, /release-xcodecloud, and /app-store-audit (pre-submission risk audit against the full App Store Review Guidelines — project/binary AND App Store Connect metadata). Supports iOS, macOS, watchOS, visionOS.",
-      "version": "1.6.0",
+      "version": "1.6.1",
       "author": {
         "name": "apresai"
       },
@@ -61,7 +61,7 @@
     {
       "name": "chad-review",
       "description": "9-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across structural, behavioral, spec-drift, test, test-coverage, observability, documentation, adversarial, and dependency-freshness dimensions. Diff-shape aware (small diffs skip the fan-out). Token-efficient: rote passes bundle into one mechanical agent per language (3 sub-agents, not 7), session-relative sonnet/opus/fable model tiering, read-only.",
-      "version": "1.9.0",
+      "version": "1.9.1",
       "author": {
         "name": "Chad Neal"
       },

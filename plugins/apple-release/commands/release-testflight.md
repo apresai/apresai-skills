@@ -125,13 +125,14 @@ accidental churn:
 1. **Stale-build hygiene** — if the previous archive for this project failed or behaved oddly,
    clear derived data first: `rm -rf ~/Library/Developer/Xcode/DerivedData/<project>*`. Skip when
    the last build was clean (a full rebuild costs minutes).
-2. **Confirmation gate** — show the user the app, version, and current build number, and get an
-   explicit yes before running the upload. If the Makefile bumps the build number inside the
-   upload target itself (see Step 3), say so: "current build N, upload will carry N+1". Never
-   proceed on inference.
-3. **Nth-upload pushback** — if this is the 2nd+ TestFlight upload this session, push back:
-   "This is upload #N this session. Are all changes tested? Should we batch more fixes first?"
-   Proceed only if the user confirms.
+2. **State what you're uploading, then proceed** — when the user has asked to push a build, name
+   the app, version, and build number and go (if the Makefile bumps inside the upload target, say
+   so: "current build N, upload carries N+1"). Do NOT block for an explicit yes on a push the user
+   already requested, and do NOT push back on a repeat upload — deliberate, repeated TestFlight
+   pushes are normal in a dev cycle, and a monotonic bump-on-success pipeline already prevents
+   build-number collisions. Only stop if something is actually wrong (a real blocker), not for
+   ceremony. Ask first only when the user did NOT clearly ask to upload (e.g. an ambiguous "ship it"
+   mid-task).
 
 ## Step 3: Build and upload
 
