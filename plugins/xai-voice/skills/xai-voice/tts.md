@@ -201,9 +201,9 @@ audio.
   `sales@x.ai`. **No public numeric TTS rate limit exists**, and there is no self-service
   tier upgrade for voice. **[docs]**
 
-Practical read: TTS tolerated far more parallelism in one test than Google Cloud TTS (150 RPM)
-or Gemini AI Studio (10 RPM) permit. But that was a **single burst of 12**, not a sustained-rate
-measurement, and it does not establish a safe steady-state ceiling. Treat 8 to 12 workers as a
+Practical read: a **single burst of 12** concurrent requests all succeeded. That is not a
+sustained-rate measurement and establishes no steady-state ceiling, so it cannot be compared
+against the published per-minute limits of Google Cloud TTS or Gemini AI Studio. Treat 8 to 12 workers as a
 starting point, watch for 429s under your own sustained load, and keep exponential backoff
 regardless: an unpublished ceiling is not an absent one. See `go-client.md` for the tuning detail.
 

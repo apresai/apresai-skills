@@ -65,7 +65,7 @@ Five things that surprise everyone: **[live]**
 3. **Output is always mono**, at every sample rate. There is no stereo option.
 4. **Omitting `output_format` silently downgrades** to 24 kHz / 128 kbps.
 5. **Bracket tags are never silently ignored.** At N=6 per condition on voice `luna`, every
-   bracketed form measurably lengthened the audio versus baseline (baseline mean 1.272 s,
+   bracketed form lengthened the audio versus baseline on the mean (baseline mean 1.272 s,
    `[laugh]` 2.428 s, `[laughs]` 2.232 s, and the nonsense `[flibbertigibbet]` 2.088 s). So
    passing unrecognized bracketed text straight through is not safe. What the model actually
    vocalizes for an unrecognized tag is **unverified**: duration alone cannot separate "a

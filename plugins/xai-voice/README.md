@@ -24,7 +24,7 @@ Plus two behaviors documented nowhere that *change the audio instead of raising 
 - **There is no `model` field on `/v1/tts`.** Sending one returns 200 and is ignored.
   (Re-confirmed with an object-valued probe, which detects fields of every scalar type.)
 - **Bracket speech tags are never silently ignored.** At N=6 per condition, every bracketed
-  form lengthened the audio versus a 1.272 s baseline, including a nonsense token:
+  form lengthened the mean audio versus a 1.272 s baseline, including a nonsense token:
   `[laugh]` 2.428 s, `[laughs]` 2.232 s, `[flibbertigibbet]` 2.088 s. So unrecognized
   bracketed text must be normalized or stripped before sending. What the model actually
   vocalizes for one is **unverified**: duration cannot distinguish a rendered laugh from the

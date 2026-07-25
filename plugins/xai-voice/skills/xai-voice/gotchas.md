@@ -79,7 +79,9 @@ Measured at N=6 per condition on identical wording (voice `luna`), mean duration
 1.272 s (sd 0.057), `[laugh]` 2.428 s (sd 0.280), `[laughs]` 2.232 s (sd 0.365),
 `[flibbertigibbet]` 2.088 s (sd 0.426). **[live]**
 
-> **What is proven:** a bracketed token, recognized or not, measurably lengthens the output.
+> **What is proven:** a bracketed token, recognized or not, lengthens the output **on the mean**.
+> The nonsense token's range dips just below both baseline ranges at its low end, so this is a
+> shift in distribution, not a guarantee on any single render.
 > Nothing is silently stripped, so unfiltered bracketed text is unsafe.
 > **What is UNVERIFIED:** *which* sound is produced. The `[laugh]` and `[laughs]`
 > distributions overlap heavily, and duration cannot separate "rendered a laugh" from
