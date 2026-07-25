@@ -127,7 +127,8 @@ is invisible to users, even if its directory is perfect. Add an entry:
 ```
 
 The `version` here and the `version` in that plugin's `plugin.json` must
-stay in sync. Nothing enforces it, so check both when bumping.
+stay in sync. `make validate-versions` enforces this, and runs as part of
+`make validate`, so a mismatch fails the check rather than shipping.
 
 ## Adding a new plugin
 
@@ -156,23 +157,27 @@ that earned the bump.
 ## Makefile
 
 ```bash
-make validate     # marketplace.json schema, plugin.json manifests, directory structure
-make desktop      # zip each skills/<name>/ into dist/ for Claude Desktop sideload
-make version      # print the current marketplace version
-make bump-patch   # marketplace version only (also bump-minor, bump-major)
-make clean        # remove dist/ and stray .pyc / __pycache__ / .DS_Store
+make validate          # runs all four validate-* checks below
+make validate-versions # plugin.json versions match their marketplace.json entries
+make desktop           # zip each skills/<name>/ into dist/ for Claude Desktop sideload
+make version           # print the current marketplace version
+make bump-patch        # marketplace version only (also bump-minor, bump-major)
+make clean             # remove dist/ and stray .pyc / __pycache__ / .DS_Store
 ```
 
 `make validate` is the check to run before opening a PR. It verifies that
 `marketplace.json` is valid JSON with `name`, `owner`, and a `plugins`
 array; that every `plugin.json` is valid JSON with a `name` and, if it
-declares `commands`, that those paths start with `./`; and that every
-`skills/<name>/` directory contains a `SKILL.md`.
+declares `commands`, that those paths start with `./`; that every
+`skills/<name>/` directory contains a `SKILL.md`; and that every plugin's
+version matches its `marketplace.json` entry with the two plugin lists
+agreeing in both directions.
 
-The `deploy` targets bump the version, commit, tag, and push to `main`
-directly. That bypasses the pull-request workflow this repo otherwise
-follows, so prefer merging content through a PR first and treating deploy
-as a tagging step afterward.
+The `deploy` targets refuse to start from a dirty tree, prompt if you are
+not on `main`, then bump the marketplace version, commit, tag, and push to
+`main` directly. That last part bypasses the pull-request workflow this
+repo otherwise follows, so prefer merging content through a PR first and
+treating deploy as a tagging step afterward.
 
 ## Working in this repo
 

@@ -44,18 +44,18 @@ plugins/<name>/
 The `Makefile` handles version bumping, validation, packaging, and releases:
 
 ```bash
-make validate         # JSON schema + structure check
+make validate         # JSON schema, structure, and plugin/marketplace version parity
 make deploy           # marketplace patch bump + commit + tag + push
 make deploy-minor     # marketplace minor bump + commit + tag + push
 make deploy-major     # marketplace major bump + commit + tag + push
 make desktop          # zip skills for Claude Desktop sideload
 ```
 
-All `deploy*` targets require a clean working tree (content commits land first), then bump the marketplace version and tag.
+All `deploy*` targets refuse to start from a dirty tree (content commits land first) and prompt if you are not on `main`, then bump the marketplace version, commit, tag, and push.
 
 ## Claude Desktop sideload
 
-For skills available on Claude Desktop (currently `bubbletea-design`), zip files are attached to each GitHub release:
+For skills available on Claude Desktop (currently `bubbletea-design`, `codex-br`, and `xai-voice`, i.e. every plugin that ships a `skills/` directory), zip files are attached to each GitHub release:
 
 ```
 https://github.com/apresai/apresai-skills/releases/latest
