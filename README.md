@@ -25,7 +25,7 @@ After Claude Code reloads, the skills below are available via slash commands.
 
 ## Versioning
 
-The marketplace itself follows semver. Individual plugins evolve at their own pace — see each plugin's own version in `plugins/<name>/.claude-plugin/plugin.json`.
+The marketplace itself follows semver, tracked in the top-level `version` field of `.claude-plugin/marketplace.json` and in git tags. Individual plugins evolve at their own pace, so a plugin's version lives in two places that must agree: `plugins/<name>/.claude-plugin/plugin.json` and that plugin's entry in `marketplace.json`. Bump a plugin by editing both as part of the change that earned it; the `make bump-*` targets move the marketplace version only and leave per-plugin versions alone.
 
 ## How it's built
 
@@ -45,13 +45,13 @@ The `Makefile` handles version bumping, validation, packaging, and releases:
 
 ```bash
 make validate         # JSON schema + structure check
-make deploy           # patch bump + commit + tag + push
-make deploy-minor     # minor bump + commit + tag + push
-make deploy-major     # major bump + commit + tag + push
+make deploy           # marketplace patch bump + commit + tag + push
+make deploy-minor     # marketplace minor bump + commit + tag + push
+make deploy-major     # marketplace major bump + commit + tag + push
 make desktop          # zip skills for Claude Desktop sideload
 ```
 
-All `deploy*` targets require a clean working tree (content commits land first), then bump versions and tag.
+All `deploy*` targets require a clean working tree (content commits land first), then bump the marketplace version and tag.
 
 ## Claude Desktop sideload
 
