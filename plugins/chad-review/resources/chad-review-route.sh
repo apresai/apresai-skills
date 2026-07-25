@@ -63,16 +63,16 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 # Capture the changed-file list. Tolerate brand-new repos with no HEAD by
 # suppressing git stderr; an empty `files` triggers the no-changes path below.
 if [[ "$mode" == "last-commit" ]]; then
-  files=$(git -c core.quotepath=false show --stat --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' || true)
+  files=$(git -C "$repo_root" -c core.quotepath=false show --stat --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' || true)
 else
   # Three sources: tracked changes vs HEAD, staged-but-not-yet-vs-HEAD, and
   # untracked. Union them. In a brand-new repo with no HEAD the first call
   # errors silently and we rely on the latter two. The trailing `|| true` is
   # load-bearing: the group takes its last command's status, and pipefail
   # propagates that through `sort`, so a failing `git ls-files` would abort.
-  files=$( { git -c core.quotepath=false diff HEAD --name-only 2>/dev/null;
-             git -c core.quotepath=false diff --cached --name-only 2>/dev/null;
-             git -c core.quotepath=false ls-files --others --exclude-standard 2>/dev/null; } | sort -u || true )
+  files=$( { git -C "$repo_root" -c core.quotepath=false diff HEAD --name-only 2>/dev/null;
+             git -C "$repo_root" -c core.quotepath=false diff --cached --name-only 2>/dev/null;
+             git -C "$repo_root" -c core.quotepath=false ls-files --others --exclude-standard 2>/dev/null; } | sort -u || true )
 fi
 [[ -n "$path_prefix" ]] && files=$(echo "$files" | grep -F "$path_prefix" || true)
 
@@ -123,7 +123,7 @@ go_files=""; swift_files=""; cdk_files=""; web_files=""; ts_files=""
 yaml_specs=""; md_files=""; other_files=""
 
 # Pre-locate marker dirs once (pruned find, capped depth) for ancestry fallback.
-prune=( -name node_modules -o -name .git -o -name cdk.out -o -name .next -o -name build -o -name dist -o -name DerivedData -o -name vendor )
+prune=( -name node_modules -o -name .git -o -name .claude -o -name cdk.out -o -name .next -o -name build -o -name dist -o -name DerivedData -o -name vendor )
 cdk_marker_dirs=$(find "$repo_root" -maxdepth 5 \( "${prune[@]}" \) -prune -o -name cdk.json -exec dirname {} \; 2>/dev/null | sort -u || true)
 next_marker_dirs=$(find "$repo_root" -maxdepth 5 \( "${prune[@]}" \) -prune -o \( -name 'next.config.js' -o -name 'next.config.mjs' -o -name 'next.config.ts' -o -name 'next.config.cjs' \) -exec dirname {} \; 2>/dev/null | sort -u || true)
 
@@ -343,16 +343,17 @@ is_exec_md() {
     *"/commands/"*|"commands/"*|*"/agents/"*|"agents/"*|*"/skills/"*|"skills/"*) ;;
     *) return 1 ;;
   esac
-  # A commands|agents|skills path counts when it sits under a plugin root.
+  # A commands|agents|skills path counts only as a plugin root's OWN top-level
+  # commands/, agents/, or skills/ directory. A bare `$root/*` prefix match also
+  # swallowed `$root/vendor/lib/skills/README.md`, and it contradicted the
+  # standalone-plugin branch, which was top-level-only. Same rule both ways.
+  local pre
   while IFS= read -r root; do
     [[ -z "$root" ]] && continue
-    if [[ "$root" == "." ]]; then
-      # Plugin published as its own repo: only its TOP-level commands/agents/
-      # skills dir is plugin content, not one nested arbitrarily deep.
-      [[ "$f" == commands/* || "$f" == agents/* || "$f" == skills/* ]] && return 0
-    else
-      [[ "$f" == "$root"/* ]] && return 0
-    fi
+    if [[ "$root" == "." ]]; then pre=""; else pre="$root/"; fi
+    case "$f" in
+      "$pre"commands/*|"$pre"agents/*|"$pre"skills/*) return 0 ;;
+    esac
   done <<< "$plugin_root_dirs"
   # A DELETED file cannot be confirmed from disk, and neither can its plugin root
   # if the whole plugin was deleted with it. Ask git what was there in HEAD
@@ -375,10 +376,12 @@ is_exec_md() {
   return 1
 }
 
-exec_md=""
+# One pass: is_exec_md can shell out to `git cat-file` for deleted files, so
+# calling it twice per file doubled that cost on a large plugin deletion.
+exec_md=""; prose_md=""
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
-  is_exec_md "$f" && exec_md+="$f"$'\n'
+  if is_exec_md "$f"; then exec_md+="$f"$'\n'; else prose_md+="$f"$'\n'; fi
 done <<< "$md_files$yaml_specs"
 
 # Emitted regardless of whether code files are also present. Gating this on a
@@ -396,12 +399,7 @@ fi
 # code or executable content so no changed file is left unmentioned: a README
 # next to a CLAUDE.md, or an OpenAPI spec next to Go, used to vanish from the
 # routing entirely, which is the silent drop this script's header rules out.
-prose_md=""
-while IFS= read -r f; do
-  [[ -z "$f" ]] && continue
-  is_exec_md "$f" || prose_md+="$f"$'\n'
-done <<< "$md_files$yaml_specs"
-
+# `prose_md` is the complement of `exec_md`, both built by the single pass above.
 if [[ -n "$prose_md" ]]; then
   emit_block "Docs / spec ($(cnt "$prose_md") file(s), $(first_dir "$prose_md" || echo .))" \
     "-" \
