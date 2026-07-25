@@ -71,35 +71,41 @@ case "$cmd" in
     # Never destroy the previous backup: it may be the only surviving copy of a
     # file the last review lost. Rotate it aside instead.
     if [[ -d "$BK" ]]; then
-      # Unique even for two backups in the same second, which `date` alone is
-      # not: a failed `mv` would leave the previous run's entries in place and
-      # they would then look like files that vanished.
-      # Zero-padded counter so a plain lexical sort is chronological even when
-      # two rotations land in the same second. Sorting by name then needs no
-      # `stat`, whose flags differ between BSD and GNU (`-f` means
-      # --file-system on GNU and would emit filesystem info into the prune list).
-      ts=$(date +%Y%m%d-%H%M%S); i=0
+      # Name is `prev-<ts>-<NNN>`: `date` alone is not unique for two backups in
+      # the same second, and a failed `mv` would leave the previous run's entries
+      # in place, where they would then look like files that vanished.
+      #
+      # The counter starts ABOVE every counter already present for this second,
+      # not at the first free slot. Pruning frees the low numbers, so a
+      # first-free-slot search would hand the NEWEST rotation the LOWEST name,
+      # and the prune below (which orders by name) would then delete it first,
+      # keeping the five oldest instead of the five newest.
+      ts=$(date +%Y%m%d-%H%M%S)
+      last=$({ find "$base" -maxdepth 1 -name "prev-$ts-*" -print 2>/dev/null || true; } \
+             | sed "s|.*/prev-$ts-||" | LC_ALL=C sort -n | tail -1)
+      # 10# so a zero-padded counter is read as decimal, not octal (008 is not
+      # a valid octal literal and would abort the script under `set -e`).
+      if [[ -n "$last" ]]; then i=$((10#$last + 1)); else i=0; fi
       dest=$(printf '%s/prev-%s-%03d' "$base" "$ts" "$i")
       while [[ -e "$dest" ]]; do i=$((i+1)); dest=$(printf '%s/prev-%s-%03d' "$base" "$ts" "$i"); done
       mv "$BK" "$dest" || { echo "could not rotate previous backup aside" >&2; exit 1; }
     fi
-    # Keep the 5 most recent rotations; unbounded copies of a large tree add up.
     # Capture the listing ONCE, up front: running it twice raced the check
     # against the data it was meant to validate.
     listing=$(mktemp); trap 'rm -f "$listing"' EXIT
     list_untracked > "$listing" 2>/dev/null || { echo "could not list untracked files; refusing to claim a backup" >&2; exit 1; }
     mkdir -p "$BK"; chmod 700 "$base" "$BK"
-    # Keep the newest 5 rotations. Names are timestamp-ordered, so a plain sort
-    # is chronological and avoids parsing `ls`. The `|| true` is load-bearing:
-    # under `pipefail` a find over a not-yet-existing dir would abort the script,
-    # which is the same class of bug this file has hit repeatedly.
-    # Keep the newest 5. Names are `prev-<ts>-<NNN>` with a zero-padded counter,
-    # so a reverse lexical sort is newest-first with no `stat` and no portability
-    # question. `|| true` throughout: an empty match is normal, and under
-    # `pipefail` it would otherwise abort the run.
-    { find "$base" -maxdepth 1 -name 'prev-*' -print 2>/dev/null || true; } \
-      | LC_ALL=C sort -r | tail -n +6 \
-      | while IFS= read -r old; do [[ -n "$old" ]] && rm -rf "$old"; done || true
+    # Keep the newest 5 rotations; unbounded copies of a large tree add up.
+    # Ordering is by NAME, so no `stat`, whose flags differ between BSD and GNU
+    # (`-f` means --file-system on GNU and would emit filesystem info straight
+    # into a list feeding `rm -rf`). Sort the basenames, not the full paths, so
+    # dashes in $TMPDIR cannot shift the field positions: date and time reverse
+    # lexically, the counter reverse NUMERICALLY so a 4-digit counter still
+    # sorts above 999. `|| true` because an empty match is normal and would
+    # otherwise abort under `pipefail`.
+    { find "$base" -maxdepth 1 -name 'prev-*' -exec basename {} \; 2>/dev/null || true; } \
+      | LC_ALL=C sort -t- -k2,2r -k3,3r -k4,4nr | tail -n +6 \
+      | while IFS= read -r old; do [[ -n "$old" ]] && rm -rf "${base:?}/$old"; done || true
     n=0; failed=0
     while IFS= read -r -d '' f; do
       mkdir -p "$BK/$(dirname -- "$f")"
@@ -127,10 +133,19 @@ case "$cmd" in
     trap 'rm -f "$live" "$saved" "$raw"' EXIT
     list_untracked > "$raw" 2>/dev/null || { echo "could not list untracked files; cannot verify" >&2; exit 2; }
 
-    # Count PATHS (NUL-separated records) that contain a newline. `grep -c` on a
-    # `\n` pattern does not work under BSD grep, and awk with RS="\0" is portable.
-    nl_count=$(awk 'BEGIN{RS="\0"} /\n/{c++} END{print c+0}' < "$raw")
-    [[ "$nl_count" -gt 0 ]] && echo "warning: $nl_count untracked path(s) contain a newline; not covered by this check" >&2
+    # Count PATHS (NUL-separated records) that contain a newline, using the same
+    # `read -r -d ''` idiom `backup` uses. Two shorter spellings were tried and
+    # both were silently wrong: `grep -c '\n'` never matches under BSD grep, and
+    # `awk 'BEGIN{RS="\0"}'` sets RS to the EMPTY string under BWK awk (the only
+    # awk on stock macOS), which is paragraph mode, so it examined just the first
+    # path. Verified: `awk 'BEGIN{RS="\0"; print length(RS)}'` prints 0 there.
+    nl_count=0
+    while IFS= read -r -d '' p; do
+      case $p in *$'\n'*) nl_count=$((nl_count+1)) ;; esac
+    done < "$raw"
+    if [[ "$nl_count" -gt 0 ]]; then
+      echo "warning: $nl_count untracked path(s) contain a newline; not covered by this check" >&2
+    fi
     tr '\0' '\n' < "$raw" | LC_ALL=C sort > "$live"
     ( cd "$BK" && find . \( -type f -o -type l \) -print | sed 's|^\./||' ) | LC_ALL=C sort > "$saved"
     candidates=$(LC_ALL=C comm -13 "$live" "$saved" || true)

@@ -28,7 +28,12 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 # other paths, so point both at the scratch dir. Without this a personal
 # ~/.config/git/ignore entry could make a fixture file invisible and fail the run.
 export HOME="$WORKDIR" XDG_CONFIG_HOME="$WORKDIR/xdg"
-mkdir -p "$XDG_CONFIG_HOME"
+# TMPDIR too: the guard derives its backup root from it, so without this every
+# run leaves a backup tree (and up to five rotations each) under the real one.
+# It also makes the rotation assertions hermetic rather than dependent on
+# whatever a previous run left behind.
+export TMPDIR="$WORKDIR/tmp"
+mkdir -p "$XDG_CONFIG_HOME" "$TMPDIR"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
@@ -158,20 +163,44 @@ r10=$(newrepo) || exit 99; usable "$r10"; printf 'x\n' > "$r10/clean.txt"
 ( cd "$r10" && bash "$GUARD" backup >/dev/null 2>&1 )
 noise=$( cd "$r10" && bash "$GUARD" verify 2>&1 1>/dev/null )
 check "verify is silent on stderr for a clean tree" "$noise" ""
+out=$( cd "$r10" && bash "$GUARD" verify 2>/dev/null ); rc=$?
+check "clean-tree verify exits 0" "$rc" "0"
+check "clean-tree verify says so on stdout" "$out" "all untracked files survived the review"
 
+# The newline path is deliberately NOT the first record: an earlier attempt at
+# this check only inspected the first path, and a fixture where the bad name
+# sorted first certified it as working. `a-plain.txt` sorts ahead of `bad\n...`.
 r11=$(newrepo) || exit 99; usable "$r11"
+printf 'x\n' > "$r11/a-plain.txt"
 printf 'x\n' > "$r11/$(printf 'bad\nname.txt')" 2>/dev/null
 ( cd "$r11" && bash "$GUARD" backup >/dev/null 2>&1 )
-if ( cd "$r11" && bash "$GUARD" verify 2>&1 1>/dev/null ) | grep -q newline; then
-  ok "newline-in-path warning fires"
+if ( cd "$r11" && bash "$GUARD" verify 2>&1 1>/dev/null ) | grep -q 'warning: 1 untracked path'; then
+  ok "newline warning fires when the bad path is not first"
 else
-  bad "newline-in-path warning fires"
+  bad "newline warning fires when the bad path is not first"
 fi
 
-r12=$(newrepo) || exit 99; usable "$r12"; printf 'x\n' > "$r12/f.txt"
-for _ in 1 2 3 4 5 6 7 8; do ( cd "$r12" && bash "$GUARD" backup >/dev/null 2>&1 ); done
-b12=$(dirname "$( cd "$r12" && bash "$GUARD" backup 2>/dev/null )")
-check "rotations pruned to newest 5" "$(find "$b12" -maxdepth 1 -name 'prev-*' | wc -l | tr -d ' ')" "5"
+# Prune keeps the NEWEST five, not just five. Each round leaves exactly one
+# untracked file, so every rotation is stamped with the generation it holds.
+#
+# `date` is stubbed to a fixed second so EVERY rotation collides. That is the
+# only condition under which the ordering can go wrong, and it needs at least
+# six rotations in one second, so a plain loop reaches a new second first and
+# certifies broken code as working. Without the stub this case passed against
+# a guard that kept the five OLDEST.
+mkdir -p "$WORKDIR/stub"
+printf '#!/bin/sh\necho 20260101-000000\n' > "$WORKDIR/stub/date"
+chmod +x "$WORKDIR/stub/date"
+r12=$(newrepo) || exit 99; usable "$r12"
+for g in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  rm -f "$r12"/gen*.txt 2>/dev/null || true; printf 'x\n' > "$r12/gen$g.txt"
+  b12=$( cd "$r12" && PATH="$WORKDIR/stub:$PATH" bash "$GUARD" backup 2>/dev/null )
+done
+b12=$(dirname "$b12")
+check "same-second rotations pruned to 5" "$(find "$b12" -maxdepth 1 -name 'prev-*' | wc -l | tr -d ' ')" "5"
+kept=$(find "$b12" -maxdepth 1 -name 'prev-*' -exec sh -c 'ls "$1" | head -1' _ {} \; \
+       | sed 's/[^0-9]//g' | LC_ALL=C sort -n | tr '\n' ' ')
+check "the five KEPT same-second rotations are the newest" "$kept" "7 8 9 10 11 "
 
 echo
 echo "passed: $pass   failed: $fail"
