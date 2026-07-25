@@ -178,8 +178,10 @@ other than `main`, then validate, package, and only then bump the
 marketplace version, commit, tag, and push. Every validation step runs
 before anything writes a version file, so a failed check never strands a
 half-applied bump. A failure later in the commit/tag/push sequence still
-can, since the bump is on disk by then; recover with `git checkout
-.claude-plugin/marketplace.json`. Since deploy pushes to `main` directly it is a
+can, since the bump is on disk and staged by then; recover with
+`git checkout HEAD -- .claude-plugin/marketplace.json` (the bare
+`git checkout <path>` form restores from the index and does nothing here).
+Since deploy pushes to `main` directly it is a
 tagging step, not a review step: merge content through a PR first, then
 release from `main`.
 

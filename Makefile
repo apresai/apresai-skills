@@ -56,7 +56,11 @@ bump-patch:
 		echo "❌ ERROR: could not write marketplace.json (disk full, read-only mount, or permissions?)"; \
 		exit 1; \
 	fi; \
-	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
+	if ! mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; then \
+		rm -f .claude-plugin/marketplace.json.tmp; \
+		echo "❌ ERROR: could not replace marketplace.json"; \
+		exit 1; \
+	fi; \
 	echo "✅ Marketplace version is now $$NEW_VERSION (per-plugin versions untouched)"
 
 # Bump minor version (1.0.0 -> 1.1.0)
@@ -73,7 +77,11 @@ bump-minor:
 		echo "❌ ERROR: could not write marketplace.json (disk full, read-only mount, or permissions?)"; \
 		exit 1; \
 	fi; \
-	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
+	if ! mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; then \
+		rm -f .claude-plugin/marketplace.json.tmp; \
+		echo "❌ ERROR: could not replace marketplace.json"; \
+		exit 1; \
+	fi; \
 	echo "✅ Marketplace version is now $$NEW_VERSION (per-plugin versions untouched)"
 
 # Bump major version (1.0.0 -> 2.0.0)
@@ -89,7 +97,11 @@ bump-major:
 		echo "❌ ERROR: could not write marketplace.json (disk full, read-only mount, or permissions?)"; \
 		exit 1; \
 	fi; \
-	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
+	if ! mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; then \
+		rm -f .claude-plugin/marketplace.json.tmp; \
+		echo "❌ ERROR: could not replace marketplace.json"; \
+		exit 1; \
+	fi; \
 	echo "✅ Marketplace version is now $$NEW_VERSION (per-plugin versions untouched)"
 
 # Validate marketplace.json schema
@@ -247,8 +259,11 @@ desktop:
 # file, so a failed check never strands a half-applied bump.
 #
 # A failure in the commit/tag/push sequence that follows still can, because
-# the bump is on disk by then. Recover with:
-#   git checkout .claude-plugin/marketplace.json
+# the bump is on disk AND staged by then (release_and_push runs git add
+# before git commit). Recovery must therefore come from HEAD, not the index:
+#   git checkout HEAD -- .claude-plugin/marketplace.json
+# A bare `git checkout .claude-plugin/marketplace.json` restores from the
+# index and is a no-op here.
 check-clean:
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "❌ ERROR: Working directory is not clean. Commit or stash first."; \
