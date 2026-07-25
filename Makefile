@@ -258,12 +258,19 @@ desktop:
 # then bump-*), every VALIDATION step runs before anything writes a version
 # file, so a failed check never strands a half-applied bump.
 #
-# A failure in the commit/tag/push sequence that follows still can, because
-# the bump is on disk AND staged by then (release_and_push runs git add
-# before git commit). Recovery must therefore come from HEAD, not the index:
-#   git checkout HEAD -- .claude-plugin/marketplace.json
-# A bare `git checkout .claude-plugin/marketplace.json` restores from the
-# index and is a no-op here.
+# A failure in the commit/tag/push sequence that follows still can, and the
+# right recovery depends on WHERE it failed:
+#
+#   git commit rejected (hook, gpgsign): the bump is on disk and staged,
+#   HEAD is unchanged. Recover from HEAD, not the index:
+#       git checkout HEAD -- .claude-plugin/marketplace.json
+#   The bare `git checkout <path>` form restores from the index, which holds
+#   the bump, so it is a no-op here.
+#
+#   commit succeeded but git tag or git push failed: the bump is already
+#   committed, so the command above does nothing. Fix the cause and re-run
+#   the release, or unwind with
+#       git reset --hard HEAD~1 && git tag -d "v<version>"
 check-clean:
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "❌ ERROR: Working directory is not clean. Commit or stash first."; \
