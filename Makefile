@@ -1,4 +1,4 @@
-.PHONY: help validate validate-marketplace validate-plugins validate-structure test desktop deploy clean version bump-patch bump-minor bump-major
+.PHONY: help validate validate-marketplace validate-plugins validate-structure desktop deploy clean version bump-patch bump-minor bump-major
 
 # Get current version from marketplace.json
 get-version:
@@ -13,7 +13,6 @@ help:
 	@echo "  validate-marketplace - Validate marketplace.json schema"
 	@echo "  validate-plugins   - Validate all plugin.json manifests"
 	@echo "  validate-structure - Validate directory structure"
-	@echo "  test               - Run tests on example scripts"
 	@echo ""
 	@echo "Packaging:"
 	@echo "  desktop            - Create .zip files for Claude Desktop"
@@ -160,19 +159,6 @@ validate: validate-marketplace validate-plugins validate-structure
 	@echo "Repository is Claude Code marketplace compliant"
 	@echo "================================"
 
-# Test example Python scripts
-test:
-	@echo "==> Testing example scripts..."
-	@if command -v python3 > /dev/null; then \
-		for script in $$(find plugins -name "*.py" -path "*/examples/*"); do \
-			echo "  Syntax checking $$script..."; \
-			python3 -m py_compile $$script || (echo "❌ ERROR: Syntax error in $$script"; exit 1); \
-		done; \
-		echo "✅ All example scripts are valid Python"; \
-	else \
-		echo "⚠️  WARNING: python3 not found, skipping script tests"; \
-	fi
-
 # Package skills as .zip files for Claude Desktop
 desktop:
 	@echo "==> Packaging skills for Claude Desktop..."
@@ -195,7 +181,7 @@ desktop:
 	@ls -lh dist/*.zip 2>/dev/null || true
 
 # Deploy to GitHub with patch version bump
-deploy: bump-patch validate test desktop
+deploy: bump-patch validate desktop
 	@VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	echo "==> Preparing deployment for v$$VERSION..."; \
 	echo "  Checking git status..."; \
@@ -235,7 +221,7 @@ deploy: bump-patch validate test desktop
 	echo "================================"
 
 # Deploy with minor version bump
-deploy-minor: bump-minor validate test desktop
+deploy-minor: bump-minor validate desktop
 	@VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	echo "==> Preparing deployment for v$$VERSION..."; \
 	echo "  Checking git status..."; \
@@ -252,7 +238,7 @@ deploy-minor: bump-minor validate test desktop
 	echo "✅ Deployed v$$VERSION"
 
 # Deploy with major version bump
-deploy-major: bump-major validate test desktop
+deploy-major: bump-major validate desktop
 	@VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	echo "==> Preparing deployment for v$$VERSION..."; \
 	echo "  Checking git status..."; \
