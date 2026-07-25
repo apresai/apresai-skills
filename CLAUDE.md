@@ -15,7 +15,7 @@ It is a content repository, not a software project. There is no build, no
 test suite, and no application code. What ships is markdown: skill and
 command definitions that get loaded into a Claude Code session, plus the
 JSON manifests that let Claude Code discover them. The `Makefile` only
-validates structure, packages zips, and tags releases.
+validates structure and tags releases.
 
 The bar for content here is that it comes from something real. Skills are
 mined from production projects and live API probes, not from
@@ -159,10 +159,9 @@ that earned the bump.
 ```bash
 make validate          # runs all four validate-* checks below
 make validate-versions # plugin.json versions match their marketplace.json entries
-make desktop           # zip each skills/<name>/ into dist/ for Claude Desktop sideload
 make version           # print the current marketplace version
 make bump-patch        # marketplace version only (also bump-minor, bump-major)
-make clean             # remove dist/ and stray .pyc / __pycache__ / .DS_Store
+make clean             # remove stray .pyc / __pycache__ / .DS_Store
 ```
 
 `make validate` is the check to run before opening a PR. It verifies that
@@ -174,8 +173,8 @@ version matches its `marketplace.json` entry with the two plugin lists
 agreeing in both directions.
 
 The `deploy` targets refuse to run from a dirty tree or from any branch
-other than `main`, then validate, package, and only then bump the
-marketplace version, commit, tag, and push. Every validation step runs
+other than `main`, then validate and only then bump the marketplace
+version, commit, tag, and push. Every validation step runs
 before anything writes a version file, so a failed check never strands a
 half-applied bump. A failure later in the commit/tag/push sequence still
 can, and recovery depends on where it failed. If `git commit` was rejected,
