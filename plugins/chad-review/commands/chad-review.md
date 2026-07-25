@@ -59,7 +59,10 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    It prints the backup path; **put that path in the report header** so the files
    are recoverable even if this session dies. A non-zero exit means something
    could not be backed up: stop and tell the user rather than reviewing an
-   unprotected tree.
+   unprotected tree. That includes exit 127 on an install predating the script
+   (unlike `chad-review-route.sh`, this one has no fallback and is not meant to
+   have one: routing degrades to a worse default, but skipping the guard silently
+   drops the only thing standing behind the read-only guarantee).
 
 3. **Announce the target and tier** in one line, mapping your session model per
    §"Model tiering":
@@ -538,7 +541,11 @@ One pass, holding every finding at once:
    bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/untracked-guard.sh" verify --restore
    ```
 
-   Exit 0 means every untracked file is still there. Exit 1 means one or more
+   Exit 0 means every untracked file the guard covers is still there. **Read its
+   stderr, not just the exit code**: a path containing a literal newline cannot be
+   compared safely (the comparison is line-based) and the guard warns about it on
+   stderr while still exiting 0. Pass that warning through to the user, because
+   for those paths exit 0 is not a survival guarantee. Exit 1 means one or more
    vanished during the review; `--restore` puts back the ones it can and names
    any it could not, which stay recoverable from the backup path it prints. Exit
    2 means the guard could not run at all (no backup was taken, or the tree is
