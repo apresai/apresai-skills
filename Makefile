@@ -116,6 +116,7 @@ validate-marketplace:
 	@jq -e '.owner' .claude-plugin/marketplace.json > /dev/null || (echo "❌ ERROR: Missing required field: owner"; exit 1)
 	@jq -e '.plugins' .claude-plugin/marketplace.json > /dev/null || (echo "❌ ERROR: Missing required field: plugins"; exit 1)
 	@jq -e '.plugins | if type == "array" then true else false end' .claude-plugin/marketplace.json > /dev/null || (echo "❌ ERROR: plugins must be an array"; exit 1)
+	@jq -e '.version // "" | test("^[0-9]+\\.[0-9]+\\.[0-9]+$$")' .claude-plugin/marketplace.json > /dev/null || (echo "❌ ERROR: top-level version must be present and semver (X.Y.Z)"; exit 1)
 	@echo "✅ marketplace.json is valid"
 
 # Validate all plugin.json manifests
