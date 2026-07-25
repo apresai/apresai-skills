@@ -141,10 +141,7 @@ stay in sync. `make validate-versions` enforces this, and runs as part of
    `commands/` versus `skills/` split table, and the version range under
    Versioning. Three separate reviews have caught this file going stale
    because the checklist stopped at `README.md`.
-6. If the plugin ships a `skills/` directory, add it to the Claude Desktop
-   list in `README.md`: `make desktop` globs `plugins/*/skills/*`, so it
-   will be packaged whether or not the docs say so.
-7. Run `make validate`.
+6. Run `make validate`.
 
 ## Versioning
 
