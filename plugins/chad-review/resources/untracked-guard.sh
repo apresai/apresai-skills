@@ -74,27 +74,32 @@ case "$cmd" in
       # Unique even for two backups in the same second, which `date` alone is
       # not: a failed `mv` would leave the previous run's entries in place and
       # they would then look like files that vanished.
-      dest="$base/prev-$(date +%Y%m%d-%H%M%S)"; i=0
-      while [[ -e "$dest" ]]; do i=$((i+1)); dest="$base/prev-$(date +%Y%m%d-%H%M%S)-$i"; done
+      # Zero-padded counter so a plain lexical sort is chronological even when
+      # two rotations land in the same second. Sorting by name then needs no
+      # `stat`, whose flags differ between BSD and GNU (`-f` means
+      # --file-system on GNU and would emit filesystem info into the prune list).
+      ts=$(date +%Y%m%d-%H%M%S); i=0
+      dest=$(printf '%s/prev-%s-%03d' "$base" "$ts" "$i")
+      while [[ -e "$dest" ]]; do i=$((i+1)); dest=$(printf '%s/prev-%s-%03d' "$base" "$ts" "$i"); done
       mv "$BK" "$dest" || { echo "could not rotate previous backup aside" >&2; exit 1; }
     fi
     # Keep the 5 most recent rotations; unbounded copies of a large tree add up.
     # Capture the listing ONCE, up front: running it twice raced the check
     # against the data it was meant to validate.
-    listing=$(mktemp)
-    list_untracked > "$listing" 2>/dev/null || { rm -f "$listing"; echo "could not list untracked files; refusing to claim a backup" >&2; exit 1; }
+    listing=$(mktemp); trap 'rm -f "$listing"' EXIT
+    list_untracked > "$listing" 2>/dev/null || { echo "could not list untracked files; refusing to claim a backup" >&2; exit 1; }
     mkdir -p "$BK"; chmod 700 "$base" "$BK"
     # Keep the newest 5 rotations. Names are timestamp-ordered, so a plain sort
     # is chronological and avoids parsing `ls`. The `|| true` is load-bearing:
     # under `pipefail` a find over a not-yet-existing dir would abort the script,
     # which is the same class of bug this file has hit repeatedly.
-    # Newest first by mtime, then drop everything past the 5th. Sorting by name
-    # is wrong once a same-second collision adds a `-1` suffix, which sorts above
-    # the bare name and would prune the newer entry.
-    { find "$base" -maxdepth 1 -name 'prev-*' -exec stat -f '%m %N' {} + 2>/dev/null \
-      || find "$base" -maxdepth 1 -name 'prev-*' -printf '%T@ %p\n' 2>/dev/null || true; } \
-      | LC_ALL=C sort -rn | cut -d' ' -f2- | tail -n +6 \
-      | while IFS= read -r old; do [[ -n "$old" ]] && rm -rf "$old"; done
+    # Keep the newest 5. Names are `prev-<ts>-<NNN>` with a zero-padded counter,
+    # so a reverse lexical sort is newest-first with no `stat` and no portability
+    # question. `|| true` throughout: an empty match is normal, and under
+    # `pipefail` it would otherwise abort the run.
+    { find "$base" -maxdepth 1 -name 'prev-*' -print 2>/dev/null || true; } \
+      | LC_ALL=C sort -r | tail -n +6 \
+      | while IFS= read -r old; do [[ -n "$old" ]] && rm -rf "$old"; done || true
     n=0; failed=0
     while IFS= read -r -d '' f; do
       mkdir -p "$BK/$(dirname -- "$f")"
@@ -105,8 +110,7 @@ case "$cmd" in
       else
         echo "BACKUP FAILED: $f" >&2; failed=$((failed+1))
       fi
-    done < <(cat "$listing")
-    rm -f "$listing"
+    done < "$listing"
     echo "$BK"
     echo "backed up $n untracked file(s)" >&2
     [[ $failed -eq 0 ]] || { echo "$failed file(s) could not be backed up; do not review an unprotected tree" >&2; exit 1; }
@@ -117,13 +121,17 @@ case "$cmd" in
     # The comparison below is line-based (comm has no NUL mode), so a filename
     # containing a literal newline cannot be compared safely. Name them and skip
     # rather than silently mis-pairing them with another file.
-    list_untracked >/dev/null 2>&1 || { echo "could not list untracked files; cannot verify" >&2; exit 2; }
-    # Counts PATHS containing a newline, not newline characters.
-    nl_count=$(list_untracked | tr '\0' '\001' | grep -c '\n' 2>/dev/null || echo 0)
-    [[ "${nl_count:-0}" -gt 0 ]] && echo "warning: $nl_count untracked path(s) contain a newline; not covered by this check" >&2
-    live="$(mktemp)"; saved="$(mktemp)"
-    trap 'rm -f "$live" "$saved"' EXIT
-    list_untracked | tr '\0' '\n' | LC_ALL=C sort > "$live"
+    # Capture the listing ONCE, as backup does: three separate calls raced the
+    # same data the checks are meant to agree about.
+    live="$(mktemp)"; saved="$(mktemp)"; raw="$(mktemp)"
+    trap 'rm -f "$live" "$saved" "$raw"' EXIT
+    list_untracked > "$raw" 2>/dev/null || { echo "could not list untracked files; cannot verify" >&2; exit 2; }
+
+    # Count PATHS (NUL-separated records) that contain a newline. `grep -c` on a
+    # `\n` pattern does not work under BSD grep, and awk with RS="\0" is portable.
+    nl_count=$(awk 'BEGIN{RS="\0"} /\n/{c++} END{print c+0}' < "$raw")
+    [[ "$nl_count" -gt 0 ]] && echo "warning: $nl_count untracked path(s) contain a newline; not covered by this check" >&2
+    tr '\0' '\n' < "$raw" | LC_ALL=C sort > "$live"
     ( cd "$BK" && find . \( -type f -o -type l \) -print | sed 's|^\./||' ) | LC_ALL=C sort > "$saved"
     candidates=$(LC_ALL=C comm -13 "$live" "$saved" || true)
 

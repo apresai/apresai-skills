@@ -20,10 +20,16 @@ GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/untracked-guard.sh"
 # ignores a fixture file makes `git commit` fail, and an unredirected failure
 # message would otherwise become the fixture PATH (see newrepo). Everything below
 # also runs under a scratch HOME so nothing reads or writes the real one.
-export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-WORKDIR=$(mktemp -d)
+WORKDIR=$(mktemp -d) || { echo "cannot create scratch dir" >&2; exit 99; }
+[[ -d "$WORKDIR" ]] || { echo "scratch dir is not a directory" >&2; exit 99; }
 trap 'rm -rf "$WORKDIR"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+# GIT_CONFIG_GLOBAL does not cover the XDG ignore file, and HOME is read for
+# other paths, so point both at the scratch dir. Without this a personal
+# ~/.config/git/ignore entry could make a fixture file invisible and fail the run.
+export HOME="$WORKDIR" XDG_CONFIG_HOME="$WORKDIR/xdg"
+mkdir -p "$XDG_CONFIG_HOME"
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; }
@@ -143,6 +149,29 @@ base=$(dirname "$( cd "$r7" && bash "$GUARD" backup 2>/dev/null )")
 d=$(mktemp -d "$WORKDIR/nogit.XXXXXX"); ( cd "$d" && bash "$GUARD" backup >/dev/null 2>&1 ); check "non-git exits 2" "$?" "2"
 r8=$(newrepo) || exit 99; usable "$r8"; ( cd "$r8" && bash "$GUARD" verify >/dev/null 2>&1 ); check "verify with no backup exits 2" "$?" "2"
 ( cd "$r8" && bash "$GUARD" bogus >/dev/null 2>&1 ); check "unknown subcommand exits 2" "$?" "2"
+
+# --- 10. behaviours added after the suite was written ------------------------
+r9=$(newrepo) || exit 99; usable "$r9"
+( cd "$r9" && bash "$GUARD" backup --restore >/dev/null 2>&1 ); check "backup --restore is a usage error" "$?" "2"
+
+r10=$(newrepo) || exit 99; usable "$r10"; printf 'x\n' > "$r10/clean.txt"
+( cd "$r10" && bash "$GUARD" backup >/dev/null 2>&1 )
+noise=$( cd "$r10" && bash "$GUARD" verify 2>&1 1>/dev/null )
+check "verify is silent on stderr for a clean tree" "$noise" ""
+
+r11=$(newrepo) || exit 99; usable "$r11"
+printf 'x\n' > "$r11/$(printf 'bad\nname.txt')" 2>/dev/null
+( cd "$r11" && bash "$GUARD" backup >/dev/null 2>&1 )
+if ( cd "$r11" && bash "$GUARD" verify 2>&1 1>/dev/null ) | grep -q newline; then
+  ok "newline-in-path warning fires"
+else
+  bad "newline-in-path warning fires"
+fi
+
+r12=$(newrepo) || exit 99; usable "$r12"; printf 'x\n' > "$r12/f.txt"
+for _ in 1 2 3 4 5 6 7 8; do ( cd "$r12" && bash "$GUARD" backup >/dev/null 2>&1 ); done
+b12=$(dirname "$( cd "$r12" && bash "$GUARD" backup 2>/dev/null )")
+check "rotations pruned to newest 5" "$(find "$b12" -maxdepth 1 -name 'prev-*' | wc -l | tr -d ' ')" "5"
 
 echo
 echo "passed: $pass   failed: $fail"

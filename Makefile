@@ -49,7 +49,7 @@ validate-scripts:
 		if $$runner bash "$$t" > "$$out" 2>&1; then \
 			echo "  ✅ $$(basename $$t) passed"; \
 		else \
-			echo "  ❌ $$(basename $$t) FAILED"; tail -25 "$$out"; rm -f "$$out"; exit 1; \
+			echo "  ❌ $$(basename $$t) FAILED"; cat "$$out"; rm -f "$$out"; exit 1; \
 		fi; \
 	done; \
 	rm -f "$$out"; \
