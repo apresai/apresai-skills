@@ -51,7 +51,7 @@ make deploy-major     # marketplace major bump + commit + tag + push
 make desktop          # zip skills for Claude Desktop sideload
 ```
 
-All `deploy*` targets refuse to start from a dirty tree (content commits land first) and prompt if you are not on `main`, then bump the marketplace version, commit, tag, and push.
+All `deploy*` targets refuse to run from a dirty tree or from a branch other than `main` (content commits land first, via a PR), then validate, package, and only then bump the marketplace version, commit, tag, and push.
 
 ## Claude Desktop sideload
 

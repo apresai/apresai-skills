@@ -43,7 +43,8 @@ version:
 
 # Bump patch version (1.0.0 -> 1.0.1)
 bump-patch:
-	@CURRENT=$$(jq -r '.version' .claude-plugin/marketplace.json); \
+	@set -e; \
+	CURRENT=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	MAJOR=$$(echo $$CURRENT | cut -d. -f1); \
 	MINOR=$$(echo $$CURRENT | cut -d. -f2); \
 	PATCH=$$(echo $$CURRENT | cut -d. -f3); \
@@ -56,7 +57,8 @@ bump-patch:
 
 # Bump minor version (1.0.0 -> 1.1.0)
 bump-minor:
-	@CURRENT=$$(jq -r '.version' .claude-plugin/marketplace.json); \
+	@set -e; \
+	CURRENT=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	MAJOR=$$(echo $$CURRENT | cut -d. -f1); \
 	MINOR=$$(echo $$CURRENT | cut -d. -f2); \
 	NEW_MINOR=$$((MINOR + 1)); \
@@ -68,7 +70,8 @@ bump-minor:
 
 # Bump major version (1.0.0 -> 2.0.0)
 bump-major:
-	@CURRENT=$$(jq -r '.version' .claude-plugin/marketplace.json); \
+	@set -e; \
+	CURRENT=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	MAJOR=$$(echo $$CURRENT | cut -d. -f1); \
 	NEW_MAJOR=$$((MAJOR + 1)); \
 	NEW_VERSION="$$NEW_MAJOR.0.0"; \
@@ -155,11 +158,27 @@ validate-versions:
 	for plugin_dir in plugins/*; do \
 		[ -d "$$plugin_dir" ] || continue; \
 		manifest="$$plugin_dir/.claude-plugin/plugin.json"; \
-		name=$$(jq -r '.name' "$$manifest"); \
+		if [ ! -f "$$manifest" ]; then \
+			echo "❌ ERROR: $$plugin_dir has no .claude-plugin/plugin.json"; \
+			FAILED=1; \
+			continue; \
+		fi; \
+		name=$$(jq -r '.name // ""' "$$manifest"); \
+		if [ -z "$$name" ]; then \
+			echo "❌ ERROR: $$manifest has no name field"; \
+			FAILED=1; \
+			continue; \
+		fi; \
 		plugin_version=$$(jq -r '.version // ""' "$$manifest"); \
-		market_version=$$(jq -r --arg n "$$name" '.plugins[] | select(.name == $$n) | .version // ""' .claude-plugin/marketplace.json); \
-		if [ -z "$$market_version" ]; then \
+		entry=$$(jq -c --arg n "$$name" '[.plugins[] | select(.name == $$n)] | first // empty' .claude-plugin/marketplace.json); \
+		if [ -z "$$entry" ]; then \
 			echo "❌ ERROR: $$name is not registered in marketplace.json"; \
+			FAILED=1; \
+			continue; \
+		fi; \
+		market_version=$$(printf '%s' "$$entry" | jq -r '.version // ""'); \
+		if [ -z "$$plugin_version" ] || [ -z "$$market_version" ]; then \
+			echo "❌ ERROR: $$name is missing a version (plugin.json='$$plugin_version', marketplace.json='$$market_version')"; \
 			FAILED=1; \
 		elif [ "$$plugin_version" != "$$market_version" ]; then \
 			echo "❌ ERROR: $$name version mismatch: plugin.json=$$plugin_version marketplace.json=$$market_version"; \
@@ -206,9 +225,11 @@ desktop:
 	@echo "✅ Desktop packages created in dist/"
 	@ls -lh dist/*.zip 2>/dev/null || true
 
-# Refuse to start a release from a dirty tree. This runs BEFORE any bump
-# target writes a version file, so an aborted release never leaves a
-# half-applied version behind.
+# Refuse to start a release from a dirty tree. Together with the deploy
+# prerequisite order (check-clean, check-branch, validate, desktop, and only
+# then bump-*), this means every step that can fail runs BEFORE anything
+# writes a version file, so an aborted release never strands a half-applied
+# bump in the working tree.
 check-clean:
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "❌ ERROR: Working directory is not clean. Commit or stash first."; \
@@ -216,17 +237,17 @@ check-clean:
 		exit 1; \
 	fi
 
-# Confirm before releasing from a branch other than main.
+# Releases are cut from main, and this is a refusal rather than a prompt.
+# The release commits to the CURRENT branch and then pushes origin main, so
+# continuing from a feature branch would publish a tag pointing at a commit
+# main does not contain. A prompt also cannot be answered when stdin is not
+# a terminal.
 check-branch:
 	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
 	if [ "$$BRANCH" != "main" ]; then \
-		echo "⚠️  WARNING: Not on main branch (current: $$BRANCH)"; \
-		printf "Continue? [y/N] "; \
-		read REPLY; \
-		case "$$REPLY" in \
-			[Yy]*) ;; \
-			*) echo "Deployment cancelled"; exit 1 ;; \
-		esac; \
+		echo "❌ ERROR: releases must be cut from main (currently on $$BRANCH)."; \
+		echo "Merge your PR first, then run this from main."; \
+		exit 1; \
 	fi
 
 # Commit the marketplace version bump, tag, and push.
@@ -234,6 +255,7 @@ check-branch:
 # anything else being dirty is an unrelated edit and check-clean already
 # rejected it.
 define release_and_push
+	set -e; \
 	VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
 	echo "==> Deploying v$$VERSION..."; \
 	git add .claude-plugin/marketplace.json; \
@@ -245,7 +267,7 @@ define release_and_push
 endef
 
 # Deploy to GitHub with patch version bump
-deploy: check-clean check-branch bump-patch validate desktop
+deploy: check-clean check-branch validate desktop bump-patch
 	@$(release_and_push); \
 	echo ""; \
 	echo "================================"; \
@@ -256,11 +278,11 @@ deploy: check-clean check-branch bump-patch validate desktop
 	echo "================================"
 
 # Deploy with minor version bump
-deploy-minor: check-clean check-branch bump-minor validate desktop
+deploy-minor: check-clean check-branch validate desktop bump-minor
 	@$(release_and_push)
 
 # Deploy with major version bump
-deploy-major: check-clean check-branch bump-major validate desktop
+deploy-major: check-clean check-branch validate desktop bump-major
 	@$(release_and_push)
 
 # Clean build artifacts

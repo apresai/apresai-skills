@@ -173,11 +173,13 @@ declares `commands`, that those paths start with `./`; that every
 version matches its `marketplace.json` entry with the two plugin lists
 agreeing in both directions.
 
-The `deploy` targets refuse to start from a dirty tree, prompt if you are
-not on `main`, then bump the marketplace version, commit, tag, and push to
-`main` directly. That last part bypasses the pull-request workflow this
-repo otherwise follows, so prefer merging content through a PR first and
-treating deploy as a tagging step afterward.
+The `deploy` targets refuse to run from a dirty tree or from any branch
+other than `main`, then validate, package, and only then bump the
+marketplace version, commit, tag, and push. Everything that can fail runs
+before anything writes a version file, so an aborted release never strands
+a half-applied bump. Since deploy pushes to `main` directly it is a
+tagging step, not a review step: merge content through a PR first, then
+release from `main`.
 
 ## Working in this repo
 
