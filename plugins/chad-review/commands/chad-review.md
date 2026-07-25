@@ -43,26 +43,36 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    and a clean tree means say "Nothing to review" and STOP. Either way, build the
    **changed files list**.
 
-   **Back up untracked files before any fan-out.** This skill's read-only
-   guarantee is enforced by prompt wording, not by tool restriction: the reviewer
-   agents are `general-purpose` and language specialists, which hold Bash, Edit,
-   and Write. On 2026-06-14 a review sub-agent ran a red/green experiment of its
-   own and "restored" the tree with a git command that sweeps untracked files;
-   an untracked test file under review was gone from disk afterwards, while the
-   review reported success. Copy every `??` file somewhere outside the repo
-   first, and keep the copies until the change is merged:
+   **Back up untracked files first.** This skill's read-only guarantee is
+   enforced by prompt wording, not by tool restriction: the reviewer agents are
+   `general-purpose` and language specialists, which hold Bash, Edit, and Write,
+   and Phase 2 runs the project's own test and codegen commands. On 2026-06-14 a
+   review sub-agent ran a red/green experiment of its own and "restored" the tree
+   with a git command that sweeps untracked files; an untracked test file under
+   review was gone from disk afterwards, while the review reported success. Any
+   of those paths can take an untracked file with it, so back them up on every
+   working-tree review, including the `light` shape where FRESHNESS may still
+   launch and Phase 2 still runs tests.
+
+   The path must be **deterministic and announced**, because the restore happens
+   in a later Bash call and `$$` is a different PID by then:
 
    ```bash
-   mkdir -p "${TMPDIR:-/tmp}/chad-review-untracked-$$"
-   git ls-files --others --exclude-standard -z \
-     | xargs -0 -I{} cp --parents "{}" "${TMPDIR:-/tmp}/chad-review-untracked-$$/" 2>/dev/null \
-     || git ls-files --others --exclude-standard | while IFS= read -r f; do
-          mkdir -p "${TMPDIR:-/tmp}/chad-review-untracked-$$/$(dirname "$f")"
-          cp "$f" "${TMPDIR:-/tmp}/chad-review-untracked-$$/$f"
-        done
+   BK="${TMPDIR:-/tmp}/chad-review-untracked/$(git rev-parse --show-toplevel | shasum | cut -c1-12)"
+   rm -rf "$BK"; mkdir -p "$BK"; chmod 700 "$BK"
+   git -C "$(git rev-parse --show-toplevel)" ls-files --others --exclude-standard -z \
+     | while IFS= read -r -d '' f; do
+         mkdir -p "$BK/$(dirname "$f")" && cp -p "$f" "$BK/$f" || echo "BACKUP FAILED: $f"
+       done
+   echo "untracked backup: $BK"
    ```
 
-   (The fallback branch is for BSD/macOS `cp`, which has no `--parents`.)
+   `-z` and `read -d ''` are load-bearing: without them a path containing a
+   space, a newline, or a non-ASCII character is split or C-quoted and silently
+   skipped. `ls-files` is run from the repo root so a subdirectory invocation
+   still sees the whole tree. **Print the `BK` path in the report header** so a
+   human can recover the files even if this session dies. Any `BACKUP FAILED`
+   line means stop and tell the user rather than reviewing an unprotected tree.
 3. **Announce the target and tier** in one line, mapping your session model per
    §"Model tiering":
    `Chad Review: working tree (2 staged, 3 unstaged, 1 untracked), opus session, MECH=sonnet JUDGE=opus`
@@ -534,12 +544,25 @@ One pass, holding every finding at once:
    **cannot** drop it: failing to confirm is not evidence of absence, and only
    step 3's rule removes a finding. An unconfirmed CRITICAL stays in the report,
    marked `[unconfirmed]`, and still counts toward the verdict.
-5. **Confirm the working tree survived.** Re-run
-   `git status --porcelain` and compare the `??` list against the backup from
-   pre-flight step 2. Any untracked file that is missing was deleted by a
-   sub-agent despite the read-only instruction: restore it from the backup, and
-   report it at the top of the review as a CRITICAL of the review process itself,
-   not of the diff. Never report a verdict on a tree you have not confirmed still
+5. **Confirm the working tree survived.** Compare the live untracked file list
+   against the backup. Use `git ls-files`, NOT `git status --porcelain`: porcelain
+   collapses an untracked directory to a single `sub/` entry, so a file deleted
+   inside one would not show up as missing.
+
+   ```bash
+   diff <(git ls-files --others --exclude-standard | sort) \
+        <(cd "$BK" && find . -type f | sed 's|^\./||' | sort)
+   ```
+
+   Lines present in the backup and absent from the tree are files that vanished
+   during the review. Restore them (`cp -p "$BK/<path>" "<path>"`), and report it
+   at the top of the review as a CRITICAL **of the review process**, not of the
+   diff, naming the file and stating that the cause is unattributed: a sub-agent,
+   a project test, or a codegen step could each have done it. This does not by
+   itself change the GO/NO-GO verdict on the diff, which is judged on its own
+   findings; it is a warning that the tree was mutated under review. Files
+   present in the tree but not the backup are new artifacts, which is normal and
+   not a finding. Never issue a verdict on a tree you have not confirmed still
    holds the files you reviewed.
 6. **Write the verdict.**
 
@@ -743,12 +766,14 @@ question: the fix prompt is already in the report body.
 
 ## Rules
 
-- NEVER edit a source file, commit, or apply a proposed fix. Show it only. This
-  binds the sub-agents too, but it is only prompt-enforced: they hold Bash, Edit,
-  and Write, so a sub-agent that "restores" the tree with `git stash -u`,
-  `git clean`, or `git checkout` can destroy untracked files under review. That
-  is why pre-flight step 2 backs them up and Phase 2 step 5 verifies they
-  survived.
+- NEVER edit a source file, commit, or apply a proposed fix. Show it only. The
+  single exception is Phase 2 step 5 restoring a file that vanished during the
+  review, which puts the tree back as it was rather than changing the diff.
+- This read-only rule binds the sub-agents too, but it is only prompt-enforced:
+  they hold Bash, Edit, and Write, and Phase 2 runs the project's own test and
+  codegen commands. A `git stash -u`, `git clean`, or `git checkout` from any of
+  those destroys untracked files under review. That is why pre-flight step 2
+  backs them up and step 5 verifies they survived.
 - NEVER silently skip a pass. All six appear as headings in every report. A pass
   may return early per the shape matrix, but only with the explicit line
   "N/A - not applicable to this diff shape (<shape>)". The same holds one level
