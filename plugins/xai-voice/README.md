@@ -34,11 +34,11 @@ Plus two behaviors documented nowhere that *change the audio instead of raising 
 
 | File | What's in it |
 |---|---|
-| `skills/xai-voice/SKILL.md` | Router + the TTS-vs-STT-vs-S2S decision table + 60-second quickstart |
-| `skills/xai-voice/tts.md` | Full `POST /v1/tts` contract, 26-voice catalog, output formats, speech tags, limits, pricing, voice cloning |
-| `skills/xai-voice/go-client.md` | Production Go client, error classification, retry/concurrency/timeout tuning, Grok chat with strict JSON |
-| `skills/xai-voice/realtime.md` | STT and Speech-to-Speech: event protocol, session config, SIP/telephony, ephemeral tokens, LiveKit |
-| `skills/xai-voice/gotchas.md` | Doc-vs-live discrepancies, the traps, and the zero-cost schema-discovery technique |
+| `SKILL.md` | Router + the TTS-vs-STT-vs-S2S decision table + 60-second quickstart |
+| `tts.md` | Full `POST /v1/tts` contract, 26-voice catalog, output formats, speech tags, limits, pricing, voice cloning |
+| `go-client.md` | Production Go client, error classification, retry/concurrency/timeout tuning, Grok chat with strict JSON |
+| `realtime.md` | STT and Speech-to-Speech: event protocol, session config, SIP/telephony, ephemeral tokens, LiveKit |
+| `gotchas.md` | Doc-vs-live discrepancies, the traps, and the zero-cost schema-discovery technique |
 
 ## The technique worth stealing
 
