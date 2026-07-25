@@ -63,16 +63,16 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 # Capture the changed-file list. Tolerate brand-new repos with no HEAD by
 # suppressing git stderr; an empty `files` triggers the no-changes path below.
 if [[ "$mode" == "last-commit" ]]; then
-  files=$(git show --stat --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' || true)
+  files=$(git -c core.quotepath=false show --stat --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' || true)
 else
   # Three sources: tracked changes vs HEAD, staged-but-not-yet-vs-HEAD, and
   # untracked. Union them. In a brand-new repo with no HEAD the first call
   # errors silently and we rely on the latter two. The trailing `|| true` is
   # load-bearing: the group takes its last command's status, and pipefail
   # propagates that through `sort`, so a failing `git ls-files` would abort.
-  files=$( { git diff HEAD --name-only 2>/dev/null;
-             git diff --cached --name-only 2>/dev/null;
-             git ls-files --others --exclude-standard 2>/dev/null; } | sort -u || true )
+  files=$( { git -c core.quotepath=false diff HEAD --name-only 2>/dev/null;
+             git -c core.quotepath=false diff --cached --name-only 2>/dev/null;
+             git -c core.quotepath=false ls-files --others --exclude-standard 2>/dev/null; } | sort -u || true )
 fi
 [[ -n "$path_prefix" ]] && files=$(echo "$files" | grep -F "$path_prefix" || true)
 
@@ -301,7 +301,37 @@ fi
 # above. Walking ancestors per file with `dirname` forks and a disk stat each
 # time measured 11s on a 300-file markdown diff against 0.07s for the pattern
 # below; this runs before every review, so that is not an acceptable cost.
-plugin_root_dirs=$(find "$repo_root" -maxdepth 6 \( "${prune[@]}" \) -prune -o -name .claude-plugin -type d -exec dirname {} \; 2>/dev/null | sed "s|^$repo_root/||;s|^$repo_root$|.|" | sort -u || true)
+#
+# The marker is `.claude-plugin/plugin.json`, NOT the `.claude-plugin` directory:
+# a marketplace ROOT also has `.claude-plugin/`, holding marketplace.json, so
+# matching the directory put "." in this list and short-circuited every
+# commands|agents|skills path in the whole repo into executable content. That is
+# live in apresai-skills itself.
+#
+# maxdepth is 8 rather than the 5 used for cdk/next markers above: those sit near
+# a project root, whereas a plugin root can be a few levels down in a monorepo
+# (marketplace/plugins/<name>/.claude-plugin/plugin.json is already 4).
+#
+# Path stripping uses parameter expansion, not sed: a repo path containing |, [,
+# *, or \ is a valid path but a broken sed expression, and the failure mode was
+# silent misrouting rather than an error.
+#
+# Two accepted limits, both failing toward "route it anyway" rather than a drop:
+#   - A `.claude-plugin` reached only through a SYMLINK is not found, since this
+#     find does not use -L (which risks loops on a self-referential tree).
+#   - A plugin root deeper than maxdepth is not found.
+# In both cases a live file falls through to the prose block, which the parent's
+# DRIFT [docs] still covers; a deleted one is caught by the git-history check in
+# is_exec_md below.
+plugin_root_dirs=""
+if [[ -n "$md_files$yaml_specs" ]]; then
+  while IFS= read -r d; do
+    [[ -z "$d" ]] && continue
+    d=${d%/.claude-plugin/plugin.json}
+    if [[ "$d" == "$repo_root" ]]; then d="."; else d=${d#"$repo_root"/}; fi
+    plugin_root_dirs+="$d"$'\n'
+  done < <(find "$repo_root" -maxdepth 8 \( "${prune[@]}" \) -prune -o -path '*/.claude-plugin/plugin.json' -print 2>/dev/null | sort -u || true)
+fi
 
 # is_exec_md <repo-relative-path>
 # Executable prompt content, per chad-review's forced-`standard` list.
@@ -316,14 +346,32 @@ is_exec_md() {
   # A commands|agents|skills path counts when it sits under a plugin root.
   while IFS= read -r root; do
     [[ -z "$root" ]] && continue
-    [[ "$root" == "." ]] && return 0
-    [[ "$f" == "$root"/* ]] && return 0
+    if [[ "$root" == "." ]]; then
+      # Plugin published as its own repo: only its TOP-level commands/agents/
+      # skills dir is plugin content, not one nested arbitrarily deep.
+      [[ "$f" == commands/* || "$f" == agents/* || "$f" == skills/* ]] && return 0
+    else
+      [[ "$f" == "$root"/* ]] && return 0
+    fi
   done <<< "$plugin_root_dirs"
-  # A DELETED file cannot be confirmed from disk, and neither can its plugin
-  # root if the whole plugin was removed. For a merge gate the safe default is
-  # to route it to a reviewer: over-routing costs one pass, under-routing
-  # silently skips five.
-  [[ ! -e "$repo_root/$f" ]] && return 0
+  # A DELETED file cannot be confirmed from disk, and neither can its plugin root
+  # if the whole plugin was deleted with it. Ask git what was there in HEAD
+  # instead of guessing: walk the path's `commands|agents|skills` segments and
+  # test whether the directory above one held a plugin manifest. Precise in both
+  # directions, and it only runs for files that are gone, which are rare.
+  if [[ ! -e "$repo_root/$f" ]]; then
+    local p="$f" seg cand
+    while [[ "$p" == */* ]]; do
+      p=${p%/*}
+      seg=${p##*/}
+      case "$seg" in
+        commands|agents|skills)
+          if [[ "$p" == */* ]]; then cand="${p%/*}/"; else cand=""; fi
+          git -C "$repo_root" cat-file -e "HEAD:${cand}.claude-plugin/plugin.json" 2>/dev/null && return 0
+          ;;
+      esac
+    done
+  fi
   return 1
 }
 
