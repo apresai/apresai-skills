@@ -278,22 +278,33 @@ fi
 # Not all markdown is prose. chad-review forces the `standard` shape for
 # CLAUDE.md, any */SKILL.md, anything under .claude/, a prompts/ dir, and a
 # plugin's commands|agents|skills dir, because in this ecosystem those files are
-# instructions a model executes. Routing them as "skip" would contradict the
-# skill and leave five passes with no owner, so they get a real reviewer.
-if [[ -z "$go_files$cdk_files$web_files$ts_files$swift_files" ]]; then
+# instructions a model executes. They get a real reviewer.
+#
+# The commands|agents|skills arm is scoped to a `plugins/` ancestor on purpose:
+# unscoped it also swallowed ordinary prose like `docs/commands/overview.md`,
+# which chad-review classifies as the `light` shape with no reviewer at all. The
+# script and the skill have to agree on that boundary or they contradict.
+exec_md=$(echo "$md_files$yaml_specs" | grep -E '(^|/)(CLAUDE\.md|SKILL\.md)$|(^|/)\.claude/|(^|/)prompts/|(^|/)plugins/[^/]+/(commands|agents|skills)/' || true)
+
+# Emitted regardless of whether code files are also present. Gating this on a
+# code-free diff meant a mixed diff (say a Go change plus CLAUDE.md) counted the
+# markdown under "Files detected" and then routed no reviewer for it, which is
+# exactly the silent drop this script's header promises never to do.
+if [[ -n "$exec_md" ]]; then
+  emit_block "Executable prompt content ($(first_dir "$exec_md" || echo .))" \
+    "general-purpose" \
+    "${lint_target:+$lint_target + }cross-reference check: every pointer resolves, no stale pass/section names" \
+    ""
+fi
+
+# Genuine prose or spec, and only when it is the whole diff. Alongside code it
+# needs no reviewer of its own: DRIFT [docs] already covers it.
+if [[ -z "$go_files$cdk_files$web_files$ts_files$swift_files$exec_md" ]]; then
   if [[ -n "$yaml_specs$md_files" ]]; then
-    exec_md=$(echo "$md_files$yaml_specs" | grep -E '(^|/)(CLAUDE\.md|SKILL\.md)$|(^|/)\.claude/|(^|/)prompts/|(^|/)(commands|agents|skills)/' || true)
-    if [[ -n "$exec_md" ]]; then
-      emit_block "Executable prompt content ($(first_dir "$exec_md" || echo .))" \
-        "general-purpose" \
-        "${lint_target:+$lint_target + }cross-reference check: every pointer resolves, no stale pass/section names" \
-        ""
-    else
-      emit_block "Docs / spec only" \
-        "(skip: the light diff shape runs every pass inline in the parent)" \
-        "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
-        ""
-    fi
+    emit_block "Docs / spec only" \
+      "(skip: the light diff shape runs every pass inline in the parent)" \
+      "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
+      ""
   fi
 fi
 

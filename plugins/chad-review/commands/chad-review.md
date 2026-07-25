@@ -65,7 +65,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0, or 1 on a cold cache | All six passes run INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because nothing fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS takes the cache path; if the cache is cold or stale, its rules force a full run, so launch the one FRESHNESS agent rather than skipping the pass. |
+   | `light` | 0, or 1 on a cold cache | All six passes run INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS takes the cache path; if the cache is cold or stale, its rules force a full run, so launch the one FRESHNESS agent rather than skipping the pass. |
    | `deps` | 1 | FRESHNESS runs FULLY FRESH as a sub-agent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
@@ -480,7 +480,8 @@ six-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
 
 **FRESHNESS** is whole-project, MECH tier, `general-purpose`, launched ONCE per
-review rather than per block. Brief it with the manifests discovered
+review rather than per block. On a `light` diff it is the only agent that
+launches, and only when its cache rules force a full run. Brief it with the manifests discovered
 project-wide (or the discovery instructions), the changed-files list used ONLY to
 prioritize and tag `(diff-touched)`, an explicit note that the audit does not
 depend on the diff, context7 as primary with WebSearch only as a recency probe,
@@ -584,7 +585,8 @@ Agent call. `model` is REQUIRED, from §"Model tiering":
 ## Performance budget
 
 Target: under ~2 minutes for a typical single-language change (5 to 10 files)
-with a warm freshness cache; `light` and `deps` well under a minute.
+with a warm freshness cache; `light` and `deps` well under a minute, except a
+`light` diff that hits a cold freshness cache and has to run that pass fresh.
 
 The levers in order of size: the diff-shape matrix skips the fan-out entirely for
 most everyday changes; the freshness cache removes the network-bound version loop;
@@ -654,10 +656,12 @@ Filtered: N raised, M dropped
 [1-2 sentences: commit as-is, fix something first, or stop and rethink]
 ```
 
-Carry each finding's severity, location, and wording verbatim, but **drop the
-`CONF` tag**: it is a routing signal for your filter, not something the reader
-needs. Also **strip any process narration** an agent emitted despite the
-contract. Findings in the deliverable, never the process.
+Carry each finding's wording verbatim. Step 4 may sharpen a `file:line` or
+lower a severity, and those edits carry through; nothing else is rewritten.
+**Drop the `CONF` tag**: it is a routing signal for your filter, not something
+the reader needs. A CRITICAL that step 4 could not confirm keeps its severity and
+gains `[unconfirmed]`. Also **strip any process narration** an agent emitted
+despite the contract. Findings in the deliverable, never the process.
 
 **How FRESHNESS affects the verdict.** Being whole-project and always-on, a
 pre-existing dependency issue unrelated to the diff should not hard-block an
@@ -698,8 +702,9 @@ findings. Keep it proportional; no filler. It must:
    `/tidy` must not run after a gate whose verdict it would invalidate: run
    `/tidy`, then re-run `/chad-review` so the review sees the final diff. Fold
    this into the step 7 verification line rather than implying tidy runs last.
-7. **End with** "After fixing, run `/chad-review` again to confirm all issues are
-   resolved."
+7. **End with the loop that closes it**: apply the fixes, run `/tidy` if
+   SIMPLIFY had findings, then run `/chad-review` again to confirm. Naming the
+   order here is what keeps the tidy step from landing after the gate.
 
 Then: ask "Want me to enter plan mode with this prompt, or do you want to edit it
 first?" ONLY when the verdict is NO-GO or CONDITIONAL AND this is a direct

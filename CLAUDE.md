@@ -90,7 +90,7 @@ Current split, useful when looking for a precedent to copy:
 
 A plugin can ship both. `apple-release` also ships `resources/` (the full
 saved App Store Review Guidelines). `chad-review` and `image-encoding`
-have no `README.md`, which is allowed.
+have no `README.md`, and neither does `tidy`, which is allowed.
 
 A skill's `description` is load-bearing: it is the only thing deciding
 whether the skill fires. Write it as trigger conditions, not as a summary.

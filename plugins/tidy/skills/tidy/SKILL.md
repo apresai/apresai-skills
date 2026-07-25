@@ -68,32 +68,37 @@ human can judge them. Never apply them.
    With no verifier, "behavior-preserving" is unfalsifiable, so applying a
    cleanup would be a guess dressed as a guarantee. Report every finding under
    "Needs a decision", say plainly that the repo has no way to prove behavior
-   was preserved, and stop. This is the common case in content and config repos,
-   and it is a normal outcome, not a failure.
+   was preserved, then skip to step 6 and report. This is the common case in
+   content and config repos, and it is a normal outcome, not a failure.
 
-   An **already-red** baseline also stops the run: you cannot prove preservation
-   against a broken starting point. Say which check was red and stop.
+   An **already-red** baseline also ends the run: you cannot prove preservation
+   against a broken starting point. Name the check that was red, skip to step 6,
+   and report.
 
-   Scoping commands per language live in chad-review's `pass-reference.md`
-   § TESTS. Resolve its directory first with the snippet in step 3, which finds
-   both files this skill borrows.
-3. **Locate chad-review's resources, then route by language.** Resolve the
-   directory rather than assuming a path: plugins install as
-   `cache/<marketplace>/<plugin>/<version>/`, so there is no fixed sibling hop
-   from this plugin's root.
+   Per-language scoping commands live in chad-review's `pass-reference.md`
+   § TESTS. Resolve that directory here, since this step needs it first. Plugins
+   install as `cache/<marketplace>/<plugin>/<version>/`, so there is no fixed
+   sibling hop from this plugin's root:
 
    ```bash
    cr=$(ls -d "$HOME"/.claude/plugins/cache/*/chad-review/*/resources \
               "$HOME"/.claude/skills/chad-review/resources \
          2>/dev/null | sort -V | tail -1)
-   # $cr/pass-reference.md  -> scoping commands (step 2) and SIMPLIFY signals
-   # $cr/chad-review-route.sh -> language routing, so both tools agree
+   # $cr/pass-reference.md    -> scoping commands and SIMPLIFY signals
+   # $cr/chad-review-route.sh -> language routing (step 3)
+   ```
+
+   `$cr` empty just means less enrichment: fall back to the language knowledge
+   you have.
+3. **Route by language.** If `$cr` resolved, reuse chad-review's detector so both
+   tools agree on what changed:
+
+   ```bash
    [[ -n "$cr" ]] && bash "$cr/chad-review-route.sh"
    ```
 
-   Both are optional enrichment. If `$cr` is empty, classify by extension
-   yourself and use the language knowledge you have. Either way you need the
-   per-language blocks for step 4.
+   Optional. If it is unavailable, classify by extension yourself. Either way you
+   need the per-language blocks for step 4.
 4. **Apply the cleanups**, limited to what step 2's verifier can disprove, and
    skipping executable prompt content entirely. Small diff (at most 4 files, or
    a single language) means work inline in the parent: delegation costs more than
@@ -103,10 +108,15 @@ human can judge them. Never apply them.
 5. **Prove behavior is unchanged.** Re-run exactly the check from step 2. Green
    means done.
 
-   Red means **revert, never debug**. Attribution matters here: if several
-   language-block agents ran, the failing check does not say which block caused
-   it. Revert one block at a time, most recently applied first, re-running the
-   check after each, and stop as soon as it is green again. Report every reverted
+   Red means **revert, never debug**. Revert by reversing your own edits, file
+   by file, from the record of what you applied. **Never** use `git checkout`,
+   `git restore`, `git stash`, or `git reset` for this: the tree also holds the
+   user's uncommitted work, and those commands would discard it.
+
+   Attribution matters here: if several language-block agents ran, the failing
+   check does not say which block caused it. Revert one block at a time, most
+   recently applied first, re-running the check after each, and stop as soon as
+   it is green again. Report every reverted
    block under "Reverted" with the check that caught it. Do not attempt a partial
    revert inside a block; drop the block's cleanups as a unit and let a human
    re-apply them selectively.
@@ -152,7 +162,7 @@ inherits the session tier, so a premium session pays premium rates for mechanica
 cleanup and a cheap session under-powers it.
 
 Use **`sonnet`**. The work is bounded, scope-fenced, behavior-preserving, and
-checked empirically by the tests in step 5, which is exactly the shape Sonnet
+checked empirically by step 2's verifier, which is exactly the shape Sonnet
 handles well. A `sonnet` session stays `sonnet`. Escalate to `opus` only when the
 user asks for it by name. **Never `haiku`** and never `fable`: the first is below
 the floor for code edits, the second costs roughly double Opus for no gain here.
@@ -163,8 +173,8 @@ model ID.
 ## Delegation cap
 
 One agent per language block is the entire budget. Do not spawn an agent to
-review, verify, or double-check another agent's edits: step 5 runs the tests, and
-that is the verification. Do not spawn a second agent for work one can finish.
+review, verify, or double-check another agent's edits: step 5 re-runs step 2's
+verifier, and that is the verification. Do not spawn a second agent for work one can finish.
 For a small single-language diff, spawn nothing.
 
 ## Output
@@ -189,7 +199,9 @@ narration of the process.
 Omit any section that is empty. If nothing needed cleaning, say
 `Tidy: clean, nothing to simplify` and stop.
 
-When step 2 found **no verifier**, apply nothing and lead with that:
+The no-verifier template below takes precedence over both: when step 2 found no
+verifier you cannot know whether anything needed cleaning, so report that rather
+than a clean result.
 
 ```
 ## Tidy
