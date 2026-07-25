@@ -44,6 +44,20 @@ for arg in "$@"; do
   esac
 done
 
+# THE `set -euo pipefail` HAZARD IN THIS SCRIPT. A simple assignment takes the
+# exit status of its command substitution, and `pipefail` makes a pipeline take
+# the last non-zero status in it. So `x=$(... | grep ...)` aborts the entire
+# script whenever grep matches nothing, silently: the user sees truncated output
+# and a non-zero exit with no message. A no-match grep is NORMAL here, not an
+# error. Every command substitution below that can legitimately match nothing
+# therefore ends in `|| true`. Do not remove those without re-reading this.
+
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "Not a git repository, so there is no diff to route."
+  echo "Run this from inside the repo you want reviewed."
+  exit 0
+fi
+
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 
 # Capture the changed-file list. Tolerate brand-new repos with no HEAD by
@@ -53,10 +67,12 @@ if [[ "$mode" == "last-commit" ]]; then
 else
   # Three sources: tracked changes vs HEAD, staged-but-not-yet-vs-HEAD, and
   # untracked. Union them. In a brand-new repo with no HEAD the first call
-  # errors silently and we rely on the latter two.
+  # errors silently and we rely on the latter two. The trailing `|| true` is
+  # load-bearing: the group takes its last command's status, and pipefail
+  # propagates that through `sort`, so a failing `git ls-files` would abort.
   files=$( { git diff HEAD --name-only 2>/dev/null;
              git diff --cached --name-only 2>/dev/null;
-             git ls-files --others --exclude-standard 2>/dev/null; } | sort -u )
+             git ls-files --others --exclude-standard 2>/dev/null; } | sort -u || true )
 fi
 [[ -n "$path_prefix" ]] && files=$(echo "$files" | grep -F "$path_prefix" || true)
 
@@ -246,7 +262,10 @@ if [[ -n "$swift_files" ]]; then
     imports+=$(grep -hoE "^[[:space:]]*import [A-Za-z_][A-Za-z0-9_]*" "$repo_root/$f" 2>/dev/null | sed -E 's/^[[:space:]]*import //' || true)$'\n'
   done <<< "$swift_files"
   noise='^(Foundation|Combine|OSLog|os|Dispatch|CoreFoundation|CoreGraphics|CoreData|UIKit|SwiftUI|Observation|Security|Darwin)$'
-  fw=$(echo "$imports" | grep -vE '^$' | grep -vE "$noise" | sort -u | tr '\n' ' ' | sed 's/ *$//')
+  # `|| true`: a Swift file importing only noise frameworks (Foundation alone is
+  # the common case) makes the second grep match nothing, which under pipefail
+  # would abort the script before any routing block printed.
+  fw=$(echo "$imports" | grep -vE '^$' | grep -vE "$noise" | sort -u | tr '\n' ' ' | sed 's/ *$//' || true)
   swift_ctx="context7: swift (current syntax)"
   [[ -n "$fw" ]] && swift_ctx+=" + the frameworks the diff imports: $fw"
   emit_block "iOS / Apple Swift ($(first_dir "$swift_files" || echo ios))" \
@@ -255,19 +274,35 @@ if [[ -n "$swift_files" ]]; then
     "$swift_ctx"
 fi
 
-# --- OpenAPI-spec-only / docs-only lighter touch ----------------------------
+# --- Markdown / spec, with the executable-content carve-out -----------------
+# Not all markdown is prose. chad-review forces the `standard` shape for
+# CLAUDE.md, any */SKILL.md, anything under .claude/, a prompts/ dir, and a
+# plugin's commands|agents|skills dir, because in this ecosystem those files are
+# instructions a model executes. Routing them as "skip" would contradict the
+# skill and leave five passes with no owner, so they get a real reviewer.
 if [[ -z "$go_files$cdk_files$web_files$ts_files$swift_files" ]]; then
   if [[ -n "$yaml_specs$md_files" ]]; then
-    emit_block "Docs / spec only" \
-      "(skip: the light diff shape runs every pass inline in the parent)" \
-      "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
-      ""
+    exec_md=$(echo "$md_files$yaml_specs" | grep -E '(^|/)(CLAUDE\.md|SKILL\.md)$|(^|/)\.claude/|(^|/)prompts/|(^|/)(commands|agents|skills)/' || true)
+    if [[ -n "$exec_md" ]]; then
+      emit_block "Executable prompt content ($(first_dir "$exec_md" || echo .))" \
+        "general-purpose" \
+        "${lint_target:+$lint_target + }cross-reference check: every pointer resolves, no stale pass/section names" \
+        ""
+    else
+      emit_block "Docs / spec only" \
+        "(skip: the light diff shape runs every pass inline in the parent)" \
+        "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
+        ""
+    fi
   fi
 fi
 
 # --- Unclassified: never drop silently ---------------------------------------
 if [[ -n "$other_files" ]]; then
-  exts=$(echo "$other_files" | grep -oE '\.[A-Za-z0-9]+$' | sort -u | tr '\n' ' ' | sed 's/ *$//')
+  # `|| true`: unclassified files that all lack an extension (Dockerfile,
+  # Makefile) make the grep match nothing. Without the guard the script aborts
+  # here and the `${exts:-no extension}` fallback below is never reached.
+  exts=$(echo "$other_files" | grep -oE '\.[A-Za-z0-9]+$' | sort -u | tr '\n' ' ' | sed 's/ *$//' || true)
   echo "--- Routing: Other / unclassified (${exts:-no extension}) ---"
   echo "  No language specialist matched these. Review with general-purpose"
   echo "  (+ code-reviewer for any executable code). Do NOT skip them."
