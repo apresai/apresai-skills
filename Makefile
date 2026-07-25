@@ -1,4 +1,4 @@
-.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
+.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions validate-scripts check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
 
 # Release targets rely on prerequisites running in the listed order
 # (check-clean and check-branch must both run before anything writes a
@@ -40,16 +40,20 @@ help:
 # guard went through four review rounds of shell bugs before it had a suite.
 validate-scripts:
 	@echo "==> Running plugin script tests..."
-	@found=0; \
+	@found=0; out=$$(mktemp); \
 	for t in plugins/*/resources/*.test.sh; do \
 		[ -e "$$t" ] || continue; \
 		found=1; \
 		echo "  $$t"; \
-		bash "$$t" >/dev/null 2>&1 || { echo "  ❌ $$t FAILED"; bash "$$t" | tail -20; exit 1; }; \
-		echo "  ✅ $$(basename $$t) passed"; \
+		if command -v timeout >/dev/null 2>&1; then runner="timeout 300"; else runner=""; fi; \
+		if $$runner bash "$$t" > "$$out" 2>&1; then \
+			echo "  ✅ $$(basename $$t) passed"; \
+		else \
+			echo "  ❌ $$(basename $$t) FAILED"; tail -25 "$$out"; rm -f "$$out"; exit 1; \
+		fi; \
 	done; \
-	[ "$$found" = "1" ] || echo "  (no script tests found)"
-	@echo "✅ Script tests passed"
+	rm -f "$$out"; \
+	if [ "$$found" = "1" ]; then echo "✅ Script tests passed"; else echo "✅ No script tests to run"; fi
 
 # Show current version
 version:

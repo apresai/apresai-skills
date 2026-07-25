@@ -539,8 +539,11 @@ One pass, holding every finding at once:
    ```
 
    Exit 0 means every untracked file is still there. Exit 1 means one or more
-   vanished during the review; `--restore` puts them back, and the script names
-   each one. Report that at the top of the review as a CRITICAL **of the review
+   vanished during the review; `--restore` puts back the ones it can and names
+   any it could not, which stay recoverable from the backup path it prints. Exit
+   2 means the guard could not run at all (no backup was taken, or the tree is
+   not a git repo): treat that as the backup step having failed and say so
+   rather than reporting a clean tree. Report that at the top of the review as a CRITICAL **of the review
    process**, not of the diff, and state that the cause is unattributed: a
    sub-agent, a project test, or a codegen step could each have done it. It does
    not by itself move the GO/NO-GO verdict on the diff, which is judged on its

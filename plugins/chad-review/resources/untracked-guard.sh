@@ -33,6 +33,7 @@ usage() { echo "usage: untracked-guard.sh backup|verify [--restore]" >&2; exit 2
 cmd="$1"; shift
 restore=0
 for a in "$@"; do case "$a" in --restore) restore=1 ;; *) usage ;; esac; done
+[[ "$cmd" == "backup" && $restore -eq 1 ]] && usage
 
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repository" >&2; exit 2; }
 root=$(git rev-parse --show-toplevel)
@@ -78,14 +79,22 @@ case "$cmd" in
       mv "$BK" "$dest" || { echo "could not rotate previous backup aside" >&2; exit 1; }
     fi
     # Keep the 5 most recent rotations; unbounded copies of a large tree add up.
+    # Capture the listing ONCE, up front: running it twice raced the check
+    # against the data it was meant to validate.
+    listing=$(mktemp)
+    list_untracked > "$listing" 2>/dev/null || { rm -f "$listing"; echo "could not list untracked files; refusing to claim a backup" >&2; exit 1; }
     mkdir -p "$BK"; chmod 700 "$base" "$BK"
     # Keep the newest 5 rotations. Names are timestamp-ordered, so a plain sort
     # is chronological and avoids parsing `ls`. The `|| true` is load-bearing:
     # under `pipefail` a find over a not-yet-existing dir would abort the script,
     # which is the same class of bug this file has hit repeatedly.
-    { find "$base" -maxdepth 1 -name 'prev-*' -print 2>/dev/null || true; } \
-      | LC_ALL=C sort -r | tail -n +6 \
-      | while IFS= read -r old; do rm -rf "$old"; done
+    # Newest first by mtime, then drop everything past the 5th. Sorting by name
+    # is wrong once a same-second collision adds a `-1` suffix, which sorts above
+    # the bare name and would prune the newer entry.
+    { find "$base" -maxdepth 1 -name 'prev-*' -exec stat -f '%m %N' {} + 2>/dev/null \
+      || find "$base" -maxdepth 1 -name 'prev-*' -printf '%T@ %p\n' 2>/dev/null || true; } \
+      | LC_ALL=C sort -rn | cut -d' ' -f2- | tail -n +6 \
+      | while IFS= read -r old; do [[ -n "$old" ]] && rm -rf "$old"; done
     n=0; failed=0
     while IFS= read -r -d '' f; do
       mkdir -p "$BK/$(dirname -- "$f")"
@@ -96,10 +105,8 @@ case "$cmd" in
       else
         echo "BACKUP FAILED: $f" >&2; failed=$((failed+1))
       fi
-    done < <(list_untracked || echo -n)
-    if ! list_untracked >/dev/null 2>&1; then
-      echo "could not list untracked files; refusing to claim a backup" >&2; exit 1
-    fi
+    done < <(cat "$listing")
+    rm -f "$listing"
     echo "$BK"
     echo "backed up $n untracked file(s)" >&2
     [[ $failed -eq 0 ]] || { echo "$failed file(s) could not be backed up; do not review an unprotected tree" >&2; exit 1; }
@@ -110,7 +117,9 @@ case "$cmd" in
     # The comparison below is line-based (comm has no NUL mode), so a filename
     # containing a literal newline cannot be compared safely. Name them and skip
     # rather than silently mis-pairing them with another file.
-    nl_count=$(list_untracked | tr -dc '\n' | wc -c | tr -d ' ')
+    list_untracked >/dev/null 2>&1 || { echo "could not list untracked files; cannot verify" >&2; exit 2; }
+    # Counts PATHS containing a newline, not newline characters.
+    nl_count=$(list_untracked | tr '\0' '\001' | grep -c '\n' 2>/dev/null || echo 0)
     [[ "${nl_count:-0}" -gt 0 ]] && echo "warning: $nl_count untracked path(s) contain a newline; not covered by this check" >&2
     live="$(mktemp)"; saved="$(mktemp)"
     trap 'rm -f "$live" "$saved"' EXIT
