@@ -280,11 +280,39 @@ fi
 # plugin's commands|agents|skills dir, because in this ecosystem those files are
 # instructions a model executes. They get a real reviewer.
 #
-# The commands|agents|skills arm is scoped to a `plugins/` ancestor on purpose:
-# unscoped it also swallowed ordinary prose like `docs/commands/overview.md`,
-# which chad-review classifies as the `light` shape with no reviewer at all. The
-# script and the skill have to agree on that boundary or they contradict.
-exec_md=$(echo "$md_files$yaml_specs" | grep -E '(^|/)(CLAUDE\.md|SKILL\.md)$|(^|/)\.claude/|(^|/)prompts/|(^|/)plugins/[^/]+/(commands|agents|skills)/' || true)
+# The commands|agents|skills arm needs a boundary: unscoped it swallows ordinary
+# prose like `docs/commands/overview.md`, which chad-review classifies as the
+# `light` shape with no reviewer at all, and the script and skill would then
+# contradict each other. The boundary is a `.claude-plugin/` sibling, which is
+# what actually makes a directory a plugin root. A path convention like
+# `plugins/*/commands/` would be wrong twice: it misses a plugin published as its
+# own repo (commands/ at the root) and it breaks this script's project-agnostic
+# promise by hardcoding a directory name.
+is_exec_md() {
+  local f="$1" d parent
+  case "$f" in
+    CLAUDE.md|*/CLAUDE.md|SKILL.md|*/SKILL.md) return 0 ;;
+    .claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
+  esac
+  d=$(dirname "$f")
+  while :; do
+    case "$(basename "$d")" in
+      commands|agents|skills)
+        parent=$(dirname "$d")
+        [[ -d "$repo_root/$parent/.claude-plugin" ]] && return 0
+        ;;
+    esac
+    [[ "$d" == "." || "$d" == "/" ]] && break
+    d=$(dirname "$d")
+  done
+  return 1
+}
+
+exec_md=""
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  is_exec_md "$f" && exec_md+="$f"$'\n'
+done <<< "$md_files$yaml_specs"
 
 # Emitted regardless of whether code files are also present. Gating this on a
 # code-free diff meant a mixed diff (say a Go change plus CLAUDE.md) counted the
@@ -297,15 +325,21 @@ if [[ -n "$exec_md" ]]; then
     ""
 fi
 
-# Genuine prose or spec, and only when it is the whole diff. Alongside code it
-# needs no reviewer of its own: DRIFT [docs] already covers it.
-if [[ -z "$go_files$cdk_files$web_files$ts_files$swift_files$exec_md" ]]; then
-  if [[ -n "$yaml_specs$md_files" ]]; then
-    emit_block "Docs / spec only" \
-      "(skip: the light diff shape runs every pass inline in the parent)" \
-      "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
-      ""
-  fi
+# Genuine prose and specs, whatever else is in the diff. Emitted even alongside
+# code or executable content so no changed file is left unmentioned: a README
+# next to a CLAUDE.md, or an OpenAPI spec next to Go, used to vanish from the
+# routing entirely, which is the silent drop this script's header rules out.
+prose_md=""
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  is_exec_md "$f" || prose_md+="$f"$'\n'
+done <<< "$md_files$yaml_specs"
+
+if [[ -n "$prose_md" ]]; then
+  emit_block "Docs / spec ($(first_dir "$prose_md" || echo .))" \
+    "(no reviewer: prose carries no behavioral pass; DRIFT [docs] covers it)" \
+    "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
+    ""
 fi
 
 # --- Unclassified: never drop silently ---------------------------------------

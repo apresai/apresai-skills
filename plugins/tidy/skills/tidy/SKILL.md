@@ -40,9 +40,9 @@ directory, and a plugin's `commands/`, `agents/`, or `skills/` directory are
 **instructions a model executes**, not prose. They are out of bounds for every
 cleanup in this skill.
 
-The reason is the verifier. Every other cleanup here is safe because a test can
-prove behavior did not change. Nothing can prove that for a file whose "behavior"
-is how a model interprets it: deleting a seemingly redundant sentence can change
+The reason is the verifier. Every other cleanup here is safe because step 2's
+verifier can disprove it. Nothing can disprove a change to a file whose
+"behavior" is how a model interprets it: deleting a seemingly redundant sentence can change
 what the model does, and no suite will go red. What reads as comment rot in a
 prompt is often the sentence carrying the constraint.
 
@@ -84,23 +84,29 @@ human can judge them. Never apply them.
    cr=$(ls -d "$HOME"/.claude/plugins/cache/*/chad-review/*/resources \
               "$HOME"/.claude/skills/chad-review/resources \
          2>/dev/null | sort -V | tail -1)
-   # $cr/pass-reference.md    -> scoping commands and SIMPLIFY signals
-   # $cr/chad-review-route.sh -> language routing (step 3)
+   [[ -n "$cr" ]] && cat "$cr/pass-reference.md"
    ```
 
-   `$cr` empty just means less enrichment: fall back to the language knowledge
-   you have.
-3. **Route by language.** If `$cr` resolved, reuse chad-review's detector so both
-   tools agree on what changed:
+   No output just means less enrichment: fall back to the language knowledge you
+   have. **Each snippet in this file re-resolves `$cr`**, because every Bash call
+   is a fresh shell and a variable set in one does not survive into the next.
+3. **Route by language.** Reuse chad-review's detector so both tools agree on
+   what changed:
 
    ```bash
+   cr=$(ls -d "$HOME"/.claude/plugins/cache/*/chad-review/*/resources \
+              "$HOME"/.claude/skills/chad-review/resources \
+         2>/dev/null | sort -V | tail -1)
    [[ -n "$cr" ]] && bash "$cr/chad-review-route.sh"
    ```
 
    Optional. If it is unavailable, classify by extension yourself. Either way you
    need the per-language blocks for step 4.
 4. **Apply the cleanups**, limited to what step 2's verifier can disprove, and
-   skipping executable prompt content entirely. Small diff (at most 4 files, or
+   skipping executable prompt content entirely. **Keep a per-block record of
+   every edit** (file, what changed, what it was before): step 5's revert depends
+   on it, and a delegated agent must return that record with its findings, since
+   the parent cannot otherwise reverse an edit it did not make. Small diff (at most 4 files, or
    a single language) means work inline in the parent: delegation costs more than
    the work. Otherwise launch **one agent per language block**, each with the
    block's files, the scope fence verbatim, the verifier tier from step 2, and an
@@ -109,9 +115,11 @@ human can judge them. Never apply them.
    means done.
 
    Red means **revert, never debug**. Revert by reversing your own edits, file
-   by file, from the record of what you applied. **Never** use `git checkout`,
-   `git restore`, `git stash`, or `git reset` for this: the tree also holds the
-   user's uncommitted work, and those commands would discard it.
+   by file, from the step 4 record. **Never** reach for `git checkout`,
+   `git restore`, `git stash`, or `git reset`: the working tree also holds the
+   user's uncommitted work, and none of these can tell your edits from theirs.
+   `checkout` and `restore` discard it outright; `stash` and `reset` relocate or
+   unstage it, which is recoverable but still not yours to do.
 
    Attribution matters here: if several language-block agents ran, the failing
    check does not say which block caused it. Revert one block at a time, most
@@ -199,9 +207,15 @@ narration of the process.
 Omit any section that is empty. If nothing needed cleaning, say
 `Tidy: clean, nothing to simplify` and stop.
 
-The no-verifier template below takes precedence over both: when step 2 found no
-verifier you cannot know whether anything needed cleaning, so report that rather
-than a clean result.
+The two templates below outrank the `clean, nothing to simplify` line above.
+With no verifier, or a red baseline, you never got far enough to know whether
+anything needed cleaning, so report that rather than a clean result.
+
+```
+## Tidy
+Baseline already red: <check> fails before any edit, so behavior preservation
+cannot be proven against it. Applied nothing. Fix the baseline, then re-run.
+```
 
 ```
 ## Tidy
@@ -228,6 +242,8 @@ Close with the handoff, since this skill is the step before the gate:
 - ALWAYS pass an explicit `model` on every Agent launch. Never haiku, never
   fable.
 - ALWAYS revert rather than debug when a previously-green check goes red, one
-  language block at a time until it is green again.
+  language block at a time until it is green again, by reversing your own edits
+  from the step 4 record. NEVER use `git checkout`, `git restore`, `git stash`,
+  or `git reset` to do it; they cannot tell your edits from the user's.
 - Run before `/chad-review`, never after. If a review already ran, tidy, then
   re-run the review; the gate must see the final diff.

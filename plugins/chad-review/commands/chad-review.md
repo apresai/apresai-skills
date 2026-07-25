@@ -65,7 +65,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0, or 1 on a cold cache | All six passes run INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS takes the cache path; if the cache is cold or stale, its rules force a full run, so launch the one FRESHNESS agent rather than skipping the pass. |
+   | `light` | 0, or 1 on a cold cache | Every pass runs INLINE in the parent, FRESHNESS aside; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS takes the cache path; if the cache is cold or stale, its rules force a full run, so launch the one FRESHNESS agent rather than skipping the pass. |
    | `deps` | 1 | FRESHNESS runs FULLY FRESH as a sub-agent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
@@ -656,8 +656,8 @@ Filtered: N raised, M dropped
 [1-2 sentences: commit as-is, fix something first, or stop and rethink]
 ```
 
-Carry each finding's wording verbatim. Step 4 may sharpen a `file:line` or
-lower a severity, and those edits carry through; nothing else is rewritten.
+Carry each finding's wording verbatim. Steps 3 and 4 may lower a severity or
+sharpen a `file:line`, and those edits carry through; nothing else is rewritten.
 **Drop the `CONF` tag**: it is a routing signal for your filter, not something
 the reader needs. A CRITICAL that step 4 could not confirm keeps its severity and
 gains `[unconfirmed]`. Also **strip any process narration** an agent emitted
@@ -698,10 +698,10 @@ findings. Keep it proportional; no filler. It must:
    with its concrete bump (`current -> target`) and a verify step, plus an
    explicit offer to perform them. Keep HOLD items out.
 6. **Add a `/tidy` handoff line** when SIMPLIFY produced findings: name the files
-   rather than restating each cleanup in prose. Order it correctly, because
-   `/tidy` must not run after a gate whose verdict it would invalidate: run
-   `/tidy`, then re-run `/chad-review` so the review sees the final diff. Fold
-   this into the step 7 verification line rather than implying tidy runs last.
+   rather than restating each cleanup in prose. Exclude executable prompt content
+   (`CLAUDE.md`, `*/SKILL.md`, `.claude/**`, `prompts/`, a plugin's `commands/`,
+   `agents/`, `skills/`); `/tidy` refuses to edit those, so list them as manual
+   follow-ups instead. Step 7 states the order.
 7. **End with the loop that closes it**: apply the fixes, run `/tidy` if
    SIMPLIFY had findings, then run `/chad-review` again to confirm. Naming the
    order here is what keeps the tidy step from landing after the gate.
