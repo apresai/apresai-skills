@@ -1,6 +1,6 @@
 ---
 name: tidy
-description: Apply quality-only cleanups to the code just changed. Use when the user says "tidy this up", "clean this up", "simplify the code", "refactor what I just wrote", or invokes /tidy, and after finishing a feature or bug fix but BEFORE running /chad-review. Removes missed reuse, dead code, wrong-altitude logic, needless abstraction, defensive noise for impossible states, and compatibility scaffolding. Scope-fenced to the current diff, behavior-preserving, verified by the project's own tests. Never commits.
+description: Apply quality-only cleanups to the code just changed. This skill EDITS FILES, so use it only on an explicit request: the user says "tidy this up", "clean this up", "simplify what I just wrote", or invokes /tidy. Do not fire it on your own mid-task, and do not treat a passing mention of simplicity as a request to start editing. Removes missed reuse, dead code, wrong-altitude logic, needless abstraction, defensive noise for impossible states, and compatibility scaffolding. Scope-fenced to the current diff, behavior-preserving, and gated on a verifier that can actually disprove a change; applies nothing when the repo has none. Never edits executable prompt content, never commits. Runs BEFORE /chad-review.
 ---
 
 # Tidy
@@ -33,40 +33,87 @@ current diff, and the fence is the files that diff touches.**
 - If a cleanup would change behavior, or needs a design decision, **do not apply
   it**. Report it under "Needs a decision" and move on.
 
+### Never edit executable prompt content
+
+`CLAUDE.md`, any `*/SKILL.md`, anything under `.claude/`, a `prompts/`
+directory, and a plugin's `commands/`, `agents/`, or `skills/` directory are
+**instructions a model executes**, not prose. They are out of bounds for every
+cleanup in this skill.
+
+The reason is the verifier. Every other cleanup here is safe because a test can
+prove behavior did not change. Nothing can prove that for a file whose "behavior"
+is how a model interprets it: deleting a seemingly redundant sentence can change
+what the model does, and no suite will go red. What reads as comment rot in a
+prompt is often the sentence carrying the constraint.
+
+Report cleanups you would have made in those files under "Needs a decision" so a
+human can judge them. Never apply them.
+
 ## Steps
 
 1. **Capture the target.** `git status --porcelain`. Uncommitted changes mean
    `git diff HEAD` plus each untracked file. A clean tree means the last commit:
    `git show HEAD`. Build the changed-files list. Nothing to work on means say so
    and stop.
-2. **Record a baseline.** Run the tests covering the changed files, scoped, using
-   the per-language commands in chad-review's
-   `resources/pass-reference.md` § TESTS if that plugin is installed. Note which
-   tests pass **before** any edit. A suite that is already red means stop and say
-   so: you cannot prove behavior preservation against a broken baseline.
-3. **Route by language.** If chad-review is installed, reuse its detector so both
-   tools agree on what changed. Locate it rather than assuming a path: plugins
-   install as `cache/<marketplace>/<plugin>/<version>/`, so there is no fixed
-   sibling hop from this plugin's root.
+2. **Establish a verifier, and let it decide what you are allowed to do.** This
+   step gates everything after it. Find the strongest check available for the
+   changed files, in this order, and record its result **before** any edit:
+
+   | Verifier available | What you may apply |
+   |---|---|
+   | Tests covering the changed files | Everything in §"What to clean" |
+   | No tests, but a type check or build (`tsc --noEmit`, `go build ./...`, `swift build`, `cargo check`) | Only cleanups that compiler or type checker can disprove: dead code, unused imports, redundant type assertions, unreachable branches. **Not** altitude moves, abstraction removal, or anything that changes control flow |
+   | Neither | Nothing. Apply no edits at all |
+
+   With no verifier, "behavior-preserving" is unfalsifiable, so applying a
+   cleanup would be a guess dressed as a guarantee. Report every finding under
+   "Needs a decision", say plainly that the repo has no way to prove behavior
+   was preserved, and stop. This is the common case in content and config repos,
+   and it is a normal outcome, not a failure.
+
+   An **already-red** baseline also stops the run: you cannot prove preservation
+   against a broken starting point. Say which check was red and stop.
+
+   Scoping commands per language live in chad-review's `pass-reference.md`
+   § TESTS. Resolve its directory first with the snippet in step 3, which finds
+   both files this skill borrows.
+3. **Locate chad-review's resources, then route by language.** Resolve the
+   directory rather than assuming a path: plugins install as
+   `cache/<marketplace>/<plugin>/<version>/`, so there is no fixed sibling hop
+   from this plugin's root.
 
    ```bash
-   route=$(ls -d "$HOME"/.claude/plugins/cache/*/chad-review/*/resources/chad-review-route.sh \
-                 "$HOME"/.claude/skills/chad-review/resources/chad-review-route.sh \
-            2>/dev/null | sort -V | tail -1)
-   [[ -n "$route" ]] && bash "$route"
+   cr=$(ls -d "$HOME"/.claude/plugins/cache/*/chad-review/*/resources \
+              "$HOME"/.claude/skills/chad-review/resources \
+         2>/dev/null | sort -V | tail -1)
+   # $cr/pass-reference.md  -> scoping commands (step 2) and SIMPLIFY signals
+   # $cr/chad-review-route.sh -> language routing, so both tools agree
+   [[ -n "$cr" ]] && bash "$cr/chad-review-route.sh"
    ```
 
-   This is optional enrichment. If nothing is found, classify by extension
-   yourself. Either way you need the per-language blocks for step 4.
-4. **Apply the cleanups**, per §"What to clean". Small diff (at most 4 files, or
-   a single language) means do it inline in the parent: delegation costs more
-   than the work. Otherwise launch **one agent per language block**, each with
-   the block's files, the scope fence verbatim, and an explicit `model`.
-5. **Prove behavior is unchanged.** Re-run exactly the tests from step 2. Any
-   test that passed before and fails now means **revert that cleanup**, do not
-   debug it into place, and report it under "Reverted". Also re-run the project's
-   type check or build when it is cheap (`tsc --noEmit`, `go build ./...`,
-   `swift build`).
+   Both are optional enrichment. If `$cr` is empty, classify by extension
+   yourself and use the language knowledge you have. Either way you need the
+   per-language blocks for step 4.
+4. **Apply the cleanups**, limited to what step 2's verifier can disprove, and
+   skipping executable prompt content entirely. Small diff (at most 4 files, or
+   a single language) means work inline in the parent: delegation costs more than
+   the work. Otherwise launch **one agent per language block**, each with the
+   block's files, the scope fence verbatim, the verifier tier from step 2, and an
+   explicit `model`.
+5. **Prove behavior is unchanged.** Re-run exactly the check from step 2. Green
+   means done.
+
+   Red means **revert, never debug**. Attribution matters here: if several
+   language-block agents ran, the failing check does not say which block caused
+   it. Revert one block at a time, most recently applied first, re-running the
+   check after each, and stop as soon as it is green again. Report every reverted
+   block under "Reverted" with the check that caught it. Do not attempt a partial
+   revert inside a block; drop the block's cleanups as a unit and let a human
+   re-apply them selectively.
+
+   If the check is still red after every block is reverted, the working tree
+   diverged from the baseline for some other reason. Say so plainly rather than
+   continuing to revert.
 6. **Report**, per §"Output".
 
 ## What to clean
@@ -127,20 +174,31 @@ narration of the process.
 
 ```
 ## Tidy
-<N> cleanups applied across <M> files. Tests: <baseline result> -> <after result>.
+<N> cleanups applied across <M> files. Verifier: <what ran>, <before> -> <after>.
 
 ### Applied
 - <file:line> | <=12-word description of the cleanup
 
 ### Needs a decision
-- <file:line> | what it is, and why applying it would change behavior
+- <file:line> | what it is, and why it was not applied
 
 ### Reverted
-- <file:line> | cleanup backed out because <test name> went red
+- <language block> | cleanups dropped because <check> went red
 ```
 
 Omit any section that is empty. If nothing needed cleaning, say
 `Tidy: clean, nothing to simplify` and stop.
+
+When step 2 found **no verifier**, apply nothing and lead with that:
+
+```
+## Tidy
+No verifier available: no tests and no type check or build cover these files,
+so behavior preservation cannot be proven. Applied nothing.
+
+### Needs a decision
+- <file:line> | the cleanup, and what would have to exist to make it provable
+```
 
 Close with the handoff, since this skill is the step before the gate:
 `Next: /chad-review`.
@@ -150,9 +208,14 @@ Close with the handoff, since this skill is the step before the gate:
 - NEVER change behavior. Behavior-preserving is the whole contract.
 - NEVER commit, push, or rewrite history.
 - NEVER edit a file outside the current diff.
-- NEVER apply a cleanup you cannot verify with the tests from step 2. Report it
-  instead.
+- NEVER edit executable prompt content (`CLAUDE.md`, `*/SKILL.md`, `.claude/**`,
+  `prompts/`, a plugin's `commands/`, `agents/`, or `skills/`). No verifier can
+  prove a prompt still means the same thing.
+- NEVER apply a cleanup step 2's verifier cannot disprove. With no verifier at
+  all, apply nothing and say so.
 - ALWAYS pass an explicit `model` on every Agent launch. Never haiku, never
   fable.
-- ALWAYS revert rather than debug when a previously-green test goes red.
-- Run before `/chad-review`, never after.
+- ALWAYS revert rather than debug when a previously-green check goes red, one
+  language block at a time until it is green again.
+- Run before `/chad-review`, never after. If a review already ran, tidy, then
+  re-run the review; the gate must see the final diff.

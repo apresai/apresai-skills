@@ -36,6 +36,7 @@ apresai-skills/
 │   ├── go-lambda/
 │   ├── image-encoding/
 │   ├── nextjs-opennext/
+│   ├── tidy/
 │   └── xai-voice/
 ├── CLAUDE.md                # this file
 ├── LICENSE
@@ -85,7 +86,7 @@ Current split, useful when looking for a precedent to copy:
 
 | Uses `commands/` | Uses `skills/` |
 |---|---|
-| apple-release (5 commands), chad-review, go-lambda, image-encoding, nextjs-opennext | bubbletea-design, codex-br, xai-voice |
+| apple-release (5 commands), chad-review, go-lambda, image-encoding, nextjs-opennext | bubbletea-design, codex-br, tidy, xai-voice |
 
 A plugin can ship both. `apple-release` also ships `resources/` (the full
 saved App Store Review Guidelines). `chad-review` and `image-encoding`
@@ -136,7 +137,14 @@ stay in sync. `make validate-versions` enforces this, and runs as part of
 2. Add `commands/<name>.md`, or `skills/<name>/SKILL.md`, or both.
 3. Register the plugin in `.claude-plugin/marketplace.json`.
 4. Add a row to the plugin table in `README.md`.
-5. Run `make validate`.
+5. Update this file: the repository-structure tree above, the
+   `commands/` versus `skills/` split table, and the version range under
+   Versioning. Three separate reviews have caught this file going stale
+   because the checklist stopped at `README.md`.
+6. If the plugin ships a `skills/` directory, add it to the Claude Desktop
+   list in `README.md`: `make desktop` globs `plugins/*/skills/*`, so it
+   will be packaged whether or not the docs say so.
+7. Run `make validate`.
 
 ## Versioning
 
@@ -145,7 +153,7 @@ Two independent things carry versions.
 - **The marketplace** has its own semver in the top-level `version` field
   of `marketplace.json`. Git tags track it (`v1.4.0` and so on).
 - **Each plugin** has its own version, advancing at its own pace. As of
-  this writing they range from 1.5.0 to 1.9.1. A plugin's version lives
+  this writing they range from 1.0.0 to 2.0.0. A plugin's version lives
   in two files that must agree: its own `plugin.json` and its entry in
   `marketplace.json`.
 

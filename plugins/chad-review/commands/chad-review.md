@@ -65,7 +65,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0 | All six passes run INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. FRESHNESS takes the cache path. |
+   | `light` | 0, or 1 on a cold cache | All six passes run INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because nothing fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS takes the cache path; if the cache is cold or stale, its rules force a full run, so launch the one FRESHNESS agent rather than skipping the pass. |
    | `deps` | 1 | FRESHNESS runs FULLY FRESH as a sub-agent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
@@ -255,9 +255,11 @@ identifiers; key decision points logged ("cache hit", "falling back to provider
 X"); and metrics or timings for rate-limited, queued, retried, or
 externally-dependent operations.
 
-- **CRITICAL**: a new error path that silently swallows failures
+- **CRITICAL**: an error path that silently swallows failures
   (`if err != nil { return nil }`, empty `catch`, ignored promise rejection, bare
-  `except: pass`). This is the single home for the silent-failure check.
+  `except: pass`). This is the single home for the silent-failure check, and it
+  covers **modified** handling as well as new: a change that turns a propagated
+  error into a swallowed one is the same defect, and often better hidden.
 - **HIGH**: a new handler, background job, or entry point with no logging;
   an error returned without wrapping, making root cause untraceable; PII,
   credentials, or tokens logged in plain text.
@@ -504,8 +506,12 @@ One pass, holding every finding at once:
    that still holds; a behavior change intended per an adjacent comment or the
    commit message. Emit one `Filtered: N raised, M dropped` line. A dropped
    CRITICAL stays visible as `[dropped: <=10-word evidence]`.
-4. **Re-verify CRITICALs.** Any CRITICAL, and anything marked `CONF lo`, is
-   confirmed against the code before it enters the verdict.
+4. **Re-verify CRITICALs.** Any CRITICAL, and anything marked `CONF lo`, gets a
+   second look against the code before it enters the verdict. This step can
+   confirm a finding, or sharpen its file:line, or downgrade its severity. It
+   **cannot** drop it: failing to confirm is not evidence of absence, and only
+   step 3's rule removes a finding. An unconfirmed CRITICAL stays in the report,
+   marked `[unconfirmed]`, and still counts toward the verdict.
 5. **Write the verdict.**
 
 ### Writing sub-agent prompts
@@ -648,8 +654,10 @@ Filtered: N raised, M dropped
 [1-2 sentences: commit as-is, fix something first, or stop and rethink]
 ```
 
-Carry finding lines verbatim but **strip any process narration** an agent emitted
-despite the contract. Findings in the deliverable, never the process.
+Carry each finding's severity, location, and wording verbatim, but **drop the
+`CONF` tag**: it is a routing signal for your filter, not something the reader
+needs. Also **strip any process narration** an agent emitted despite the
+contract. Findings in the deliverable, never the process.
 
 **How FRESHNESS affects the verdict.** Being whole-project and always-on, a
 pre-existing dependency issue unrelated to the diff should not hard-block an
@@ -686,7 +694,10 @@ findings. Keep it proportional; no filler. It must:
    with its concrete bump (`current -> target`) and a verify step, plus an
    explicit offer to perform them. Keep HOLD items out.
 6. **Add a `/tidy` handoff line** when SIMPLIFY produced findings: name the files
-   rather than restating each cleanup in prose.
+   rather than restating each cleanup in prose. Order it correctly, because
+   `/tidy` must not run after a gate whose verdict it would invalidate: run
+   `/tidy`, then re-run `/chad-review` so the review sees the final diff. Fold
+   this into the step 7 verification line rather than implying tidy runs last.
 7. **End with** "After fixing, run `/chad-review` again to confirm all issues are
    resolved."
 
@@ -713,5 +724,7 @@ question: the fix prompt is already in the report body.
   agent for work one can finish.
 - DRIFT may run type generators, spec validators, and route-parity tests. These
   are non-destructive.
-- If the diff exceeds roughly 3000 changed lines, ask whether to scope the review
-  to specific directories.
+- If the diff exceeds roughly 50 files or roughly 3000 changed lines, ask whether
+  to scope the review to specific directories. The line count is the better
+  signal on a repo of large files; the file count is the better signal on a wide
+  refactor, so either trips the question.
