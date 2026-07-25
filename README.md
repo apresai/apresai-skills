@@ -37,7 +37,7 @@ plugins/<name>/
 ├── .claude-plugin/plugin.json   # plugin manifest
 ├── README.md                     # human-facing overview
 ├── commands/<name>.md            # slash command(s) + skill content
-├── skills/<name>/                # multi-file skill (e.g. bubbletea-design, codex-br)
+├── skills/<name>/                # multi-file skill (e.g. bubbletea-design, codex-br, tidy)
 └── resources/                    # static assets (apple-release ships the
                                   # full App Store Review Guidelines here)
 ```
