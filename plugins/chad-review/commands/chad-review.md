@@ -45,34 +45,22 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    **Back up untracked files first.** This skill's read-only guarantee is
    enforced by prompt wording, not by tool restriction: the reviewer agents are
-   `general-purpose` and language specialists, which hold Bash, Edit, and Write,
-   and Phase 2 runs the project's own test and codegen commands. On 2026-06-14 a
-   review sub-agent ran a red/green experiment of its own and "restored" the tree
-   with a git command that sweeps untracked files; an untracked test file under
-   review was gone from disk afterwards, while the review reported success. Any
-   of those paths can take an untracked file with it, so back them up on every
-   working-tree review, including the `light` shape where FRESHNESS may still
-   launch and Phase 2 still runs tests.
-
-   The path must be **deterministic and announced**, because the restore happens
-   in a later Bash call and `$$` is a different PID by then:
+   `general-purpose` and language specialists holding Bash, Edit, and Write, and
+   the review runs the project's own test and codegen commands. On 2026-06-14 a
+   review sub-agent "restored" the tree with a git command that sweeps untracked
+   files; an untracked test file under review was gone from disk afterwards while
+   the review reported success. Any of those paths can do it, so back them up on
+   every working-tree review, including the `light` shape.
 
    ```bash
-   BK="${TMPDIR:-/tmp}/chad-review-untracked/$(git rev-parse --show-toplevel | shasum | cut -c1-12)"
-   rm -rf "$BK"; mkdir -p "$BK"; chmod 700 "$BK"
-   git -C "$(git rev-parse --show-toplevel)" ls-files --others --exclude-standard -z \
-     | while IFS= read -r -d '' f; do
-         mkdir -p "$BK/$(dirname "$f")" && cp -p "$f" "$BK/$f" || echo "BACKUP FAILED: $f"
-       done
-   echo "untracked backup: $BK"
+   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/untracked-guard.sh" backup
    ```
 
-   `-z` and `read -d ''` are load-bearing: without them a path containing a
-   space, a newline, or a non-ASCII character is split or C-quoted and silently
-   skipped. `ls-files` is run from the repo root so a subdirectory invocation
-   still sees the whole tree. **Print the `BK` path in the report header** so a
-   human can recover the files even if this session dies. Any `BACKUP FAILED`
-   line means stop and tell the user rather than reviewing an unprotected tree.
+   It prints the backup path; **put that path in the report header** so the files
+   are recoverable even if this session dies. A non-zero exit means something
+   could not be backed up: stop and tell the user rather than reviewing an
+   unprotected tree.
+
 3. **Announce the target and tier** in one line, mapping your session model per
    §"Model tiering":
    `Chad Review: working tree (2 staged, 3 unstaged, 1 untracked), opus session, MECH=sonnet JUDGE=opus`
@@ -544,26 +532,21 @@ One pass, holding every finding at once:
    **cannot** drop it: failing to confirm is not evidence of absence, and only
    step 3's rule removes a finding. An unconfirmed CRITICAL stays in the report,
    marked `[unconfirmed]`, and still counts toward the verdict.
-5. **Confirm the working tree survived.** Compare the live untracked file list
-   against the backup. Use `git ls-files`, NOT `git status --porcelain`: porcelain
-   collapses an untracked directory to a single `sub/` entry, so a file deleted
-   inside one would not show up as missing.
+5. **Confirm the working tree survived.**
 
    ```bash
-   diff <(git ls-files --others --exclude-standard | sort) \
-        <(cd "$BK" && find . -type f | sed 's|^\./||' | sort)
+   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/untracked-guard.sh" verify --restore
    ```
 
-   Lines present in the backup and absent from the tree are files that vanished
-   during the review. Restore them (`cp -p "$BK/<path>" "<path>"`), and report it
-   at the top of the review as a CRITICAL **of the review process**, not of the
-   diff, naming the file and stating that the cause is unattributed: a sub-agent,
-   a project test, or a codegen step could each have done it. This does not by
-   itself change the GO/NO-GO verdict on the diff, which is judged on its own
-   findings; it is a warning that the tree was mutated under review. Files
-   present in the tree but not the backup are new artifacts, which is normal and
-   not a finding. Never issue a verdict on a tree you have not confirmed still
-   holds the files you reviewed.
+   Exit 0 means every untracked file is still there. Exit 1 means one or more
+   vanished during the review; `--restore` puts them back, and the script names
+   each one. Report that at the top of the review as a CRITICAL **of the review
+   process**, not of the diff, and state that the cause is unattributed: a
+   sub-agent, a project test, or a codegen step could each have done it. It does
+   not by itself move the GO/NO-GO verdict on the diff, which is judged on its
+   own findings. Files that appeared during the review are new artifacts, not
+   findings, and the script ignores them. Never issue a verdict on a tree you
+   have not confirmed still holds the files you reviewed.
 6. **Write the verdict.**
 
 ### Writing sub-agent prompts
