@@ -1,4 +1,4 @@
-.PHONY: help validate validate-marketplace validate-plugins validate-structure validate-versions check-clean check-branch desktop deploy clean version bump-patch bump-minor bump-major
+.PHONY: help validate validate-marketplace validate-plugins validate-structure validate-versions check-clean check-branch deploy clean version bump-patch bump-minor bump-major
 
 # Release targets rely on prerequisites running in the listed order
 # (check-clean and check-branch must both run before anything writes a
@@ -19,9 +19,6 @@ help:
 	@echo "  validate-plugins   - Validate all plugin.json manifests"
 	@echo "  validate-structure - Validate directory structure"
 	@echo "  validate-versions  - Check plugin.json versions match marketplace.json"
-	@echo ""
-	@echo "Packaging:"
-	@echo "  desktop            - Create .zip files for Claude Desktop"
 	@echo ""
 	@echo "Version Management:"
 	@echo "  version            - Show current version"
@@ -233,30 +230,9 @@ validate: validate-marketplace validate-plugins validate-structure validate-vers
 	@echo "Repository is Claude Code marketplace compliant"
 	@echo "================================"
 
-# Package skills as .zip files for Claude Desktop
-desktop:
-	@echo "==> Packaging skills for Claude Desktop..."
-	@rm -rf dist && mkdir -p dist
-	@ROOT_DIR=$$(pwd); \
-	for plugin_dir in plugins/*; do \
-		if [ -d "$$plugin_dir/skills" ]; then \
-			plugin_name=$$(basename $$plugin_dir); \
-			echo "  Packaging skills from $$plugin_name..."; \
-			for skill_dir in $$plugin_dir/skills/*; do \
-				if [ -d "$$skill_dir" ]; then \
-					skill_name=$$(basename $$skill_dir); \
-					echo "    Creating $$skill_name.zip..."; \
-					(cd "$$skill_dir" && zip -r "$$ROOT_DIR/dist/$$skill_name.zip" . -x "*.git*" "*.DS_Store" "**/__pycache__/*" "*.pyc"); \
-				fi; \
-			done; \
-		fi; \
-	done
-	@echo "✅ Desktop packages created in dist/"
-	@ls -lh dist/*.zip 2>/dev/null || true
-
 # Refuse to start a release from a dirty tree. Together with the deploy
-# prerequisite order (check-clean, check-branch, validate, desktop, and only
-# then bump-*), every VALIDATION step runs before anything writes a version
+# prerequisite order (check-clean, check-branch, validate, and only then
+# bump-*), every VALIDATION step runs before anything writes a version
 # file, so a failed check never strands a half-applied bump.
 #
 # A failure in the commit/tag/push sequence that follows still can, and the
@@ -309,25 +285,28 @@ define release_and_push
 endef
 
 # Deploy to GitHub with patch version bump
-deploy: check-clean check-branch validate desktop bump-patch
+deploy: check-clean check-branch validate bump-patch
 	@$(release_and_push); \
 	echo ""; \
 	echo "================================"; \
 	echo "Next steps:"; \
 	echo "  1. Create GitHub release: https://github.com/apresai/apresai-skills/releases/new?tag=v$$(jq -r '.version' .claude-plugin/marketplace.json)"; \
-	echo "  2. Upload dist/*.zip files to the release"; \
 	echo "  3. Users can install with: /plugin marketplace add apresai/apresai-skills"; \
 	echo "================================"
 
 # Deploy with minor version bump
-deploy-minor: check-clean check-branch validate desktop bump-minor
+deploy-minor: check-clean check-branch validate bump-minor
 	@$(release_and_push)
 
 # Deploy with major version bump
-deploy-major: check-clean check-branch validate desktop bump-major
+deploy-major: check-clean check-branch validate bump-major
 	@$(release_and_push)
 
-# Clean build artifacts
+# Clean build artifacts.
+# Nothing produces dist/ any more (the Claude Desktop zip target was removed),
+# but the rm stays to clear leftovers from before that change. dist/ is still
+# in .gitignore for the same reason: an untracked leftover would otherwise trip
+# check-clean and block a release.
 clean:
 	@echo "==> Cleaning build artifacts..."
 	@rm -rf dist
