@@ -60,8 +60,8 @@
     },
     {
       "name": "chad-review",
-      "description": "6-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification. Every sub-check reports or marks itself N/A, so spec drift, codegen staleness, and doc rot stay individually visible. Diff-shape aware (light and deps-only diffs skip the fan-out). Tuned for Claude Opus 5: 2 sub-agents rather than 3, sub-agents report everything with a confidence tag while the parent filters once, session-relative sonnet/opus tiering, read-only.",
-      "version": "2.0.0",
+      "description": "6-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification. Every sub-check reports or marks itself N/A, so spec drift, codegen staleness, and doc rot stay individually visible. Diff-shape aware (light and deps-only diffs skip the fan-out). Tuned for Claude Opus 5: 2 sub-agents rather than 3, sub-agents report everything with a confidence tag while the parent filters once, session-relative sonnet/opus tiering. Read-only on the diff, and it backs up untracked files first because that guarantee is prompt-enforced, not tool-enforced.",
+      "version": "2.1.0",
       "author": {
         "name": "Chad Neal"
       },

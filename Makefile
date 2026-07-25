@@ -1,4 +1,4 @@
-.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
+.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions validate-scripts check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
 
 # Release targets rely on prerequisites running in the listed order
 # (check-clean and check-branch must both run before anything writes a
@@ -19,6 +19,7 @@ help:
 	@echo "  validate-plugins   - Validate all plugin.json manifests"
 	@echo "  validate-structure - Validate directory structure"
 	@echo "  validate-versions  - Check plugin.json versions match marketplace.json"
+	@echo "  validate-scripts   - Run plugin resource script test suites"
 	@echo ""
 	@echo "Version Management:"
 	@echo "  version            - Show current version"
@@ -33,6 +34,26 @@ help:
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  clean              - Remove build artifacts"
+
+# Run the shell test suites that ship alongside plugin resources. Content repo,
+# so this is the only executable code here that CAN be tested; the untracked
+# guard went through four review rounds of shell bugs before it had a suite.
+validate-scripts:
+	@echo "==> Running plugin script tests..."
+	@found=0; out=$$(mktemp); \
+	for t in plugins/*/resources/*.test.sh; do \
+		[ -e "$$t" ] || continue; \
+		found=1; \
+		echo "  $$t"; \
+		if command -v timeout >/dev/null 2>&1; then runner="timeout 300"; else runner=""; fi; \
+		if $$runner bash "$$t" > "$$out" 2>&1; then \
+			echo "  ✅ $$(basename $$t) passed"; \
+		else \
+			echo "  ❌ $$(basename $$t) FAILED"; cat "$$out"; rm -f "$$out"; exit 1; \
+		fi; \
+	done; \
+	rm -f "$$out"; \
+	if [ "$$found" = "1" ]; then echo "✅ Script tests passed"; else echo "✅ No script tests to run"; fi
 
 # Show current version
 version:
@@ -223,7 +244,7 @@ validate-versions:
 	echo "✅ All plugin versions match their marketplace entries"
 
 # Run all validations
-validate: validate-marketplace validate-plugins validate-structure validate-versions
+validate: validate-marketplace validate-plugins validate-structure validate-versions validate-scripts
 	@echo ""
 	@echo "================================"
 	@echo "✅ All validations passed!"

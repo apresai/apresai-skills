@@ -1,6 +1,6 @@
 ---
 name: tidy
-description: Apply quality-only cleanups to the code just changed. This skill EDITS FILES, so use it only on an explicit request: the user says "tidy this up", "clean this up", "simplify what I just wrote", or invokes /tidy. Do not fire it on your own mid-task, and do not treat a passing mention of simplicity as a request to start editing. Removes missed reuse, dead code, wrong-altitude logic, needless abstraction, defensive noise for impossible states, and compatibility scaffolding. Scope-fenced to the current diff, behavior-preserving, and gated on a verifier that can actually disprove a change; applies nothing when the repo has none. Never edits executable prompt content, never commits. Runs BEFORE /chad-review.
+description: Apply quality-only cleanups to the code just changed. This skill EDITS FILES, so use it only when deliberately invoked: the user says "tidy this up", "clean this up", "simplify what I just wrote", invokes /tidy, or reaches the named simplify step of a documented build cycle (build, test, tidy, review). Do not fire it on your own mid-task, and do not treat a passing mention of simplicity as a request to start editing. Removes missed reuse, dead code, wrong-altitude logic, needless abstraction, defensive noise for impossible states, and compatibility scaffolding. Scope-fenced to the current diff, behavior-preserving, and gated on a verifier that can actually disprove a change; applies nothing when the repo has none. Never edits executable prompt content, never commits. Runs BEFORE /chad-review.
 ---
 
 # Tidy
@@ -16,8 +16,8 @@ build -> test -> /tidy (applies) -> /chad-review (gates, read-only) -> PR -> mer
 
 **Run before the review, never after.** `/chad-review` is a merge gate, and its
 verdict only holds while the diff against main is unchanged. Applying edits after
-the gate puts unreviewed code on the path to main and re-arms the gate, costing a
-second full review on every PR.
+the gate puts unreviewed code on the path to main and re-arms the gate. The
+re-review is delta-only, but it is still a second gate on work already cleared.
 
 ## Scope fence
 
