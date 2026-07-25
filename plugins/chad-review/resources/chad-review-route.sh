@@ -187,10 +187,19 @@ echo
 # (coverage only), 4 OBSERVABILITY, and 6 SIMPLIFY all ride a single per-language
 # specialist at the JUDGE tier, reading the diff once. <spec_hint> is the DRIFT
 # codegen/spec-lint command hint, surfaced on the reviewer row.
+# Pass reviewer="-" for a block that gets no reviewer of its own (prose). It then
+# prints neither a tier nor the Phase 2 reviewer line, both of which would
+# contradict the block's own "no reviewer" text.
 emit_block() {
   local lang="$1" reviewer="$2" spec_hint="$3" ctx="$4"
+  echo "--- Routing: $lang ---"
+  if [[ "$reviewer" == "-" ]]; then
+    echo "  No reviewer of its own: DRIFT [docs] in the parent covers prose."
+    echo "      DRIFT hint                         : $spec_hint"
+    echo
+    return 0
+  fi
   cat <<EOF
---- Routing: $lang ---
   Reviewer (DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY)
                                        -> $reviewer   [JUDGE tier]
       DRIFT codegen / spec-lint hint     : $spec_hint
@@ -288,23 +297,33 @@ fi
 # `plugins/*/commands/` would be wrong twice: it misses a plugin published as its
 # own repo (commands/ at the root) and it breaks this script's project-agnostic
 # promise by hardcoding a directory name.
+# Plugin roots are found ONCE, the same way cdk.json and next.config.* are found
+# above. Walking ancestors per file with `dirname` forks and a disk stat each
+# time measured 11s on a 300-file markdown diff against 0.07s for the pattern
+# below; this runs before every review, so that is not an acceptable cost.
+plugin_root_dirs=$(find "$repo_root" -maxdepth 6 \( "${prune[@]}" \) -prune -o -name .claude-plugin -type d -exec dirname {} \; 2>/dev/null | sed "s|^$repo_root/||;s|^$repo_root$|.|" | sort -u || true)
+
+# is_exec_md <repo-relative-path>
+# Executable prompt content, per chad-review's forced-`standard` list.
 is_exec_md() {
-  local f="$1" d parent
+  local f="$1" root
   case "$f" in
     CLAUDE.md|*/CLAUDE.md|SKILL.md|*/SKILL.md) return 0 ;;
     .claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
+    *"/commands/"*|"commands/"*|*"/agents/"*|"agents/"*|*"/skills/"*|"skills/"*) ;;
+    *) return 1 ;;
   esac
-  d=$(dirname "$f")
-  while :; do
-    case "$(basename "$d")" in
-      commands|agents|skills)
-        parent=$(dirname "$d")
-        [[ -d "$repo_root/$parent/.claude-plugin" ]] && return 0
-        ;;
-    esac
-    [[ "$d" == "." || "$d" == "/" ]] && break
-    d=$(dirname "$d")
-  done
+  # A commands|agents|skills path counts when it sits under a plugin root.
+  while IFS= read -r root; do
+    [[ -z "$root" ]] && continue
+    [[ "$root" == "." ]] && return 0
+    [[ "$f" == "$root"/* ]] && return 0
+  done <<< "$plugin_root_dirs"
+  # A DELETED file cannot be confirmed from disk, and neither can its plugin
+  # root if the whole plugin was removed. For a merge gate the safe default is
+  # to route it to a reviewer: over-routing costs one pass, under-routing
+  # silently skips five.
+  [[ ! -e "$repo_root/$f" ]] && return 0
   return 1
 }
 
@@ -319,7 +338,7 @@ done <<< "$md_files$yaml_specs"
 # markdown under "Files detected" and then routed no reviewer for it, which is
 # exactly the silent drop this script's header promises never to do.
 if [[ -n "$exec_md" ]]; then
-  emit_block "Executable prompt content ($(first_dir "$exec_md" || echo .))" \
+  emit_block "Executable prompt content ($(cnt "$exec_md") file(s), $(first_dir "$exec_md" || echo .))" \
     "general-purpose" \
     "${lint_target:+$lint_target + }cross-reference check: every pointer resolves, no stale pass/section names" \
     ""
@@ -336,8 +355,8 @@ while IFS= read -r f; do
 done <<< "$md_files$yaml_specs"
 
 if [[ -n "$prose_md" ]]; then
-  emit_block "Docs / spec ($(first_dir "$prose_md" || echo .))" \
-    "(no reviewer: prose carries no behavioral pass; DRIFT [docs] covers it)" \
+  emit_block "Docs / spec ($(cnt "$prose_md") file(s), $(first_dir "$prose_md" || echo .))" \
+    "-" \
     "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
     ""
 fi

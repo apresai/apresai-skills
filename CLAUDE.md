@@ -40,7 +40,7 @@ apresai-skills/
 │   └── xai-voice/
 ├── CLAUDE.md                # this file
 ├── LICENSE
-├── Makefile                 # validate / package / version / release
+├── Makefile                 # validate / version / release
 └── README.md                # user-facing plugin table, kept current
 ```
 

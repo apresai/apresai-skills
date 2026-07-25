@@ -84,10 +84,12 @@ human can judge them. Never apply them.
    cr=$(ls -d "$HOME"/.claude/plugins/cache/*/chad-review/*/resources \
               "$HOME"/.claude/skills/chad-review/resources \
          2>/dev/null | sort -V | tail -1)
-   [[ -n "$cr" ]] && cat "$cr/pass-reference.md"
+   echo "${cr:-not found}"
    ```
 
-   No output just means less enrichment: fall back to the language knowledge you
+   If it resolved, Read `$cr/pass-reference.md` and take only the § TESTS
+   section (and § SIMPLIFY for step 4); do not cat the whole file, it is long.
+   Not found just means less enrichment: fall back to the language knowledge you
    have. **Each snippet in this file re-resolves `$cr`**, because every Bash call
    is a fresh shell and a variable set in one does not survive into the next.
 3. **Route by language.** Reuse chad-review's detector so both tools agree on
