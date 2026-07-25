@@ -1,4 +1,9 @@
-.PHONY: help validate validate-marketplace validate-plugins validate-structure desktop deploy clean version bump-patch bump-minor bump-major
+.PHONY: help validate validate-marketplace validate-plugins validate-structure validate-versions check-clean check-branch desktop deploy clean version bump-patch bump-minor bump-major
+
+# Release targets rely on prerequisites running in the listed order
+# (check-clean and check-branch must both run before anything writes a
+# version file). Parallel make would not guarantee that.
+.NOTPARALLEL:
 
 # Get current version from marketplace.json
 get-version:
@@ -13,6 +18,7 @@ help:
 	@echo "  validate-marketplace - Validate marketplace.json schema"
 	@echo "  validate-plugins   - Validate all plugin.json manifests"
 	@echo "  validate-structure - Validate directory structure"
+	@echo "  validate-versions  - Check plugin.json versions match marketplace.json"
 	@echo ""
 	@echo "Packaging:"
 	@echo "  desktop            - Create .zip files for Claude Desktop"
@@ -139,8 +145,40 @@ validate-structure:
 	done
 	@echo "✅ Directory structure is compliant"
 
+# Validate that every plugin's version matches its marketplace.json entry,
+# and that the two plugin lists agree in both directions. bump-* no longer
+# force-syncs these, so this check is what keeps the hand-maintained
+# invariant honest.
+validate-versions:
+	@echo "==> Validating plugin version parity..."
+	@FAILED=0; \
+	for plugin_dir in plugins/*; do \
+		[ -d "$$plugin_dir" ] || continue; \
+		manifest="$$plugin_dir/.claude-plugin/plugin.json"; \
+		name=$$(jq -r '.name' "$$manifest"); \
+		plugin_version=$$(jq -r '.version // ""' "$$manifest"); \
+		market_version=$$(jq -r --arg n "$$name" '.plugins[] | select(.name == $$n) | .version // ""' .claude-plugin/marketplace.json); \
+		if [ -z "$$market_version" ]; then \
+			echo "❌ ERROR: $$name is not registered in marketplace.json"; \
+			FAILED=1; \
+		elif [ "$$plugin_version" != "$$market_version" ]; then \
+			echo "❌ ERROR: $$name version mismatch: plugin.json=$$plugin_version marketplace.json=$$market_version"; \
+			FAILED=1; \
+		else \
+			echo "  ✅ $$name $$plugin_version"; \
+		fi; \
+	done; \
+	for name in $$(jq -r '.plugins[].name' .claude-plugin/marketplace.json); do \
+		if [ ! -d "plugins/$$name" ]; then \
+			echo "❌ ERROR: marketplace.json lists $$name but plugins/$$name does not exist"; \
+			FAILED=1; \
+		fi; \
+	done; \
+	if [ $$FAILED -ne 0 ]; then exit 1; fi; \
+	echo "✅ All plugin versions match their marketplace entries"
+
 # Run all validations
-validate: validate-marketplace validate-plugins validate-structure
+validate: validate-marketplace validate-plugins validate-structure validate-versions
 	@echo ""
 	@echo "================================"
 	@echo "✅ All validations passed!"
@@ -168,79 +206,62 @@ desktop:
 	@echo "✅ Desktop packages created in dist/"
 	@ls -lh dist/*.zip 2>/dev/null || true
 
-# Deploy to GitHub with patch version bump
-deploy: bump-patch validate desktop
-	@VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
-	echo "==> Preparing deployment for v$$VERSION..."; \
-	echo "  Checking git status..."; \
-	if [ -n "$$(git status --porcelain | grep -v '^ M .claude-plugin/marketplace.json' | grep -v '^ M plugins/.*/\.claude-plugin/plugin.json')" ]; then \
-		echo "❌ ERROR: Working directory has uncommitted changes beyond version files."; \
-		echo "Please commit or stash changes first."; \
+# Refuse to start a release from a dirty tree. This runs BEFORE any bump
+# target writes a version file, so an aborted release never leaves a
+# half-applied version behind.
+check-clean:
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "❌ ERROR: Working directory is not clean. Commit or stash first."; \
+		git status --short; \
 		exit 1; \
-	fi; \
-	echo "  Committing version bump..."; \
-	git add .claude-plugin/marketplace.json; \
-	git add plugins/*/.claude-plugin/plugin.json; \
-	git commit -m "Bump version to $$VERSION" || true; \
-	echo "  Checking if on main branch..."; \
-	BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	fi
+
+# Confirm before releasing from a branch other than main.
+check-branch:
+	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
 	if [ "$$BRANCH" != "main" ]; then \
 		echo "⚠️  WARNING: Not on main branch (current: $$BRANCH)"; \
-		read -p "Continue? [y/N] " -n 1 -r; \
-		echo; \
-		if [[ ! $$REPLY =~ ^[Yy]$$ ]]; then \
-			echo "Deployment cancelled"; \
-			exit 1; \
-		fi; \
-	fi; \
-	echo "  Creating git tag v$$VERSION..."; \
+		printf "Continue? [y/N] "; \
+		read REPLY; \
+		case "$$REPLY" in \
+			[Yy]*) ;; \
+			*) echo "Deployment cancelled"; exit 1 ;; \
+		esac; \
+	fi
+
+# Commit the marketplace version bump, tag, and push.
+# Only marketplace.json is staged: bump-* no longer writes plugin.json, so
+# anything else being dirty is an unrelated edit and check-clean already
+# rejected it.
+define release_and_push
+	VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
+	echo "==> Deploying v$$VERSION..."; \
+	git add .claude-plugin/marketplace.json; \
+	git commit -m "Bump version to $$VERSION"; \
 	git tag -a "v$$VERSION" -m "Release v$$VERSION"; \
-	echo "  Pushing to GitHub..."; \
 	git push origin main; \
 	git push origin "v$$VERSION"; \
+	echo "✅ Deployed v$$VERSION"
+endef
+
+# Deploy to GitHub with patch version bump
+deploy: check-clean check-branch bump-patch validate desktop
+	@$(release_and_push); \
 	echo ""; \
 	echo "================================"; \
-	echo "✅ Deployed successfully!"; \
-	echo "Version: v$$VERSION"; \
 	echo "Next steps:"; \
-	echo "  1. Create GitHub release: https://github.com/apresai/apresai-skills/releases/new?tag=v$$VERSION"; \
+	echo "  1. Create GitHub release: https://github.com/apresai/apresai-skills/releases/new?tag=v$$(jq -r '.version' .claude-plugin/marketplace.json)"; \
 	echo "  2. Upload dist/*.zip files to the release"; \
 	echo "  3. Users can install with: /plugin marketplace add apresai/apresai-skills"; \
 	echo "================================"
 
 # Deploy with minor version bump
-deploy-minor: bump-minor validate desktop
-	@VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
-	echo "==> Preparing deployment for v$$VERSION..."; \
-	echo "  Checking git status..."; \
-	if [ -n "$$(git status --porcelain | grep -v '^ M .claude-plugin/marketplace.json' | grep -v '^ M plugins/.*/\.claude-plugin/plugin.json')" ]; then \
-		echo "❌ ERROR: Working directory has uncommitted changes beyond version files."; \
-		echo "Commit content changes first, then re-run make deploy-minor."; \
-		exit 1; \
-	fi; \
-	git add .claude-plugin/marketplace.json plugins/*/.claude-plugin/plugin.json; \
-	git commit -m "Bump version to $$VERSION" || true; \
-	git tag -a "v$$VERSION" -m "Release v$$VERSION"; \
-	git push origin main; \
-	git push origin "v$$VERSION"; \
-	echo "✅ Deployed v$$VERSION"
+deploy-minor: check-clean check-branch bump-minor validate desktop
+	@$(release_and_push)
 
 # Deploy with major version bump
-deploy-major: bump-major validate desktop
-	@VERSION=$$(jq -r '.version' .claude-plugin/marketplace.json); \
-	echo "==> Preparing deployment for v$$VERSION..."; \
-	echo "  Checking git status..."; \
-	if [ -n "$$(git status --porcelain | grep -v '^ M .claude-plugin/marketplace.json' | grep -v '^ M plugins/.*/\.claude-plugin/plugin.json')" ]; then \
-		echo "❌ ERROR: Working directory has uncommitted changes beyond version files."; \
-		echo "Commit content changes first, then re-run make deploy-major."; \
-		exit 1; \
-	fi; \
-	git add .claude-plugin/marketplace.json plugins/*/.claude-plugin/plugin.json; \
-	git commit -m "Bump version to $$VERSION" || true; \
-	git tag -a "v$$VERSION" -m "Release v$$VERSION"; \
-	git push origin main; \
-	git push origin "v$$VERSION"; \
-	echo "✅ Deployed v$$VERSION"
+deploy-major: check-clean check-branch bump-major validate desktop
+	@$(release_and_push)
 
 # Clean build artifacts
 clean:
