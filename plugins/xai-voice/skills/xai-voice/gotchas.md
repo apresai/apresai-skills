@@ -129,7 +129,9 @@ Neither is OpenAI's `{"error":{"message","type","code"}}` envelope. A client tha
 unconditionally `json.Unmarshal`s the error body will produce an empty message for every
 422; parse defensively, falling back to the raw string.
 
-**Retry only 429 and 5xx.** 404 (bad voice), 400 (length/speed), and 422 (bad shape) are
+**Retry 429, 5xx, and transport/timeout errors only** (a context cancellation is not
+retryable, and 401/403 never is: bad credentials do not heal). See the full table in
+`go-client.md`. 404 (bad voice), 400 (length/speed), and 422 (bad shape) are
 deterministic; retrying them burns wall-clock to reach the identical error.
 
 ## Rate limits: no signal, no published number
@@ -141,7 +143,8 @@ deterministic; retrying them burns wall-clock to reach the identical error.
   self-service tier upgrade for voice and no published numeric limit.**
 - Measured: 12 concurrent requests all returned 200 in ~2 s with no throttling.
 
-Plan for 8–12 workers, and keep exponential backoff on 429 anyway (an unpublished ceiling
+Start at 8 to 12 workers (one burst of 12 succeeded; that is not a sustained-rate
+measurement), and keep exponential backoff on 429 regardless (an unpublished ceiling
 is not an absent ceiling).
 
 ## Cost and timeouts
