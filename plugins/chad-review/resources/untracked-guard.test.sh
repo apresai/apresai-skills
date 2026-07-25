@@ -174,7 +174,7 @@ r11=$(newrepo) || exit 99; usable "$r11"
 printf 'x\n' > "$r11/a-plain.txt"
 printf 'x\n' > "$r11/$(printf 'bad\nname.txt')" 2>/dev/null
 ( cd "$r11" && bash "$GUARD" backup >/dev/null 2>&1 )
-if ( cd "$r11" && bash "$GUARD" verify 2>&1 1>/dev/null ) | grep -q 'warning: 1 untracked path'; then
+if ( cd "$r11" && bash "$GUARD" verify 2>&1 1>/dev/null ) | grep -q 'warning: 1 backed-up path'; then
   ok "newline warning fires when the bad path is not first"
 else
   bad "newline warning fires when the bad path is not first"
@@ -189,7 +189,7 @@ fi
 # certifies broken code as working. Without the stub this case passed against
 # a guard that kept the five OLDEST.
 mkdir -p "$WORKDIR/stub"
-printf '#!/bin/sh\necho 20260101-000000\n' > "$WORKDIR/stub/date"
+printf '#!/bin/sh\ncase "$1" in\n  +%%Y%%m%%d-%%H%%M%%S) echo 20260101-000000 ;;\n  *) exec /bin/date "$@" ;;\nesac\n' > "$WORKDIR/stub/date"
 chmod +x "$WORKDIR/stub/date"
 r12=$(newrepo) || exit 99; usable "$r12"
 for g in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -201,6 +201,27 @@ check "same-second rotations pruned to 5" "$(find "$b12" -maxdepth 1 -name 'prev
 kept=$(find "$b12" -maxdepth 1 -name 'prev-*' -exec sh -c 'ls "$1" | head -1' _ {} \; \
        | sed 's/[^0-9]//g' | LC_ALL=C sort -n | tr '\n' ' ')
 check "the five KEPT same-second rotations are the newest" "$kept" "7 8 9 10 11 "
+
+# The false "all survived". `b\nc.txt` splits into fragments that collide with
+# the real `b` and `c.txt`, so a deleted newline file leaves the line-based
+# comparison balanced. Counting newline paths from the LIVE listing went silent
+# here, because the path is gone by then; counting from the BACKUP does not.
+r13=$(newrepo) || exit 99; usable "$r13"
+printf 'x\n' > "$r13/b"; printf 'x\n' > "$r13/c.txt"
+printf 'x\n' > "$r13/$(printf 'b\nc.txt')" 2>/dev/null
+( cd "$r13" && bash "$GUARD" backup >/dev/null 2>&1 )
+rm -f "$r13/$(printf 'b\nc.txt')"
+out=$( cd "$r13" && bash "$GUARD" verify 2>/dev/null ); rc=$?
+check "collision case still exits 0 (comparison genuinely cannot see it)" "$rc" "0"
+case $out in
+  *"EXCEPT 1 newline path"*) ok "stdout does NOT claim a clean sweep over the uncheckable path" ;;
+  *) bad "stdout does NOT claim a clean sweep over the uncheckable path (got [$out])" ;;
+esac
+if ( cd "$r13" && bash "$GUARD" verify 2>&1 1>/dev/null ) | grep -q 'backed-up path'; then
+  ok "warning still fires after the newline file is deleted"
+else
+  bad "warning still fires after the newline file is deleted"
+fi
 
 echo
 echo "passed: $pass   failed: $fail"

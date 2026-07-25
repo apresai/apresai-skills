@@ -541,11 +541,12 @@ One pass, holding every finding at once:
    bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/untracked-guard.sh" verify --restore
    ```
 
-   Exit 0 means every untracked file the guard covers is still there. **Read its
-   stderr, not just the exit code**: a path containing a literal newline cannot be
-   compared safely (the comparison is line-based) and the guard warns about it on
-   stderr while still exiting 0. Pass that warning through to the user, because
-   for those paths exit 0 is not a survival guarantee. Exit 1 means one or more
+   Exit 0 means every untracked file the guard covers is still there, and its
+   stdout line names any it does not cover: a path containing a literal newline
+   cannot go through the line-based comparison, so the guard excludes it, says so
+   on both stdout and stderr, and still exits 0. **Quote that line rather than
+   summarizing it**, because for those paths exit 0 is not a survival guarantee.
+   Exit 1 means one or more
    vanished during the review; `--restore` puts back the ones it can and names
    any it could not, which stay recoverable from the backup path it prints. Exit
    2 means the guard could not run at all (no backup was taken, or the tree is

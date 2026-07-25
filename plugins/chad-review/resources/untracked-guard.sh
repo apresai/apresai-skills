@@ -81,11 +81,20 @@ case "$cmd" in
       # and the prune below (which orders by name) would then delete it first,
       # keeping the five oldest instead of the five newest.
       ts=$(date +%Y%m%d-%H%M%S)
-      last=$({ find "$base" -maxdepth 1 -name "prev-$ts-*" -print 2>/dev/null || true; } \
-             | sed "s|.*/prev-$ts-||" | LC_ALL=C sort -n | tail -1)
-      # 10# so a zero-padded counter is read as decimal, not octal (008 is not
-      # a valid octal literal and would abort the script under `set -e`).
-      if [[ -n "$last" ]]; then i=$((10#$last + 1)); else i=0; fi
+      # Plain glob rather than find|sed|sort|tail: no pipeline to abort under
+      # `pipefail`, no sed delimiter to collide with, and a hand-made directory
+      # with a non-numeric suffix is skipped instead of aborting the script on
+      # an arithmetic error. A no-match glob stays literal and fails `-d`.
+      maxn=-1
+      for d in "$base"/prev-"$ts"-*; do
+        [[ -d "$d" ]] || continue
+        n=${d##*-}
+        case $n in ''|*[!0-9]*) continue ;; esac
+        # 10# so a zero-padded counter is decimal, not octal (008 is not a valid
+        # octal literal and the arithmetic error would abort under `set -e`).
+        if (( 10#$n > maxn )); then maxn=$((10#$n)); fi
+      done
+      i=$((maxn + 1))
       dest=$(printf '%s/prev-%s-%03d' "$base" "$ts" "$i")
       while [[ -e "$dest" ]]; do i=$((i+1)); dest=$(printf '%s/prev-%s-%03d' "$base" "$ts" "$i"); done
       mv "$BK" "$dest" || { echo "could not rotate previous backup aside" >&2; exit 1; }
@@ -101,9 +110,16 @@ case "$cmd" in
     # into a list feeding `rm -rf`). Sort the basenames, not the full paths, so
     # dashes in $TMPDIR cannot shift the field positions: date and time reverse
     # lexically, the counter reverse NUMERICALLY so a 4-digit counter still
-    # sorts above 999. `|| true` because an empty match is normal and would
-    # otherwise abort under `pipefail`.
+    # sorts above 999. The `grep` keeps this list to names this script itself
+    # generated: a hand-made directory whose name contains a newline would
+    # otherwise arrive as two lines, and a fragment could name a real rotation
+    # and delete it. Anything unrecognized is left alone, which is the safe
+    # direction for a store that exists to recover files. The trailing `|| true`
+    # is belt and braces (`find` exits 0 on no match here, and the dir always
+    # exists by this line), kept so a later edit cannot turn an empty match into
+    # a `pipefail` abort.
     { find "$base" -maxdepth 1 -name 'prev-*' -exec basename {} \; 2>/dev/null || true; } \
+      | grep -E '^prev-[0-9]{8}-[0-9]{6}-[0-9]+$' \
       | LC_ALL=C sort -t- -k2,2r -k3,3r -k4,4nr | tail -n +6 \
       | while IFS= read -r old; do [[ -n "$old" ]] && rm -rf "${base:?}/$old"; done || true
     n=0; failed=0
@@ -129,25 +145,34 @@ case "$cmd" in
     # rather than silently mis-pairing them with another file.
     # Capture the listing ONCE, as backup does: three separate calls raced the
     # same data the checks are meant to agree about.
-    live="$(mktemp)"; saved="$(mktemp)"; raw="$(mktemp)"
-    trap 'rm -f "$live" "$saved" "$raw"' EXIT
+    live="$(mktemp)"; saved="$(mktemp)"; raw="$(mktemp)"; savedraw="$(mktemp)"
+    trap 'rm -f "$live" "$saved" "$raw" "$savedraw"' EXIT
     list_untracked > "$raw" 2>/dev/null || { echo "could not list untracked files; cannot verify" >&2; exit 2; }
+    ( cd "$BK" && find . \( -type f -o -type l \) -print0 ) > "$savedraw"
 
-    # Count PATHS (NUL-separated records) that contain a newline, using the same
-    # `read -r -d ''` idiom `backup` uses. Two shorter spellings were tried and
-    # both were silently wrong: `grep -c '\n'` never matches under BSD grep, and
-    # `awk 'BEGIN{RS="\0"}'` sets RS to the EMPTY string under BWK awk (the only
-    # awk on stock macOS), which is paragraph mode, so it examined just the first
-    # path. Verified: `awk 'BEGIN{RS="\0"; print length(RS)}'` prints 0 there.
+    # Count BACKED-UP paths that contain a newline, NOT live ones. The live
+    # listing loses the path the moment the file is deleted, which is precisely
+    # the case this warning exists to flag: with untracked `b`, `c.txt`, and
+    # `b\nc.txt`, deleting the third leaves a line-based comparison in which the
+    # fragments `b` and `c.txt` still match the two real files, so the check
+    # reported "all untracked files survived" over a file that was gone. The
+    # backup listing keeps the name, so the warning survives the deletion.
+    #
+    # Counted with the same `read -r -d ''` idiom `backup` uses. Two shorter
+    # spellings were tried and both were silently wrong: `grep -c '\n'` never
+    # matches under BSD grep, and `awk 'BEGIN{RS="\0"}'` sets RS to the EMPTY
+    # string under BWK awk (the only awk on stock macOS), which is paragraph
+    # mode, so it examined just the first path. Verified:
+    # `awk 'BEGIN{RS="\0"; print length(RS)}'` prints 0 there.
     nl_count=0
     while IFS= read -r -d '' p; do
       case $p in *$'\n'*) nl_count=$((nl_count+1)) ;; esac
-    done < "$raw"
+    done < "$savedraw"
     if [[ "$nl_count" -gt 0 ]]; then
-      echo "warning: $nl_count untracked path(s) contain a newline; not covered by this check" >&2
+      echo "warning: $nl_count backed-up path(s) contain a newline; NOT covered by this check" >&2
     fi
     tr '\0' '\n' < "$raw" | LC_ALL=C sort > "$live"
-    ( cd "$BK" && find . \( -type f -o -type l \) -print | sed 's|^\./||' ) | LC_ALL=C sort > "$saved"
+    tr '\0' '\n' < "$savedraw" | sed 's|^\./||' | LC_ALL=C sort > "$saved"
     candidates=$(LC_ALL=C comm -13 "$live" "$saved" || true)
 
     # A file leaves `ls-files --others` for several reasons, and only one of them
@@ -166,7 +191,14 @@ case "$cmd" in
     missing=${missing%$'\n'}
 
     if [[ -z "$missing" ]]; then
-      echo "all untracked files survived the review"
+      # Do not claim a clean sweep over paths that were never checked. The
+      # stdout line is what a reader quotes, so the exclusion belongs there and
+      # not only in the stderr warning above.
+      if [[ "$nl_count" -gt 0 ]]; then
+        echo "all untracked files survived the review, EXCEPT $nl_count newline path(s) that could not be checked"
+      else
+        echo "all untracked files survived the review"
+      fi
       exit 0
     fi
     echo "UNTRACKED FILES VANISHED DURING THIS REVIEW:" >&2
