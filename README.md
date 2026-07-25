@@ -10,7 +10,7 @@ Production-ready Claude Code skills, mined from real production projects.
 
 After Claude Code reloads, the skills below are available via slash commands.
 
-## Plugins (7)
+## Plugins (8)
 
 | Plugin | Slash commands | What it does |
 |---|---|---|
@@ -21,6 +21,7 @@ After Claude Code reloads, the skills below are available via slash commands.
 | **[go-lambda](./plugins/go-lambda/)** | `/go-lambda-builder` | Go on AWS Lambda done right: `provided.al2023` + ARM64/Graviton2 + AWS SDK v2. Includes production patterns from 8+ real Lambda projects: bounded-timeout `LoadDefaultConfig`, STS session policies via `json.Marshal`, `TestSchemaDrift` reflection, ULID over UUID v4, OpenAPI-first via `oapi-codegen`, single-table DynamoDB with typed structs. |
 | **[image-encoding](./plugins/image-encoding/)** | `/image-encoding` | Modern web image encoding with **AVIF** (primary, ~95% browser support) and **WebP** (fallback) via the `<picture>` cascade. Covers `cwebp` / `dwebp` / `avifenc` CLIs with current defaults, JPEG XL status, Next.js Image integration. |
 | **[nextjs-opennext](./plugins/nextjs-opennext/)** | `/nextjs-deploy` | Next.js on AWS via **OpenNext v4 + CDK**. Includes production-mined patterns: `CachePolicyId` override (`4135ea2d-…`) required or CloudFront caches SSR forever, `WARM_PARAMS` env shape, Server-Components-only auth (no middleware / no Lambda@Edge), `__Secure-` vs `__Host-` cookie prefix behavior, cost-tag schema, NextAuth.js v5 RBAC, ISR DynamoDB GSI naming. |
+| **[xai-voice](./plugins/xai-voice/)** | (skill auto-triggers) | Master reference for **xAI's three voice APIs**: Grok **Text-to-Speech** (`POST /v1/tts`), **Speech-to-Text** (`/v1/stt`), and the realtime **Speech-to-Speech** voice agent (`wss://api.x.ai/v1/realtime`). Contracts verified by live probe against `api.x.ai`, because the docs are behind the API: **26 voices live where docs say 5**, two undocumented codecs, a documented request field that doesn't exist, and **no `model` field at all** on `/v1/tts`. Covers the trap that ships broken audio (unrecognized bracket speech tags are *read aloud*, so `[laugh]` laughs but `[laughs]` says "laughs"), plus a production Go client (there is no xAI Go SDK, and the audio surface is **not** OpenAI-compatible), retry/concurrency tuning, SIP telephony, and a zero-cost schema-discovery technique that works on any `serde`-backed API. |
 
 ## Versioning
 

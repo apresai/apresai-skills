@@ -77,6 +77,16 @@
       },
       "source": "./plugins/codex-br",
       "category": "ai-tooling"
+    },
+    {
+      "name": "xai-voice",
+      "description": "Master reference for xAI's three voice APIs: Grok Text-to-Speech (POST /v1/tts), Speech-to-Text (/v1/stt), and the realtime Speech-to-Speech voice agent (wss://api.x.ai/v1/realtime). Live-verified request and response contracts, the full 26-voice catalog (docs still say 5), speech-tag semantics, a production Go client, and the doc-vs-reality discrepancies that ship broken audio.",
+      "version": "1.6.1",
+      "author": {
+        "name": "Chad Neal"
+      },
+      "source": "./plugins/xai-voice",
+      "category": "ai-tooling"
     }
   ]
 }
