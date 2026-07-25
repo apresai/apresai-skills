@@ -1,0 +1,22 @@
+# git-secrets false-positive allowlist (regexes matched per line).
+#
+# The `xai-[a-zA-Z0-9_-]+` pattern that catches real xAI API keys (which are
+# literally prefixed `xai-`) also matches every ordinary hyphenated identifier
+# starting with "xai": this repo's own `xai-voice` plugin name and directory
+# path, xAI's package names, and the WebSocket subprotocol prefix.
+#
+# Each entry below is a specific known identifier, NOT a blanket `xai-.*`, so a
+# real key still trips the hook. Tradeoff worth knowing: git-secrets exempts a
+# whole LINE when any allowed pattern matches it, so a line that mentions one of
+# these identifiers AND carries a real key would pass. These are package and
+# path names, so that co-occurrence is not a realistic shape.
+xai-voice
+xai-sdk-python
+xai-sdk-go
+xai-proto
+xai-org
+xai-go
+xai-client-secret
+xai-grok-tts
+xai-grok-voice
+x-ai/grok-voice-tts
