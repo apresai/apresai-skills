@@ -6,6 +6,12 @@ probed, so treat field names as needing a smoke test before they become load-bea
 
 ## Speech-to-Text (`/v1/stt`)
 
+> **Provenance: [docs], read from `docs.x.ai` on 2026-07-25. Not probed.** Unlike the
+> `/v1/tts` contract in `tts.md`, no request in this section was ever sent against
+> `api.x.ai`. Field names, defaults, and required/optional markings are as documented, and
+> the TTS surface has already proven that xAI's docs drift from the running API. Smoke-test
+> before any of this becomes load-bearing.
+
 Audio in, text out. Batch and streaming.
 
 ### Batch (`POST https://api.x.ai/v1/stt`)
@@ -43,6 +49,11 @@ Client → server: raw binary audio frames, plus `finalize` and `audio.done` con
 Server → client: `transcript.created`, `transcript.partial`, `transcript.done`, `error`.
 
 ## Speech-to-Speech (Voice Agent, `wss://api.x.ai/v1/realtime`)
+
+> **Provenance: [docs], read from `docs.x.ai` on 2026-07-25. Not probed.** No WebSocket
+> session was opened, no event was sent or received, and no SIP number was provisioned. The
+> event names, `session.update` fields, tool flow, and telephony endpoints below are as
+> documented only. Verify against a live session before depending on them.
 
 A live conversational loop. The model listens, thinks, and speaks. It is **not** a
 text renderer.
@@ -166,19 +177,28 @@ Twilio Elastic SIP Trunking, Telnyx SIP Connection (port 5060), Plivo, plus `byo
   `force_message` extension can inject one scripted utterance into a live session, but it is
   an interjection mechanism, not a batch renderer.
 
-TTS is also the only one of the three that is deterministic: same text + same `voice_id`
-→ same delivery, which is what makes it safe to synthesize a script segment-by-segment and
-concatenate without the voice drifting between segments.
+TTS is also the only one of the three with text fidelity: it speaks exactly the text you
+supply, which is what makes it usable for synthesizing a script segment-by-segment. It is
+**not** deterministic, though: three identical requests returned three different durations
+and three different sha256 hashes. **[live]** Text fidelity, not byte reproducibility, is
+the property to rely on.
 
 ## Pricing **[docs]**
 
 | Surface | Price | Unit |
 |---|---|---|
-| TTS | $15.00 | per 1M **input characters** |
+| TTS | $15.00 (**disputed**, see below) | per 1M **input characters** |
 | STT batch | $0.10 | per hour of audio |
 | STT streaming | $0.20 | per hour of audio |
 | Realtime S2S audio | $0.05/min ($3.00/hr) | per minute, both directions |
 | Realtime text input events | $0.004 | per `conversation.item.create` |
+
+The TTS row is **not settled**: `tts.md` → "Pricing" records an unresolved conflict between
+the primary sources ($15.00 per 1M characters, per `docs.x.ai`, OpenRouter, and Vapi) and
+five April-2026 news aggregators that all reported **$4.20 per 1M characters** at launch. No
+dated pricing-change log resolves which is right. Budget at $15 and verify against your own
+console billing. The STT and realtime rows carry no such conflict, but are equally
+docs-sourced and unverified.
 
 ## LiveKit
 

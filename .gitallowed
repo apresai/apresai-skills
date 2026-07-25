@@ -1,22 +1,29 @@
-# git-secrets false-positive allowlist (regexes matched per line).
+# git-secrets false-positive allowlist (extended regexes, matched per line).
 #
-# The `xai-[a-zA-Z0-9_-]+` pattern that catches real xAI API keys (which are
-# literally prefixed `xai-`) also matches every ordinary hyphenated identifier
-# starting with "xai": this repo's own `xai-voice` plugin name and directory
-# path, xAI's package names, and the WebSocket subprotocol prefix.
+# Real xAI API keys carry a fixed lowercase prefix, so the pattern that catches
+# them also matches ordinary hyphenated identifiers that share it: this repo's
+# own plugin name and directory path, and xAI's package names.
 #
-# Each entry below is a specific known identifier, NOT a blanket `xai-.*`, so a
-# real key still trips the hook. Tradeoff worth knowing: git-secrets exempts a
-# whole LINE when any allowed pattern matches it, so a line that mentions one of
-# these identifiers AND carries a real key would pass. These are package and
-# path names, so that co-occurrence is not a realistic shape.
-xai-voice
-xai-sdk-python
-xai-sdk-go
-xai-proto
-xai-org
-xai-go
-xai-client-secret
-xai-grok-tts
-xai-grok-voice
-x-ai/grok-voice-tts
+# Every entry is anchored with a trailing `([^A-Za-z0-9_-]|$)` so it matches only
+# the exact identifier followed by a delimiter or end of line. A real key, whose
+# random suffix runs straight on from the prefix with no delimiter, does NOT
+# match. Unanchored substrings would have exempted any key beginning with those
+# characters, which is the bug this shape fixes.
+#
+# git-secrets exempts the WHOLE LINE when an allowed pattern matches it, so
+# entries must be as narrow as possible. The websocket subprotocol entry below is
+# therefore pinned to the literal documentation placeholder, complete with its
+# `{TOKEN}` stand-in, rather than the bare header name: that header carries a live
+# ephemeral token in real code, and exempting the bare name would let an actual
+# secret through on that line.
+#
+# That last entry writes its own prefix with a one-character class so the line is
+# regex-equivalent but is not itself literal key-shaped text, which would
+# otherwise make this file trip the very hook it configures.
+xai-voice([^A-Za-z0-9_-]|$)
+xai-sdk-python([^A-Za-z0-9_-]|$)
+xai-sdk-go([^A-Za-z0-9_-]|$)
+xai-proto([^A-Za-z0-9_-]|$)
+xai-org([^A-Za-z0-9_-]|$)
+xai-go([^A-Za-z0-9_-]|$)
+xai-[c]lient-secret\.\{TOKEN\}

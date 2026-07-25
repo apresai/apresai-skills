@@ -1,15 +1,15 @@
 ---
 name: xai-voice
-description: Build against xAI's voice APIs (Grok Text-to-Speech, Speech-to-Text, and the realtime Speech-to-Speech voice agent). Triggers when the user wants to synthesize speech with Grok or xAI, mentions api.x.ai/v1/tts, /v1/stt, wss://api.x.ai/v1/realtime, grok-tts, grok-voice, grok-voice-tts, or Grok voice agents; wants to add xAI as a TTS provider to an app or pipeline; asks which xAI voices exist, how xAI speech tags work, what xAI TTS costs, or why xAI TTS rejects a request; wants to build a voice agent, phone/SIP agent, or LiveKit integration on Grok; or is choosing between TTS, STT, and speech-to-speech for a voice task. Carries live-verified request/response contracts, the 26-voice catalog, a production Go client, and the places xAI's own docs are wrong.
+description: Build against xAI's voice APIs (Grok Text-to-Speech, Speech-to-Text, and the realtime Speech-to-Speech voice agent). Triggers when the user wants to synthesize speech with Grok or xAI, mentions api.x.ai/v1/tts, /v1/stt, wss://api.x.ai/v1/realtime, grok-tts, grok-voice, grok-voice-tts, or Grok voice agents; wants to add xAI as a TTS provider to an app or pipeline; asks which xAI voices exist, how xAI speech tags work, what xAI TTS costs, or why xAI TTS rejects a request; asks about xAI voice cloning or a custom_voice_id; wants Grok chat to return strict schema-enforced JSON (response_format json_schema, /v1/responses text.format) for script or structured-output generation; wants to build a voice agent, phone/SIP agent, or LiveKit integration on Grok; or is choosing between TTS, STT, and speech-to-speech for a voice task. Carries live-verified request/response contracts, the 26-voice catalog, a production Go client, and the places xAI's own docs are wrong.
 ---
 
 # xAI Voice: Grok TTS, STT, and Speech-to-Speech
 
 This skill is the reference for building on xAI's three voice surfaces. It exists because
 **`docs.x.ai` is materially behind the running API**: the published voice roster is 5 when
-26 are live, the codec enum is missing two values, and a documented request field does not
-exist. Everything here marked **[live]** was verified by direct probe against `api.x.ai` on
-**2026-07-25**.
+26 are live, the codec enum is missing two values, and the REST reference still restricts
+`reasoning_effort` to a model that is no longer the only one accepting it. Everything here
+marked **[live]** was verified by direct probe against `api.x.ai` on **2026-07-25**.
 
 ## Pick the right API first
 
@@ -24,9 +24,10 @@ This is the decision that matters most, and getting it wrong costs a rewrite.
 **Rendering a written script to audio is TTS.** Speech-to-Speech is a conversational loop
 with no verbatim-render mode (the model composes its own replies under VAD-driven turn
 taking), and it bills per connected minute instead of per character. TTS is also the only one
-of the three that is *deterministic*: the same text and `voice_id` produce the same delivery,
-which is what makes it safe to synthesize a multi-speaker script segment-by-segment and
-concatenate without the voice drifting between segments.
+of the three with text fidelity: it speaks exactly the text you supply, which is what makes
+it usable for synthesizing a multi-speaker script segment-by-segment. Note that TTS output is
+**not** deterministic: three identical requests (same text, same `voice_id`) returned three
+different durations and three different sha256 hashes (1.440 s / 1.224 s / 1.176 s). **[live]**
 
 ## Reading order
 
@@ -63,8 +64,13 @@ Five things that surprise everyone: **[live]**
 2. **`language` is required but never validated.** `"xx"` and `""` both return 200.
 3. **Output is always mono**, at every sample rate. There is no stereo option.
 4. **Omitting `output_format` silently downgrades** to 24 kHz / 128 kbps.
-5. **Unrecognized bracket tags are read aloud.** `[laugh]` produces a laugh; `[laughs]`
-   produces the *word* "laughs." See `gotchas.md`; this one ships broken audio.
+5. **Bracket tags are never silently ignored.** At N=6 per condition on voice `luna`, every
+   bracketed form measurably lengthened the audio versus baseline (baseline mean 1.272 s,
+   `[laugh]` 2.428 s, `[laughs]` 2.232 s, and the nonsense `[flibbertigibbet]` 2.088 s). So
+   passing unrecognized bracketed text straight through is not safe. What the model actually
+   vocalizes for an unrecognized tag is **unverified**: duration alone cannot separate "a
+   laugh was rendered" from "the word was spoken," and nobody listened. Normalize or strip
+   bracket tokens defensively. See `gotchas.md`.
 
 ## Auth and setup
 
@@ -97,6 +103,6 @@ Write the HTTP call. It is ~60 lines; see `go-client.md`.
 3. **Probe rather than guess.** The TTS deserializer names the offending field on every
    rejection and returns the full valid set for a bad enum value, so the live schema is
    discoverable for free. `gotchas.md` documents the technique.
-4. **Sanitize LLM-authored text** before it reaches `/v1/tts`, or the word "laughs" ends up in
-   your audio.
+4. **Sanitize LLM-authored text** before it reaches `/v1/tts`. Bracket tokens an LLM writes
+   by habit are not ignored; they change the audio, in a way nobody has verified.
 5. **Cross-check `gotchas.md` before shipping.**

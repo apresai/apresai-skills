@@ -15,15 +15,20 @@ TTS provider.
 |---|---|
 | 5 voices (`eve`, `ara`, `leo`, `rex`, `sal`) | **26 voices** |
 | codecs `mp3`/`wav`/`pcm`/`mulaw`/`alaw` | also **`opus`** and **`ulaw`** |
-| `optimize_streaming_latency` is a request field | **not in the schema** (silently ignored) |
+| `optimize_streaming_latency` is a request field | **it is** a request field, an `i32` on `POST /v1/tts` (an earlier probe with the integer `999` wrongly concluded otherwise: a valid integer deserializes fine) |
 | `reasoning_effort` is "only supported by grok-4.3" | **`grok-4.5` accepts it** |
 | TTS GA in March 2025 (release notes) | internally inconsistent; corroborated launch is **2026-04-17** |
 
-Plus two behaviors documented nowhere that produce *wrong audio rather than errors*:
+Plus two behaviors documented nowhere that *change the audio instead of raising an error*:
 
 - **There is no `model` field on `/v1/tts`.** Sending one returns 200 and is ignored.
-- **Unrecognized bracket speech tags are read aloud.** `[laugh]` renders a laugh (+1.87 s on a
-  measured A/B); `[laughs]` (the plural an LLM naturally writes) renders the *word* "laughs."
+  (Re-confirmed with an object-valued probe, which detects fields of every scalar type.)
+- **Bracket speech tags are never silently ignored.** At N=6 per condition, every bracketed
+  form lengthened the audio versus a 1.272 s baseline, including a nonsense token:
+  `[laugh]` 2.428 s, `[laughs]` 2.232 s, `[flibbertigibbet]` 2.088 s. So unrecognized
+  bracketed text must be normalized or stripped before sending. What the model actually
+  vocalizes for one is **unverified**: duration cannot distinguish a rendered laugh from the
+  spoken word, and nobody listened to the audio.
 
 ## Contents
 
@@ -50,7 +55,11 @@ curl -s -X POST https://api.x.ai/v1/tts \
 # -> unknown variant `__nope__`, expected one of `mp3`, `wav`, `pcm`, `opus`, `mulaw`, `ulaw`, `alaw`
 ```
 
-This generalizes to any `serde`-backed Rust API.
+This generalizes to any `serde`-backed Rust API, with one caveat that already burned us: the
+oracle only fires when the probe value mismatches the field's **actual** type. Probing an
+integer field with an integer deserializes fine and falls through to the voice-404, which
+reads exactly like "field ignored." Probe with an **object** (`{"field":{"__obj__":1}}`),
+which mismatches every scalar type.
 
 ## Provenance
 
@@ -60,8 +69,12 @@ recorded. Unresolved questions (notably the $15 vs $4.20 per-1M-character pricin
 between primary sources and launch-week aggregators) are flagged as unresolved rather than
 papered over.
 
-## Proven in production
+## Validated against a real integration
 
-Backs the `xai` TTS provider and `grok` script model in
+Developed alongside the `xai` TTS provider and `grok` script model in
 [podcaster](https://github.com/apresai/podcaster), which renders two-host podcast scripts to
-audio segment-by-segment through `POST /v1/tts`.
+audio segment-by-segment through `POST /v1/tts`. That integration is the source of the
+error-handling, retry, and timeout guidance here.
+
+**Not yet deployed.** As of 2026-07-25 the podcaster PR is open, unmerged, and not released
+to production, so nothing in this skill has production-traffic evidence behind it.

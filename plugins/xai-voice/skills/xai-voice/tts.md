@@ -1,8 +1,9 @@
 # xAI Text-to-Speech: `POST /v1/tts`
 
-Batch/unary synthesis: fixed text in, audio bytes out. Deterministic; the model does not
-paraphrase. This is the endpoint for rendering pre-written scripts, articles, podcast
-segments, notifications, IVR prompts.
+Batch/unary synthesis: fixed text in, audio bytes out. The reason to use it for a written
+script is **text fidelity**: it speaks exactly the text you supply and does not paraphrase.
+It is not bit-reproducible (see Limits). This is the endpoint for rendering pre-written
+scripts, articles, podcast segments, notifications, IVR prompts.
 
 Every field and value below marked **[live]** was verified by direct probe against
 `api.x.ai` on **2026-07-25**. Facts marked **[docs]** come from `docs.x.ai` and were not
@@ -19,21 +20,24 @@ Content-Type: application/json
 
 | Field | Type | Required | Values | Notes |
 |---|---|---|---|---|
-| `text` | string | **yes** | ≤ 15,000 chars | Supports inline speech tags. **[live]** |
+| `text` | string | **yes** | ≤ 15,000 **characters** (not bytes) | Supports inline speech tags. **[live]** |
 | `language` | string | **yes** | BCP-47 (`en`, `es-MX`, `pt-BR`, …) or `auto` | Required by the deserializer but **not validated** (any string, including `""`, returns 200). **[live]** |
 | `voice_id` | string | no | see voice catalog | Canonical name. `voice` is an accepted **alias** for the same field. Case-insensitive. Default `eve`. **[live]** |
 | `speed` | number | no | `0.7`–`1.5` (default `1.0`) | Out of range → `{"error":"speed must be between 0.7 and 1.5"}`. **[live]** |
 | `output_format` | object | no | see below | A nested **object**, not a string. **[live]** |
 | `text_normalization` | boolean | no | n/a | Expands numbers/dates/abbreviations into spoken form. **[live: field exists]** |
 | `with_timestamps` | boolean | no | n/a | Changes the response to a JSON envelope. **[live]** |
+| `optimize_streaming_latency` | integer (i32) | no | n/a | Exists on this endpoint. Probing with an object returns `optimize_streaming_latency: invalid type: map, expected i32`. Effect on unary POST unverified. **[live: field exists, type i32]** |
 
 There is **no `model` field.** Sending one is silently ignored, and the request still returns
 200 and audio. Voice selection *is* model selection here. **[live]**
 
 Fields that do **not** exist on this endpoint (silently ignored if sent): `model`, `pitch`,
 `temperature`, `seed`, `instructions`, `style`, `stream`, `volume`, `emotion`,
-`sample_rate` (top level), `response_format`, `format`, `optimize_streaming_latency`,
-`custom_voice_id`. **[live]**
+`sample_rate` (top level), `response_format`, `format`,
+`custom_voice_id`. **[live]** Each was re-probed with an **object** value, which mismatches
+every scalar type, so an existing field of any type would have been revealed. See
+`gotchas.md` for why an integer probe cannot prove absence.
 
 ### `output_format`
 
@@ -67,7 +71,7 @@ With `with_timestamps: true` the response becomes `Content-Type: application/jso
   "duration": 0.84,
   "audio_timestamps": {
     "graph_chars": ["H", "e", "l", "l", "o"],
-    "graph_times": [[0.12, 0.16], [0.16, 0.18], [0.2, 0.23]]
+    "graph_times": [[0.12, 0.16], [0.16, 0.18], [0.18, 0.2], [0.2, 0.23], [0.23, 0.31]]
   }
 }
 ```
@@ -124,41 +128,65 @@ Bracket (one-shot): `[pause]` `[long-pause]` `[laugh]` `[cry]` `[clap]` `[snap]`
 Wrapping: `<loud>` `<soft>` `<whisper>` `<high>` `<low>` `<slow>` `<fast>` `<sing>`
 `<giggly>` `<grumpy>` (e.g. `<whisper>this part matters</whisper>`) **[docs]**
 
-Live-confirmed from this list: `[laugh]`, `[sigh]`, `[pause]`, `<whisper>` (all consumed and
-rendered, not spoken). The rest are documented but unverified.
+Live-confirmed from this list: `[laugh]`, `[sigh]`, `[pause]`, `<whisper>` all measurably
+change the output versus the same text without them, so they are consumed rather than
+ignored. **Which** sound the model produces for each was not verified by listening (see the
+next section). The rest are documented but unverified.
 
 > **Treat the tag list as approximate.** Six separate fetches of the same docs page returned
 > six different tag lists, so the exact complete set is not reliably established. Additional
 > tags appearing in some extractions but not others: `[chuckle]` `[giggle]` `[cough]`
 > `[sneeze]` `[inhale]` `[exhale]` `[sniff]` `[throat-clear]` `[lip-smack]` `[tongue-click]`;
 > `<emphasis>` `<excited>` `<sad>` `<higher-pitch>` `<lower-pitch>` `<build-intensity>`.
-> **Verify any tag you depend on with a duration A/B before shipping it**: the cost of being
-> wrong is the tag name being spoken aloud (see below), and the A/B takes one curl.
+> **Verify any tag you depend on before shipping it**, and verify it by *listening*, not by
+> duration alone: an unrecognized bracketed token is not ignored either (see below), so a
+> duration change proves only that the token had an effect, not that it produced the sound
+> you wanted.
 
 ### The tag gotcha that will bite you
 
-**An unrecognized bracket tag is READ ALOUD, not dropped.** Measured on identical wording,
-voice `luna`, no other changes: **[live]**
+**An unrecognized bracket tag is not dropped.** Because output is not byte-stable, a single
+sample per condition proves nothing here. Sampled at **N=6 per condition**, voice `luna`,
+identical wording, no other changes: **[live]**
 
-| `text` | duration |
-|---|---|
-| `That is wild.` | 1.44 s |
-| `[laugh] That is wild.` | 3.31 s ← real laugh |
-| `[laughs] That is wild.` | 2.14 s ← the **word "laughs" spoken** |
-| `[sigh] That is wild.` | 2.06 s ← real sigh |
-| `[flibbertigibbet] That is wild.` (nonsense) | +0.98 s ← spoken |
+| `text` | mean | sd | range |
+|---|---|---|---|
+| `That is wild.` (baseline) | 1.272 s | 0.057 | 1.224–1.392 |
+| `[laugh] That is wild.` | 2.428 s | 0.280 | 2.016–2.904 |
+| `[laughs] That is wild.` | 2.232 s | 0.365 | 1.800–2.832 |
+| `That is wild.` (baseline, second run) | 1.356 s | 0.079 | 1.200–1.440 |
+| `[flibbertigibbet] That is wild.` (nonsense) | 2.088 s | 0.426 | 1.152–2.400 |
 
-The documented tags are **singular** (`[laugh]`, `[sigh]`). The natural-English plural
-forms an LLM will happily emit (`[laughs]`, `[sighs]`) are *not* tags and get vocalized.
+**What this proves:** every bracketed form, recognized or not, measurably lengthens the
+output versus baseline. A nonsense token is *not* silently stripped. So passing
+unrecognized bracketed text straight through to the API is not safe.
+
+**What this does NOT prove (UNVERIFIED):** which sound the model actually makes. The
+`[laugh]` and `[laughs]` distributions overlap heavily, and duration alone cannot
+distinguish "a laugh was rendered" from "the word was spoken". An earlier version of this
+file claimed `[laugh]` renders a laugh while `[laughs]` is spoken as a word; that claim
+came from single samples of a non-deterministic signal and is retracted. Settling it
+requires listening to the audio, which has not been done.
+
+The documented tags are **singular** (`[laugh]`, `[sigh]`); the natural-English plural forms
+an LLM will happily emit (`[laughs]`, `[sighs]`) are not on the documented list.
 
 Consequence for any pipeline whose text comes from an LLM: either constrain the prompt to
-emit no bracketed text at all, or whitelist-filter `text` against the exact tag list above
-before it reaches `/v1/tts`. Passing model output through unfiltered will eventually put
-the word "laughs" in your audio.
+emit no bracketed text at all, or normalize known variants (`[laughs]` → `[laugh]`) and
+strip any bracketed token that is not on your whitelist before `text` reaches `/v1/tts`.
+Passing model output through unfiltered puts an unpredictable, non-silent artifact in your
+audio.
 
 ## Limits and throughput
 
-- **15,000 characters** per request, enforced. **[live]**
+- **15,000 characters** per request, enforced. The cap counts **characters, not bytes**:
+  14,000 multi-byte characters (28,000 UTF-8 bytes) passed deserialization. A client must
+  measure runes/code points (`utf8.RuneCountInString` in Go, `len(s)` on a Python `str`),
+  not `len(bytes)`, or it will reject valid non-ASCII text. **[live]**
+- **Output is not byte-stable.** Three identical requests (same text, same `voice_id`, no
+  other fields) returned three different durations (1.440 s / 1.224 s / 1.176 s) and three
+  different sha256 hashes. Do not cache, dedupe, or test by hashing the audio, and do not
+  expect two renders of the same segment to line up on a timeline. **[live]**
 - Long text is fine: 5,000 chars returned **342 s** of audio in a single call. Synthesis
   time scales with output length; a ~10,000-char request exceeded a 2-minute client
   timeout. Size per-request timeouts off *output duration*, not input bytes. **[live]**
