@@ -161,7 +161,7 @@ make validate          # runs all four validate-* checks below
 make validate-versions # plugin.json versions match their marketplace.json entries
 make version           # print the current marketplace version
 make bump-patch        # marketplace version only (also bump-minor, bump-major)
-make clean             # remove stray .pyc / __pycache__ / .DS_Store (and any legacy dist/)
+make clean             # remove stray .pyc / __pycache__ / .DS_Store
 ```
 
 `make validate` is the check to run before opening a PR. It verifies that

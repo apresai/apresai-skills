@@ -1,4 +1,4 @@
-.PHONY: help validate validate-marketplace validate-plugins validate-structure validate-versions check-clean check-branch deploy clean version bump-patch bump-minor bump-major
+.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
 
 # Release targets rely on prerequisites running in the listed order
 # (check-clean and check-branch must both run before anything writes a
@@ -291,7 +291,7 @@ deploy: check-clean check-branch validate bump-patch
 	echo "================================"; \
 	echo "Next steps:"; \
 	echo "  1. Create GitHub release: https://github.com/apresai/apresai-skills/releases/new?tag=v$$(jq -r '.version' .claude-plugin/marketplace.json)"; \
-	echo "  3. Users can install with: /plugin marketplace add apresai/apresai-skills"; \
+	echo "  2. Users can install with: /plugin marketplace add apresai/apresai-skills"; \
 	echo "================================"
 
 # Deploy with minor version bump
@@ -302,14 +302,9 @@ deploy-minor: check-clean check-branch validate bump-minor
 deploy-major: check-clean check-branch validate bump-major
 	@$(release_and_push)
 
-# Clean build artifacts.
-# Nothing produces dist/ any more (the Claude Desktop zip target was removed),
-# but the rm stays to clear leftovers from before that change. dist/ is still
-# in .gitignore for the same reason: an untracked leftover would otherwise trip
-# check-clean and block a release.
+# Clean build artifacts
 clean:
 	@echo "==> Cleaning build artifacts..."
-	@rm -rf dist
 	@find . -type f -name "*.pyc" -delete
 	@find . -type d -name "__pycache__" -delete
 	@find . -type f -name ".DS_Store" -delete
