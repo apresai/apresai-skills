@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# chad-review-route.sh — pick per-pass subagents based on what's in the diff.
+# chad-review-route.sh: pick the per-language reviewer based on what's in the diff.
 #
 # WHY THIS EXISTS
-# chad-review's 9-pass STRUCTURE is language-agnostic. The rote passes (1,3,5,6,7)
-# now collapse into ONE lean general-purpose "mechanical bundle" agent per language
-# (the MECH tier), so this script's per-language specialization applies to just the
-# Pass 2 BEHAVIORAL pick — the one pass whose domain knowledge earns a heavyweight
-# specialist. Go behavioral review wants `feature-dev:code-reviewer`; CDK TypeScript
-# wants `cloud-architect` (which also covers IaC observability); Next.js React wants
-# `frontend-developer`; iOS Swift has no native specialist so we fall back to
-# `code-reviewer`, enriched with Context7 docs for the frameworks the diff imports.
+# chad-review's 6-pass STRUCTURE is language-agnostic, but the reviewer that runs
+# five of those passes is not: one specialist per language block reads that
+# language's hunks once, at the JUDGE tier. Go wants `feature-dev:code-reviewer`;
+# CDK TypeScript wants `cloud-architect` (which also covers IaC observability);
+# Next.js React wants `frontend-developer`; generic TS wants `typescript-pro`;
+# iOS Swift has no native specialist so we fall back to `code-reviewer`, enriched
+# with Context7 docs for the frameworks the diff actually imports.
 #
 # PROJECT-AGNOSTIC BY DESIGN
 # This script does NOT assume fixed directory names. It adapts to whatever the
@@ -20,7 +19,7 @@
 #   - OpenAPI specs are found by an `openapi:`/`swagger:` key or an `openapi/`
 #     dir, not by an exact `openapi.yaml` filename.
 #   - Context7 framework hints are DERIVED from the imports / package.json deps
-#     the changed files actually use — not a hardcoded per-project list.
+#     the changed files actually use, not a hardcoded per-project list.
 #   - SPEC-DRIFT command hints are DERIVED from the project's Makefile targets
 #     (gen*, openapi-lint, …) when present.
 # Anything it can't classify is still surfaced (no silent drops).
@@ -53,7 +52,7 @@ if [[ "$mode" == "last-commit" ]]; then
   files=$(git show --stat --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' || true)
 else
   # Three sources: tracked changes vs HEAD, staged-but-not-yet-vs-HEAD, and
-  # untracked. Union them — in a brand-new repo with no HEAD the first call
+  # untracked. Union them. In a brand-new repo with no HEAD the first call
   # errors silently and we rely on the latter two.
   files=$( { git diff HEAD --name-only 2>/dev/null;
              git diff --cached --name-only 2>/dev/null;
@@ -75,13 +74,21 @@ fi
 sniff() { [[ -f "$repo_root/$1" ]] && grep -qE "$2" "$repo_root/$1" 2>/dev/null; }
 
 # first_make_target <regex> : echo `make <target>` for the first Makefile target
-# whose name matches, else nothing. Lets SPEC-DRIFT hints reflect the real repo.
+# whose name matches, else nothing. Lets DRIFT hints reflect the real repo.
+#
+# MUST always return 0. Callers assign it (`gen_target=$(first_make_target ...)`),
+# and a simple assignment takes the command substitution's exit status, so under
+# `set -e` a non-zero return kills the whole script. Ending this function on a
+# bare `[[ -n "$t" ]] && echo ...` returns 1 whenever nothing matched, which
+# aborted the script in any repo that had a Makefile without a matching target
+# (it printed the file counts, then no routing blocks at all, and exited 1).
 first_make_target() {
   local mk="$repo_root/Makefile"
   [[ -f "$mk" ]] || return 0
   local t
   t=$(grep -oE "^[a-zA-Z0-9_.-]+:" "$mk" 2>/dev/null | sed 's/:$//' | grep -E "$1" | head -1 || true)
-  [[ -n "$t" ]] && echo "make $t"
+  if [[ -n "$t" ]]; then echo "make $t"; fi
+  return 0
 }
 
 # first_dir <newline-list> : dirname of the first entry in a classified file
@@ -146,7 +153,7 @@ done <<< "$files"
 
 cnt() { echo -n "$1" | grep -c . || true; }
 
-echo "chad-review routing — $mode"
+echo "chad-review routing: $mode"
 echo "==========================================="
 echo "Files detected:"
 [[ -n "$go_files" ]]    && echo "  Go (.go)                 : $(cnt "$go_files")"
@@ -159,22 +166,22 @@ echo "Files detected:"
 [[ -n "$other_files" ]] && echo "  Other / unclassified     : $(cnt "$other_files")"
 echo
 
-# emit_block <lang> <pass2_specialist> <spec_hint> <ctx>
-# BUNDLING MODEL: the rote passes (1,3,5,6,7) collapse into ONE general-purpose
-# agent at the MECH tier; only Pass 2 BEHAVIORAL keeps a per-language specialist,
-# at the JUDGE tier. <spec_hint> is the SPEC-DRIFT command hint for the bundle's
-# Pass 3 (regen/validate/route-parity), surfaced on the bundle row.
+# emit_block <lang> <reviewer_specialist> <spec_hint> <ctx>
+# ONE REVIEWER PER LANGUAGE. Passes 1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS
+# (coverage only), 4 OBSERVABILITY, and 6 SIMPLIFY all ride a single per-language
+# specialist at the JUDGE tier, reading the diff once. <spec_hint> is the DRIFT
+# codegen/spec-lint command hint, surfaced on the reviewer row.
 emit_block() {
-  local lang="$1" pass2="$2" spec_hint="$3" ctx="$4"
+  local lang="$1" reviewer="$2" spec_hint="$3" ctx="$4"
   cat <<EOF
 --- Routing: $lang ---
-  Mechanical bundle (Passes 1,3,5,6,7) → general-purpose        [MECH tier]
-      Pass 3 SPEC DRIFT hint             : $spec_hint
-  Pass 2 BEHAVIORAL                    → $pass2   [JUDGE tier]
+  Reviewer (DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY)
+                                       -> $reviewer   [JUDGE tier]
+      DRIFT codegen / spec-lint hint     : $spec_hint
 EOF
-  [[ "$lang" == CDK* ]] && echo "      (+ IaC observability: log retention / X-Ray / alarms folded into the Pass 2 brief)"
-  [[ -n "$ctx" ]] && echo "  Context7 enrichment                  → $ctx"
-  echo "  (Pass 4 TEST → parent; Pass 8 ADVERSARIAL → parent on opus/sonnet, else JUDGE sub-agent)"
+  [[ "$lang" == CDK* ]] && echo "      (+ IaC observability: log retention / X-Ray / alarms folded into the brief)"
+  [[ -n "$ctx" ]] && echo "  Context7 enrichment                  -> $ctx"
+  echo "  (TESTS run + attacks + filter + verdict -> parent, Phase 2)"
   echo
 }
 
@@ -183,10 +190,10 @@ EOF
 # reviewing agent runs the language-appropriate sub-target itself.
 gen_target=$(first_make_target '^gen$'); [[ -z "$gen_target" ]] && gen_target=$(first_make_target '^gen')
 lint_target=$(first_make_target 'openapi-lint|^lint$|validate')
-go_spec_cmd="general-purpose (regenerate types${gen_target:+ via $gen_target}${lint_target:+ + $lint_target} + diff generated *.gen.go)"
-web_spec_cmd="general-purpose (regen API types${gen_target:+ via $gen_target} + diff generated types; tsc --noEmit)"
-swift_spec_cmd="general-purpose (regen client${gen_target:+ via $gen_target} + diff Generated/ vs the OpenAPI spec)"
-cdk_spec_cmd="general-purpose (cdk synth + cdk diff after build; or tsc --noEmit)"
+go_spec_cmd="regenerate types${gen_target:+ via $gen_target}${lint_target:+ + $lint_target} + diff generated *.gen.go"
+web_spec_cmd="regen API types${gen_target:+ via $gen_target} + diff generated types; tsc --noEmit"
+swift_spec_cmd="regen client${gen_target:+ via $gen_target} + diff Generated/ vs the OpenAPI spec"
+cdk_spec_cmd="cdk synth + cdk diff after build; or tsc --noEmit"
 
 # --- Go ---------------------------------------------------------------------
 [[ -n "$go_files" ]] && emit_block "Go" \
@@ -224,7 +231,7 @@ if [[ -n "$web_files" ]]; then
 fi
 
 # --- Generic TypeScript / JS (neither CDK nor Next.js) ----------------------
-[[ -n "$ts_files" ]] && emit_block "TypeScript / JS (generic — $(first_dir "$ts_files" || echo .))" \
+[[ -n "$ts_files" ]] && emit_block "TypeScript / JS (generic: $(first_dir "$ts_files" || echo .))" \
   "typescript-pro" \
   "tsc --noEmit; regen API types if the project defines codegen" \
   "context7: (resolve from package.json deps the changed files import)"
@@ -252,13 +259,13 @@ fi
 if [[ -z "$go_files$cdk_files$web_files$ts_files$swift_files" ]]; then
   if [[ -n "$yaml_specs$md_files" ]]; then
     emit_block "Docs / spec only" \
-      "(skip — docs carry no behavioral pass; docs-only diff shape runs inline)" \
-      "${lint_target:+$lint_target + }grep for stale prose refs; Pass 7 DOCUMENTATION is the real work" \
+      "(skip: the light diff shape runs every pass inline in the parent)" \
+      "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
       ""
   fi
 fi
 
-# --- Unclassified — never drop silently -------------------------------------
+# --- Unclassified: never drop silently ---------------------------------------
 if [[ -n "$other_files" ]]; then
   exts=$(echo "$other_files" | grep -oE '\.[A-Za-z0-9]+$' | sort -u | tr '\n' ' ' | sed 's/ *$//')
   echo "--- Routing: Other / unclassified (${exts:-no extension}) ---"
@@ -269,17 +276,17 @@ fi
 
 echo "==========================================="
 echo "Notes:"
-echo "  - Model tiering is SESSION-RELATIVE (chad-review §Model Tiering): compute"
-echo "    MECH and JUDGE from the current session model. opus session → MECH=sonnet,"
-echo "    JUDGE=opus; sonnet → both sonnet; fable → MECH=opus, JUDGE=opus. Never haiku."
-echo "    The bundle (Passes 1,3,5,6,7) + Pass 9 ride MECH; Pass 2 + Pass 8 ride JUDGE."
-echo "  - Pass 9 FRESHNESS → general-purpose [MECH], whole-project: launch it ONCE"
-echo "    per review, not per language block, and not from the routing above."
-echo "  - Pass 4 TEST → parent. Pass 8 ADVERSARIAL → inline in the parent on an"
-echo "    opus/sonnet session, else a dedicated JUDGE (opus) sub-agent (fable)."
-echo "  - Context7 hints are framework names — the agent should resolve to a"
-echo "    library ID and fetch docs at audit start, then reason against current"
-echo "    semantics (not pre-training knowledge that may be stale)."
-echo "  - For mixed-language diffs, spawn the bundle + Pass 2 agents per language"
-echo "    block above (each scoped to ONLY that block's hunks), plus one whole-"
-echo "    project Pass 9; the parent merges findings into a single Final Report."
+echo "  - Model tiering is SESSION-RELATIVE (chad-review \"Model tiering\"): MECH is"
+echo "    always sonnet; JUDGE is opus except on a sonnet session, which stays"
+echo "    sonnet everywhere. Never haiku, never spawn fable. The reviewer rides"
+echo "    JUDGE; FRESHNESS rides MECH."
+echo "  - FRESHNESS -> general-purpose [MECH], whole-project: launch it ONCE per"
+echo "    review, not per language block, and not from the routing above."
+echo "  - Phase 2 is the parent: run the affected tests, run the attack probes,"
+echo "    filter every finding once, re-verify CRITICALs, write the verdict."
+echo "  - Context7 hints are framework names. The agent resolves each to a library"
+echo "    ID and fetches docs at audit start, then reasons against current"
+echo "    semantics rather than pre-training knowledge that may be stale."
+echo "  - Mixed-language diffs: one reviewer per block above, each scoped to ONLY"
+echo "    that block's hunks, plus one whole-project FRESHNESS agent. The parent"
+echo "    merges every finding into a single Final Report."
