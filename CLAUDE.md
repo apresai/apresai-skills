@@ -175,9 +175,11 @@ agreeing in both directions.
 
 The `deploy` targets refuse to run from a dirty tree or from any branch
 other than `main`, then validate, package, and only then bump the
-marketplace version, commit, tag, and push. Everything that can fail runs
-before anything writes a version file, so an aborted release never strands
-a half-applied bump. Since deploy pushes to `main` directly it is a
+marketplace version, commit, tag, and push. Every validation step runs
+before anything writes a version file, so a failed check never strands a
+half-applied bump. A failure later in the commit/tag/push sequence still
+can, since the bump is on disk by then; recover with `git checkout
+.claude-plugin/marketplace.json`. Since deploy pushes to `main` directly it is a
 tagging step, not a review step: merge content through a PR first, then
 release from `main`.
 

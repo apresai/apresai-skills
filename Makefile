@@ -51,7 +51,11 @@ bump-patch:
 	NEW_PATCH=$$((PATCH + 1)); \
 	NEW_VERSION="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
 	echo "Bumping version: $$CURRENT -> $$NEW_VERSION"; \
-	jq --arg v "$$NEW_VERSION" '.version = $$v' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
+	if ! jq --arg v "$$NEW_VERSION" '.version = $$v' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp; then \
+		rm -f .claude-plugin/marketplace.json.tmp; \
+		echo "❌ ERROR: could not write marketplace.json (disk full, read-only mount, or permissions?)"; \
+		exit 1; \
+	fi; \
 	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
 	echo "✅ Marketplace version is now $$NEW_VERSION (per-plugin versions untouched)"
 
@@ -64,7 +68,11 @@ bump-minor:
 	NEW_MINOR=$$((MINOR + 1)); \
 	NEW_VERSION="$$MAJOR.$$NEW_MINOR.0"; \
 	echo "Bumping version: $$CURRENT -> $$NEW_VERSION"; \
-	jq --arg v "$$NEW_VERSION" '.version = $$v' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
+	if ! jq --arg v "$$NEW_VERSION" '.version = $$v' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp; then \
+		rm -f .claude-plugin/marketplace.json.tmp; \
+		echo "❌ ERROR: could not write marketplace.json (disk full, read-only mount, or permissions?)"; \
+		exit 1; \
+	fi; \
 	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
 	echo "✅ Marketplace version is now $$NEW_VERSION (per-plugin versions untouched)"
 
@@ -76,7 +84,11 @@ bump-major:
 	NEW_MAJOR=$$((MAJOR + 1)); \
 	NEW_VERSION="$$NEW_MAJOR.0.0"; \
 	echo "Bumping version: $$CURRENT -> $$NEW_VERSION"; \
-	jq --arg v "$$NEW_VERSION" '.version = $$v' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp && \
+	if ! jq --arg v "$$NEW_VERSION" '.version = $$v' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp; then \
+		rm -f .claude-plugin/marketplace.json.tmp; \
+		echo "❌ ERROR: could not write marketplace.json (disk full, read-only mount, or permissions?)"; \
+		exit 1; \
+	fi; \
 	mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json; \
 	echo "✅ Marketplace version is now $$NEW_VERSION (per-plugin versions untouched)"
 
@@ -193,6 +205,10 @@ validate-versions:
 			FAILED=1; \
 		fi; \
 	done; \
+	for dupe in $$(jq -r '.plugins | group_by(.name) | map(select(length > 1) | .[0].name) | .[]' .claude-plugin/marketplace.json); do \
+		echo "❌ ERROR: marketplace.json has more than one entry named $$dupe"; \
+		FAILED=1; \
+	done; \
 	if [ $$FAILED -ne 0 ]; then exit 1; fi; \
 	echo "✅ All plugin versions match their marketplace entries"
 
@@ -227,9 +243,12 @@ desktop:
 
 # Refuse to start a release from a dirty tree. Together with the deploy
 # prerequisite order (check-clean, check-branch, validate, desktop, and only
-# then bump-*), this means every step that can fail runs BEFORE anything
-# writes a version file, so an aborted release never strands a half-applied
-# bump in the working tree.
+# then bump-*), every VALIDATION step runs before anything writes a version
+# file, so a failed check never strands a half-applied bump.
+#
+# A failure in the commit/tag/push sequence that follows still can, because
+# the bump is on disk by then. Recover with:
+#   git checkout .claude-plugin/marketplace.json
 check-clean:
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "❌ ERROR: Working directory is not clean. Commit or stash first."; \
