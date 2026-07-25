@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "apple-release",
-      "description": "Apple app release automation for TestFlight and App Store Connect. Includes /release, /release-testflight, /release-consistency, /release-xcodecloud, and /app-store-audit (pre-submission risk audit against the full App Store Review Guidelines — project/binary AND App Store Connect metadata). Supports iOS, macOS, watchOS, visionOS.",
+      "description": "Apple app release automation for TestFlight and App Store Connect. Includes /release, /release-testflight, /release-consistency, /release-xcodecloud, and /app-store-audit (pre-submission risk audit against the full App Store Review Guidelines \u2014 project/binary AND App Store Connect metadata). Supports iOS, macOS, watchOS, visionOS.",
       "version": "1.6.1",
       "author": {
         "name": "apresai"
@@ -40,7 +40,7 @@
     },
     {
       "name": "bubbletea-design",
-      "description": "Build beautiful, idiomatic terminal UIs in Go with Bubble Tea v2, Bubbles v2, and Lip Gloss v2. Architecture patterns, component catalog, styling recipes, async/streaming patterns, v1→v2 migration map, and visual design principles for sexy TUIs.",
+      "description": "Build beautiful, idiomatic terminal UIs in Go with Bubble Tea v2, Bubbles v2, and Lip Gloss v2. Architecture patterns, component catalog, styling recipes, async/streaming patterns, v1\u2192v2 migration map, and visual design principles for sexy TUIs.",
       "version": "1.5.0",
       "author": {
         "name": "Chad Neal"
@@ -60,8 +60,8 @@
     },
     {
       "name": "chad-review",
-      "description": "6-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification. Every sub-check reports or marks itself N/A, so spec drift, codegen staleness, and doc rot stay individually visible. Diff-shape aware (light and deps-only diffs skip the fan-out). Tuned for Claude Opus 5: 2 sub-agents rather than 3, sub-agents report everything with a confidence tag while the parent filters once, session-relative sonnet/opus tiering, read-only.",
-      "version": "2.0.0",
+      "description": "6-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification. Every sub-check reports or marks itself N/A, so spec drift, codegen staleness, and doc rot stay individually visible. Diff-shape aware (light and deps-only diffs skip the fan-out). Tuned for Claude Opus 5: 2 sub-agents rather than 3, sub-agents report everything with a confidence tag while the parent filters once, session-relative sonnet/opus tiering, read-only, and untracked files are backed up before the fan-out.",
+      "version": "2.1.0",
       "author": {
         "name": "Chad Neal"
       },

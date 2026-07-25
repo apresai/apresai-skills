@@ -42,6 +42,27 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    --format='%H %s'`, then `git show --stat HEAD` and `git show HEAD`. No commits
    and a clean tree means say "Nothing to review" and STOP. Either way, build the
    **changed files list**.
+
+   **Back up untracked files before any fan-out.** This skill's read-only
+   guarantee is enforced by prompt wording, not by tool restriction: the reviewer
+   agents are `general-purpose` and language specialists, which hold Bash, Edit,
+   and Write. On 2026-06-14 a review sub-agent ran a red/green experiment of its
+   own and "restored" the tree with a git command that sweeps untracked files;
+   an untracked test file under review was gone from disk afterwards, while the
+   review reported success. Copy every `??` file somewhere outside the repo
+   first, and keep the copies until the change is merged:
+
+   ```bash
+   mkdir -p "${TMPDIR:-/tmp}/chad-review-untracked-$$"
+   git ls-files --others --exclude-standard -z \
+     | xargs -0 -I{} cp --parents "{}" "${TMPDIR:-/tmp}/chad-review-untracked-$$/" 2>/dev/null \
+     || git ls-files --others --exclude-standard | while IFS= read -r f; do
+          mkdir -p "${TMPDIR:-/tmp}/chad-review-untracked-$$/$(dirname "$f")"
+          cp "$f" "${TMPDIR:-/tmp}/chad-review-untracked-$$/$f"
+        done
+   ```
+
+   (The fallback branch is for BSD/macOS `cp`, which has no `--parents`.)
 3. **Announce the target and tier** in one line, mapping your session model per
    §"Model tiering":
    `Chad Review: working tree (2 staged, 3 unstaged, 1 untracked), opus session, MECH=sonnet JUDGE=opus`
@@ -513,7 +534,14 @@ One pass, holding every finding at once:
    **cannot** drop it: failing to confirm is not evidence of absence, and only
    step 3's rule removes a finding. An unconfirmed CRITICAL stays in the report,
    marked `[unconfirmed]`, and still counts toward the verdict.
-5. **Write the verdict.**
+5. **Confirm the working tree survived.** Re-run
+   `git status --porcelain` and compare the `??` list against the backup from
+   pre-flight step 2. Any untracked file that is missing was deleted by a
+   sub-agent despite the read-only instruction: restore it from the backup, and
+   report it at the top of the review as a CRITICAL of the review process itself,
+   not of the diff. Never report a verdict on a tree you have not confirmed still
+   holds the files you reviewed.
+6. **Write the verdict.**
 
 ### Writing sub-agent prompts
 
@@ -715,7 +743,12 @@ question: the fix prompt is already in the report body.
 
 ## Rules
 
-- NEVER edit a source file, commit, or apply a proposed fix. Show it only.
+- NEVER edit a source file, commit, or apply a proposed fix. Show it only. This
+  binds the sub-agents too, but it is only prompt-enforced: they hold Bash, Edit,
+  and Write, so a sub-agent that "restores" the tree with `git stash -u`,
+  `git clean`, or `git checkout` can destroy untracked files under review. That
+  is why pre-flight step 2 backs them up and Phase 2 step 5 verifies they
+  survived.
 - NEVER silently skip a pass. All six appear as headings in every report. A pass
   may return early per the shape matrix, but only with the explicit line
   "N/A - not applicable to this diff shape (<shape>)". The same holds one level
