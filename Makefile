@@ -19,6 +19,7 @@ help:
 	@echo "  validate-plugins   - Validate all plugin.json manifests"
 	@echo "  validate-structure - Validate directory structure"
 	@echo "  validate-versions  - Check plugin.json versions match marketplace.json"
+	@echo "  validate-scripts   - Run plugin resource script test suites"
 	@echo ""
 	@echo "Version Management:"
 	@echo "  version            - Show current version"
@@ -33,6 +34,22 @@ help:
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  clean              - Remove build artifacts"
+
+# Run the shell test suites that ship alongside plugin resources. Content repo,
+# so this is the only executable code here that CAN be tested; the untracked
+# guard went through four review rounds of shell bugs before it had a suite.
+validate-scripts:
+	@echo "==> Running plugin script tests..."
+	@found=0; \
+	for t in plugins/*/resources/*.test.sh; do \
+		[ -e "$$t" ] || continue; \
+		found=1; \
+		echo "  $$t"; \
+		bash "$$t" >/dev/null 2>&1 || { echo "  ❌ $$t FAILED"; bash "$$t" | tail -20; exit 1; }; \
+		echo "  ✅ $$(basename $$t) passed"; \
+	done; \
+	[ "$$found" = "1" ] || echo "  (no script tests found)"
+	@echo "✅ Script tests passed"
 
 # Show current version
 version:
@@ -223,7 +240,7 @@ validate-versions:
 	echo "✅ All plugin versions match their marketplace entries"
 
 # Run all validations
-validate: validate-marketplace validate-plugins validate-structure validate-versions
+validate: validate-marketplace validate-plugins validate-structure validate-versions validate-scripts
 	@echo ""
 	@echo "================================"
 	@echo "✅ All validations passed!"
