@@ -1,626 +1,717 @@
 ---
 name: chad-review
-description: 9-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs structural, behavioral, spec-drift, test, test-coverage, observability, documentation, adversarial, and dependency-freshness analysis.
+description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis.
 ---
 
-# Chad Review — 9-Pass Code Review
+# Chad Review: 6-Pass Code Review
 
-Autonomous review of uncommitted working-tree changes — or the last commit if the tree is clean. Read-only except for running tests and type regeneration. Never edit source files, never commit.
+Autonomous review of uncommitted working-tree changes, or the last commit if the
+tree is clean. Read-only except for running tests and type regeneration.
 
-**Model tiering is session-relative, not hardcoded.** There is deliberately NO `model:` frontmatter pin: the parent turn (pre-flight, Pass 4, report assembly) inherits the session model, and each sub-agent pass carries an explicit `model` computed from the session model per §"Model Tiering". This means chad-review never force-upgrades a cheap session upward for orchestration, and escalates to a premium model only where merge-gating judgment lives. (This reverses the older "pin opus so a Fable session isn't under-powered" rule: a Fable parent is now intended — judgment escalates to opus per-pass instead of the whole turn riding opus.)
+Each pass answers one distinct question, so no defect is reported twice:
 
-This skill is project-agnostic. It detects the language and framework of the changes under review and adapts. For project-specific spec/contract checks, it relies on conventions (OpenAPI spec at `api.yaml` or `openapi.yaml`, generated type artifacts at conventional paths, route-parity tests if they exist). When a convention doesn't match the current project, the corresponding sub-check is reported as "N/A — project convention not detected" rather than failing.
+| Pass | Question | Owner |
+|---|---|---|
+| 1. DRIFT | Two things that should agree, don't | reviewer agent |
+| 2. BEHAVIOR AND RISK | What changed, and what breaks it | agent + parent |
+| 3. TESTS | Do affected tests pass, and do tests exist | parent + agent |
+| 4. OBSERVABILITY | Debuggable in production without a repro | reviewer agent |
+| 5. FRESHNESS | Deps current, CVE-free, not end-of-life | own agent |
+| 6. SIMPLIFY | Is it clean | reviewer agent |
 
-Every `resources/...` reference in this document resolves relative to the skill/plugin root, NOT the project under review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`. Read them from there.
+**Model tiering is session-relative.** There is deliberately NO `model:`
+frontmatter pin: the parent inherits the session model and each sub-agent carries
+an explicit `model` computed per §"Model tiering", so a cheap session is never
+force-upgraded for orchestration.
+
+**Project-agnostic.** Spec, codegen, and doc checks look for common conventions
+(`api.yaml`/`openapi.yaml`, generated artifacts at conventional paths,
+route-parity tests). A missing convention reports
+`N/A - convention not detected`, never a failure.
+
+`resources/...` paths resolve against the skill root, not the project under
+review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
 ## Pre-flight
 
-1. Run `git status --porcelain` to detect uncommitted changes.
-2. **Select the review target:**
-   - **If there are any uncommitted changes** (staged, unstaged, or untracked) → review the working tree:
-     - Run `git diff HEAD --stat` and `git diff HEAD` to capture modifications to tracked files (covers both staged and unstaged).
-     - For each untracked file (lines starting with `??` in `git status --porcelain`), use Read to load the file and treat its contents as a synthetic new-file addition in the review input.
-     - Build the **changed files list** from all tracked modifications plus untracked files.
-   - **If the working tree is clean** → review the last commit:
-     - Run `git log -1 --format='%H %s'` to identify it. If the repo has no commits, tell the user "Nothing to review — working tree is clean and there is no commit history" and STOP.
-     - Run `git show --stat HEAD` and `git show HEAD` to capture the summary and full diff.
-     - Build the **changed files list** from the files touched by that commit.
-3. **Determine the session model tier and announce the target** in one line. Read your own session model from the environment/system context, map it to MECH/JUDGE tiers per §"Model Tiering", and print both, e.g.:
-   - `Chad Review — reviewing working tree (2 staged, 3 unstaged, 1 untracked) — opus session → MECH=sonnet, JUDGE=opus`
-   - `Chad Review — reviewing last commit a1b2c3d "Fix credit refund race" — fable session → MECH=opus, JUDGE=opus`
-   If you cannot determine the session model, use the `unknown` row (MECH=sonnet, JUDGE=opus) and say so.
-4. The captured diff is the input for Passes 1 through 8. The changed files list drives Pass 4 test selection and Pass 5 coverage selection. Pass 9 (FRESHNESS) is whole-project: it audits the project's dependencies regardless of the diff, and reads the changed files list only to prioritize and tag deps the change touched.
-5. **Classify the diff shape** from the changed-files list. Ambiguity always falls to `standard`:
-   - `docs-only`: every file matches `*.md`, `*.txt`, `docs/**`, LICENSE, or images. Exceptions that force `standard`: `CLAUDE.md`, any `*/SKILL.md`, anything under `.claude/`, a `prompts/` dir, or a plugin's `commands/`, `agents/`, or `skills/` dir (in this ecosystem those are executable behavior, not prose).
-   - `config-only`: only `.github/**`, `.gitignore`, `.editorconfig`, or linter configs. Not dependency manifests, not IaC.
-   - `deps-only`: only dependency manifests/lockfiles (`go.mod`/`go.sum`, `package.json` + lockfile, `pubspec.*`, `Package.swift`/`Package.resolved`, `Cargo.*`, `pyproject.toml`/`requirements*.txt`).
-   - `tiny`: at most 4 files AND at most 40 changed lines of non-test production code. (Widened from the original 2 files / 10 lines so more everyday small PRs run all passes INLINE in the parent and skip the fan-out entirely — the executable-file exceptions below still force `standard`.)
+1. `git status --porcelain`.
+2. **Select the target.** Any uncommitted change (staged, unstaged, or
+   untracked) means review the working tree: `git diff HEAD --stat` and
+   `git diff HEAD` for tracked files, plus Read each `??` file and treat it as a
+   new-file addition. A clean tree means review the last commit: `git log -1
+   --format='%H %s'`, then `git show --stat HEAD` and `git show HEAD`. No commits
+   and a clean tree means say "Nothing to review" and STOP. Either way, build the
+   **changed files list**.
+3. **Announce the target and tier** in one line, mapping your session model per
+   §"Model tiering":
+   `Chad Review: working tree (2 staged, 3 unstaged, 1 untracked), opus session, MECH=sonnet JUDGE=opus`
+   If the session model is undeterminable, use the `unknown` row and say so.
+4. The diff feeds passes 1, 2, 3 (coverage), 4, and 6. The changed files list
+   drives test selection. Pass 5 is whole-project: it audits dependencies
+   regardless of the diff, reading the file list only to prioritize and tag.
+5. **Classify the diff shape.** Ambiguity always falls to `standard`.
+
+   - `light`: **docs-only** (`*.md`, `*.txt`, `docs/**`, LICENSE, images),
+     **config-only** (`.github/**`, `.gitignore`, `.editorconfig`, linter
+     configs; not manifests, not IaC), or **tiny** (at most 4 files AND at most
+     40 changed lines of non-test production code).
+     **Forced to `standard` regardless**: `CLAUDE.md`, any `*/SKILL.md`,
+     anything under `.claude/`, a `prompts/` dir, or a plugin's `commands/`,
+     `agents/`, or `skills/` dir. Here those are executable behavior, not prose.
+   - `deps`: only manifests and lockfiles (`go.mod`/`go.sum`, `package.json` +
+     lockfile, `pubspec.*`, `Package.swift`/`Package.resolved`, `Cargo.*`,
+     `pyproject.toml`/`requirements*.txt`).
    - `standard`: everything else.
 
-   Per-shape pass matrix. Every one of the 9 passes still appears as a heading in the Final Report; non-`standard` shapes replace the sub-agent fan-out with the listed treatment:
-
-   | Shape | Sub-agents | Treatment |
+   | Shape | Agents | Treatment |
    |---|---|---|
-   | docs-only | 0-1 | Passes 1, 2, 4, 5, 6: report the literal line "N/A — not applicable to this diff shape (docs-only)". Pass 3: only 3f, and only if a data-model doc changed. Pass 7 runs INLINE in the parent (the doc change itself is the review subject: accuracy vs code, staleness). Pass 8: brief inline probe (secrets/PII/wrong commands in the new text). Pass 9: cache path (step 0). |
-   | config-only | 0-1 | Passes 2 and 8 run inline in the parent (CI/workflow changes are behavior, e.g. `pull_request_target` foot-guns). 1, 3, 4, 5: N/A. 6, 7: inline quick checks. 9: cache path. |
-   | deps-only | 1 | Pass 9 runs FULLY FRESH as a sub-agent (this is the shape it exists for), every dep tagged `(diff-touched)`. Pass 4 runs in the parent (bumps break tests). 1, 2, 3, 5, 6, 7: N/A or one-line inline notes. |
-   | tiny | 0-1 | All 9 dimensions still evaluated, but Passes 1, 2, 3, 5, 6, 7 run INLINE in the parent turn instead of as sub-agents (a small diff does not justify agent bootstraps). Pass 9: cache path. |
-   | standard | bundled fan-out (3 per language block) | Phase A/B/C strategy below: one mechanical-bundle agent (Passes 1,3,5,6,7) + one Pass 2 specialist per language block, plus one whole-project Pass 9, with session-relative model tiering and the freshness cache applied. |
+   | `light` | 0 | All six passes run INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. FRESHNESS takes the cache path. |
+   | `deps` | 1 | FRESHNESS runs FULLY FRESH as a sub-agent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
+   | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
-   Print `Diff shape: <shape>` in the report header. When the shape is not `standard`, add: "rerun with `/chad-review --full` to force the complete fan-out". `--full` (or the user asking for a full review) skips classification and treats the diff as `standard`.
-6. **Route per-pass agents by language family.** Run the bundled
-   `chad-review-route.sh` script to detect which language families
-   appear in the changed-files list and print recommended per-pass
-   `subagent_type` + Context7 hints:
+   Print `Diff shape: <shape>`. When it is not `standard`, add "rerun with
+   `/chad-review --full` to force the complete fan-out". `--full` skips
+   classification and treats the diff as `standard`.
+6. **Route by language family:**
 
    ```bash
-   # When installed as an apresai-skills plugin:
    bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/chad-review-route.sh"
-   # Or last-commit mode:
-   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/chad-review-route.sh" --last-commit
+   # last-commit mode: ... chad-review-route.sh --last-commit
    ```
 
-   The script emits one routing block per detected language (Go, CDK
-   TypeScript, Next.js/React, generic TypeScript/JS, iOS Swift,
-   OpenAPI/docs, plus an explicit catch-all for anything unclassified —
-   it never silently drops a file). It is **project-agnostic**: it tells
-   CDK from Next.js by imports (`aws-cdk-lib` vs `next`/`react`) and marker
-   files (`cdk.json` / `next.config.*`), finds OpenAPI specs by an
-   `openapi:` key rather than an exact filename, and **derives** the
-   Context7 framework hints from the imports / `package.json` deps the
-   changed files actually use and the codegen hints from the project's
-   own Makefile targets — so it adapts to any repo layout, not a fixed one.
-   Use the routing it recommends in Phase A sub-agent launches — these
-   defaults beat the one-size-fits-all suggestions in §"Execution Strategy"
-   below because they pick specialist agents (`cloud-architect` for CDK,
-   `frontend-developer` for Next.js, etc.) plus Context7 doc-fetch hints
-   for frameworks with fast-moving APIs (StoreKit/Vision/FoundationModels,
-   AWS CDK, Next.js App Router).
+   It emits one routing block per detected language (Go, CDK TypeScript,
+   Next.js/React, generic TS/JS, iOS Swift, OpenAPI/docs, plus a catch-all so no
+   file is silently dropped), each naming a reviewer `subagent_type`, a codegen
+   and spec-lint hint derived from the project's own Makefile targets, and
+   Context7 hints derived from the imports and `package.json` deps the changed
+   files actually use. It tells CDK from Next.js by imports and marker files, and
+   finds OpenAPI specs by an `openapi:` key rather than a filename.
 
-   For **mixed-language diffs**, the script prints one routing block per
-   language. Per block you spawn the bundled Phase A set — ONE mechanical
-   bundle agent (Passes 1,3,5,6,7) + ONE Pass 2 specialist — plus ONE
-   whole-project FRESHNESS agent for the review overall (a CDK + Go diff =
-   2 bundle + 2 Pass 2 + 1 FRESHNESS = 5 launched in a single Agent batch,
-   down from 13 in the old per-pass fan-out). **Scope the diff per block:**
-   each language's two agents receive ONLY that language's hunks (partition
-   the captured diff by the routing-script classification), not the full
-   cross-language diff — this halves the duplication penalty on mixed diffs.
-   Pass 1's whole-codebase grep is scope-independent, and the parent Pass 8
-   plus the whole-project Pass 9 still see the full diff. Each language's
-   findings flow into one shared Final Report.
+   **Mixed-language diffs**: spawn ONE reviewer per block plus ONE whole-project
+   FRESHNESS agent (CDK + Go = 3 agents). **Scope the diff per block**: each
+   reviewer sees ONLY that language's hunks. DRIFT's codebase-wide grep is
+   scope-independent, and the parent and FRESHNESS agent still see everything.
+   All findings merge into one report.
 
-   If the script is missing (older install or non-plugin context), fall
-   back to the hardcoded defaults in §"Execution Strategy" — they're
-   correct for Go but only adequate for the other languages.
+   If the script is missing, fall back to the picks in §"Execution strategy".
 
-## Pass 1 — STRUCTURAL
+## 1. DRIFT
 
-Goal: Every removed symbol has zero remaining references in the codebase.
+Everything that should agree, agrees: code with code, with spec, with generated
+artifacts, with documentation. Catches what pre-commit hooks miss: dangling
+references, query-param and response-shape drift, and prose that now lies.
 
-1. Parse the diff for **removed** or **renamed** symbols — functions, types, structs, interfaces, variables, constants, exports.
-2. For each removed symbol, grep the entire codebase (excluding `vendor/`, `node_modules/`, `.git/`, `target/`, `build/`, `dist/`, `cdk.out/`, `.next/`, and generated files like `*.generated.*`, `*_pb.go`, `*.pb.go`) for remaining references.
-3. Report findings as:
-   ```
-   STRUCTURAL: <symbol> removed in <file> but still referenced at <file>:<line>
-   ```
-4. If zero issues found, report "STRUCTURAL: Clean — no dangling references."
+Run DRIFT **before** TESTS. No point testing code that violates its contract.
 
-> Language-specific grep patterns and language-server escalation guidance: `resources/pass-reference.md` § Pass 1. Paste only the sections for the detected language families into this pass's sub-agent prompt.
+**`[symbol]` Dangling references.** Parse the diff for removed or renamed
+symbols (functions, types, structs, interfaces, variables, constants, exports).
+Grep the codebase for surviving references, excluding `vendor/`,
+`node_modules/`, `.git/`, `target/`, `build/`, `dist/`, `cdk.out/`, `.next/`,
+and generated files (`*.generated.*`, `*_pb.go`, `*.pb.go`). A live reference to
+a removed symbol is **CRITICAL**: the build is broken. A removed symbol still
+named in docs is MEDIUM and reports under `[docs]`.
 
-## Pass 2 — BEHAVIORAL
+**`[spec/query]` `[spec/response]` `[spec/request]` API surface.** Scan the diff
+for handler-level query-param reads, response writes, and request-body decoding
+(per-language patterns in the reference). Find each handler's route in the
+project's routing definition, locate the OpenAPI spec (`api.yaml`,
+`openapi.yaml`, `openapi/*.yaml`, `docs/api.yaml`, `spec/openapi.yaml`), and
+resolve `$ref` when checking schemas. Flag any param, response key, or request
+field present in code but absent from the spec, and any required spec field
+missing from code. A public API change with no matching spec update is
+**CRITICAL**.
+Report: `DRIFT [spec/query] | api.yaml | param "fresh" read in HandleLeaderboard, absent from GET /groups/{id}/leaderboard`
 
-Goal: Every behavior change is intentional and safe for existing data.
+**`[types]` Generated artifact freshness.** Detect type generation via the
+reference patterns, run it, then `git diff` the generated paths
+(`*.generated.{ts,go,swift,kt}`, `*_gen.*`, `generated/`, `**/types/api.*`).
+Changes after regeneration mean the committed types are stale.
 
-1. Assess what **behavior** changed in each modified file (not what lines changed — what the code *does* differently now). To keep output crisp, narrate (1 sentence) ONLY files that carry a CRITICAL or HIGH flag below; summarize the rest as a one-line count (e.g. "6 other files: behavior-preserving refactors, no risk flags").
-2. Flag as **CRITICAL** if any change could:
-   - Corrupt existing database records (wrong defaults, changed attribute types, renamed keys)
-   - Break backward compatibility with older clients (removed fields, changed response shapes, modified enums)
-   - Alter authentication or authorization logic (changed middleware, modified token validation, permission checks)
-   - Change data migration behavior (bulk updates, backfills, schema transformations)
-3. Flag as **HIGH** if any change:
-   - Modifies error handling in a way that could swallow failures silently
-   - Changes sort order, ranking, or scoring logic
-   - Alters notification or push behavior
-4. Report each finding with the flag and a 1-sentence explanation of the risk.
+**`[routes]` Route parity.** Find a route-parity test (`TestRoutesMatchSpec`,
+`test_routes_match_spec`, `routes.test.ts`, or a filename containing "parity" or
+"spec match") and run it scoped. Quote any mismatched routes.
 
-## Pass 3 — SPEC DRIFT
+**`[spec/lint]` Spec validation.** Run the project's spec validation command if
+one exists (`make validate-openapi`, `npm run lint:openapi`, `spectral lint`),
+plus any struct-to-spec validator script.
 
-Goal: Every API-visible change in the diff under review is reflected in the project's spec, generated types, and data model documentation. This catches what pre-commit hooks usually don't: query param drift, response shape drift, and data-model doc staleness. Run this BEFORE tests — no point testing code that violates the contract.
+**`[datamodel]` Data model docs.** Scan persistence-layer diffs (`db/*.go`,
+`prisma/schema.prisma`, `models.py`, `migrations/`) for new key patterns, entity
+prefixes, and table or column additions, then check `docs/data-model.md`,
+`docs/dynamodb-data-model.md`, `docs/database.md`, `docs/schema.md`, or
+`ARCHITECTURE.md`. A new entity, table, or key pattern with no doc entry is
+**HIGH**.
 
-**This pass is convention-based.** Each sub-check looks for common project layouts. If the convention isn't present in the project, mark the sub-check "N/A — project convention not detected" and continue. Do not fail the pass because the project doesn't use the convention.
+**`[docs]` `[env]` `[comments]` Prose and contracts.** For each change, decide
+which docs should reflect it: README setup and build commands, architecture docs,
+ADRs, runbooks, CHANGELOG for user-visible behavior, infrastructure and on-call
+docs. Updated in the same diff is OK; existing but untouched means read it and
+flag what this change made stale; missing entirely for a surface that warrants
+one is a finding.
 
-### 3a. Query Param Drift
+- **HIGH** `[env]`: a new env var, config flag, or setup step with no
+  `.env.example` or README update.
+- **HIGH** `[docs]`: changed behavior contradicts an existing doc statement. The
+  doc now lies.
+- **MEDIUM** `[comments]`: a new exported symbol with no doc comment (godoc,
+  TSDoc, Swift `///`, docstring).
+- **MEDIUM** `[docs]`: a removed symbol still referenced in docs.
+- **LOW**: docs that could be clearer but are not wrong.
 
-1. Scan the diff for new or changed query-param reads in handler files. Patterns to look for:
-   - Go: `r.URL.Query().Get("...")`, `mux.Vars(r)["..."]`
-   - TypeScript/JS: `req.query.X`, `searchParams.get("...")`, `nextUrl.searchParams.get("...")`
-   - Python: `request.args.get("...")`, `request.query_params.get("...")`
-2. For each query param name, find the handler's route in the project's routing definition (look for `cmd/*/main.go`, `app/api/**/route.ts`, `routes.py`, etc.).
-3. Locate the project's OpenAPI spec (try `api.yaml`, `openapi.yaml`, `openapi/*.yaml`, `docs/api.yaml`, `spec/openapi.yaml`). If found, verify the param appears as an `in: query` parameter on that endpoint.
-4. Report: `SPEC DRIFT [query]: param "fresh" used in HandleLeaderboard but not defined in api.yaml GET /groups/{id}/leaderboard`
-5. If no OpenAPI spec exists in the project, mark "3a: N/A — no OpenAPI spec detected."
+> Grep patterns, language-server escalation, codegen detection, API-surface
+> patterns, and doc-comment conventions: `pass-reference.md` § DRIFT.
 
-### 3b. Response Shape Drift
+## 2. BEHAVIOR AND RISK
 
-1. Scan the diff for new or changed response writes in handler files. Patterns:
-   - Go: `writeJSON(...)`, `json.NewEncoder(w).Encode(...)`, `c.JSON(...)`, inline `map[string]any{...}`
-   - TypeScript/JS: `res.json(...)`, `NextResponse.json(...)`, `return Response.json(...)`
-   - Python: `JsonResponse(...)`, `return jsonify(...)`
-2. Identify the top-level keys in the response.
-3. If the project has an OpenAPI spec, find the endpoint's response schema (follow `$ref` to resolve).
-4. Flag any key present in code but absent from the spec, or any required spec field missing from code.
-5. Report: `SPEC DRIFT [response]: key "totalCount" returned by HandleScoreLeaderboard but not in ScoreLeaderboardResponse schema`
+Every behavior change is intentional, safe for existing data, and survives a
+hostile reading. The reviewer agent establishes what changed; the parent runs the
+attacks with every other finding already in view.
 
-### 3c. Request Body Drift
+**What changed.** Assess what the code *does* differently, not which lines moved.
+Narrate one sentence ONLY for files carrying a CRITICAL or HIGH flag; summarize
+the rest as a count ("6 other files: behavior-preserving refactors").
 
-1. Scan the diff for new or changed request body decoding. Patterns:
-   - Go: `decodeJSON(r, &...)`, `json.NewDecoder(r.Body).Decode(&...)`
-   - TypeScript/JS: `await req.json()`, Zod schemas in route handlers
-   - Python: `request.json`, Pydantic models on FastAPI routes
-2. Identify the target struct/type. If new fields appear, verify those fields exist in the corresponding `requestBody` schema in the spec.
-3. Report: `SPEC DRIFT [request]: field "timezone" decoded in HandleUpdateMe but not in UpdateUserRequest schema`
+**CRITICAL** if a change could corrupt existing records (wrong defaults, changed
+attribute types, renamed keys); break backward compatibility with older clients
+(removed fields, changed response shapes, modified enums); alter authentication
+or authorization (middleware, token validation, permission checks); or change
+data migration behavior (bulk updates, backfills, schema transformations).
+**HIGH** if it alters sort order, ranking, or scoring, or changes notification or
+push behavior.
 
-### 3d. Generated Type Freshness
+Error handling that silently swallows failures belongs to OBSERVABILITY. Do not
+report it twice.
 
-1. Look for type-generation scripts in the project using the language-specific detection patterns in `pass-reference.md` § Pass 3.
-2. If found, run the relevant target/script.
-3. Run `git diff` on the generated artifact paths (look for files matching `*.generated.{ts,go,swift,kt}`, `*_gen.*`, `generated/`, `**/types/api.*`).
-4. If any generated file has uncommitted changes after regeneration → types are stale.
-5. Report: `SPEC DRIFT [types]: <path>/api.generated.ts is stale — regeneration produced changes` or "Generated types are fresh."
-6. If no codegen is detected by any pattern in that section, mark "3d: N/A — no codegen detected."
+**Attacks.** Probe as a malicious user, a race condition, or production data that
+does not match test assumptions:
 
-> Codegen detection patterns by language/tool: `resources/pass-reference.md` § Pass 3.
+- **Requirements**: read the spec or ticket as a hostile lawyer. Do two rules
+  contradict? Is an absolute ("always", "never") revoked elsewhere? If the diff
+  silently resolves a spec contradiction, that is MEDIUM or higher: state the
+  resolution chosen and flag it. A flawless implementation of a broken spec is
+  still broken.
+- **Auth**: what request now 401s or 403s that didn't? Expired, missing, or
+  wrong-provider tokens?
+- **Empty and nil**: empty, nil, zero-length, missing optional fields, empty
+  array versus null.
+- **Production versus test data**: shape assumptions that hold in tests only, old
+  records missing new fields, unexpected enum values.
+- **Concurrency**: can two simultaneous requests race, double-write, or leave
+  inconsistent state?
+- **Backward compatibility**: would an older client break, crash, or show wrong
+  data?
+- **Boundaries**: max values, very long strings, Unicode, special characters,
+  time zones, midnight edges.
+- **Injection**: SQL/NoSQL, command, XSS, path traversal, SSRF in any new path
+  consuming user input.
 
-### 3e. Route Parity
+Rate CRITICAL (data loss, security bypass, or production crash), HIGH
+(user-visible bugs under realistic conditions), MEDIUM (edge case that bites
+eventually), LOW (theoretical but worth noting).
 
-1. Look for a route-parity test in the project. Common names: `TestRoutesMatchSpec`, `test_routes_match_spec`, `routes.test.ts`, files with "parity" or "spec match" in the name.
-2. If found, run it scoped to the test (e.g., `go test ./... -run TestRoutesMatchSpec -count=1` or the equivalent for the project's test runner).
-3. Report pass/fail. If it fails, quote the mismatched routes.
-4. If no such test exists, mark "3e: N/A — no route-parity test detected."
+> Language gotchas (Go nil maps and goroutine leaks; TS hydration,
+> undefined-versus-null, `as` assertions; Swift IUO, Sendable, actor reentrancy;
+> Python mutable defaults and async exceptions): `pass-reference.md` § BEHAVIOR
+> AND RISK.
 
-### 3f. Data Model / Schema Drift
+## 3. TESTS
 
-1. Scan the diff in any database/persistence layer (`db/*.go`, `prisma/schema.prisma`, `models.py`, `migrations/`, etc.) for new key patterns, entity prefixes, table/column additions.
-2. Look for data-model documentation in conventional locations: `docs/data-model.md`, `docs/dynamodb-data-model.md`, `docs/database.md`, `docs/schema.md`, `ARCHITECTURE.md`.
-3. For each new entity / key pattern / table, verify it's reflected in the docs.
-4. Report: `SPEC DRIFT [datamodel]: new key pattern "AUTO_TAUNT#" in db/autotaunt.go but no entry in docs/dynamodb-data-model.md`
-5. If no data-model doc exists, mark "3f: N/A — no data-model doc detected."
+The tests covering this change run green, and tests exist for what changed. A
+green run over zero tests is not a passing review.
 
-### 3g. OpenAPI Spec Lint
+**Run (parent).** Identify test files for the modified files (Go `*_test.go` in
+the same package; TS co-located `*.test.*`/`*.spec.*` or `__tests__/`; Python
+`test_*.py`/`*_test.py`; Swift test targets importing the module; Rust
+`#[cfg(test)]` or `tests/`) and run only those, scoped per the reference. All
+pass: say so. Any fail: show the output, read the failing test and the code it
+tests, and propose a fix marked "Proposed fix, NOT applied". Never edit, never
+auto-apply.
 
-1. If the project has a CI command for spec validation (`make validate-openapi`, `npm run lint:openapi`, `spectral lint`), run it.
-2. If the project has a Go struct ↔ spec validator script (e.g., `scripts/check-go-models.js`), run it.
-3. Report errors or "Generated types are fresh."
+**Coverage (reviewer agent).** For each new or modified exported function,
+handler, or method, check whether a test references it by name. For each new
+branch, error case, or feature flag, check whether a test exercises it. For bug
+fixes, verify a **regression test** exists: one that would have failed before the
+fix. For every new or modified test, confirm it **can fail**: the assertion
+depends on the changed path, is not tautological, and the subject is not mocked
+away. A test that cannot fail counts as missing coverage.
 
-If zero issues across all sub-checks, report "SPEC DRIFT: Clean — all API changes match the spec (or N/A)."
+- **CRITICAL**: new public endpoint, HTTP handler, Lambda entry point, or cron
+  entry point with zero tests.
+- **HIGH**: new business-logic branch with no test; bug fix with no regression
+  test.
+- **MEDIUM**: modified function whose existing tests don't cover the new
+  behavior.
+- **LOW**: internal helper covered only transitively by caller tests.
 
-## Pass 4 — TEST
+> Per-language scoping commands and what "covered" looks like:
+> `pass-reference.md` § TESTS.
 
-Goal: Run only the tests that cover modified files. Propose fixes for failures but never apply them.
+## 4. OBSERVABILITY
 
-1. From the list of modified files, identify the corresponding test files:
-   - Go: `*_test.go` files in the same package directory
-   - TypeScript/JS: co-located `*.test.*` or `*.spec.*` files, or files in `__tests__/`
-   - Python: `test_*.py` or `*_test.py` in the same or `tests/` directory
-   - Swift: test targets that import the modified module
-   - Rust: `#[cfg(test)]` blocks in the same file, or `tests/` integration tests
-2. Run only those tests using the project's test runner. Use the per-language scoping commands in `pass-reference.md` § Pass 4 to avoid running the entire suite:
+Production issues here can be diagnosed without a repro. For each new or modified
+path check for structured logging at entry and exit of significant operations;
+error wrapping that carries context up the stack; request, user, and correlation
+identifiers; key decision points logged ("cache hit", "falling back to provider
+X"); and metrics or timings for rate-limited, queued, retried, or
+externally-dependent operations.
 
-> Test-scoping commands per language: `resources/pass-reference.md` § Pass 4. This pass runs in the parent: Read that section at execution time.
+- **CRITICAL**: a new error path that silently swallows failures
+  (`if err != nil { return nil }`, empty `catch`, ignored promise rejection, bare
+  `except: pass`). This is the single home for the silent-failure check.
+- **HIGH**: a new handler, background job, or entry point with no logging;
+  an error returned without wrapping, making root cause untraceable; PII,
+  credentials, or tokens logged in plain text.
+- **MEDIUM**: a slow operation (DB query, external call, S3 put) with no timing
+  or metric; log lines or metrics removed in the diff (confirm intent).
+- **LOW**: a missing debug log on a branch that would aid troubleshooting.
 
+For Lambda, CloudWatch, or equivalent targets, confirm logs carry enough context
+to correlate with the triggering request.
 
+> slog, pino, OSLog, structlog, and Lambda logging idioms:
+> `pass-reference.md` § OBSERVABILITY.
 
-3. If **all tests pass**: report "TEST: All affected tests pass."
-4. If **any test fails**:
-   - Show the failure output
-   - Read the failing test and the code it tests
-   - Propose a fix (show the diff) but state clearly: "Proposed fix — NOT applied"
-   - NEVER edit the file. NEVER auto-apply.
+## 5. FRESHNESS
 
-## Pass 5 — TEST COVERAGE
+Every direct dependency, framework, and runtime is current enough to be safe,
+carries no known CVE and no end-of-life runtime, and each staleness call
+separates an overdue or security-driven upgrade from one still too early to take.
 
-Goal: Every new or modified behavior has test coverage. Not just "tests pass" (Pass 4) but "tests exist for the changes." A green Pass 4 on zero tests is not a passing review.
+FRESHNESS is a WHOLE-PROJECT audit. It runs on every review regardless of what
+the diff touches, reading the changed-files list only to prioritize and tag, never
+to gate whether the pass runs.
 
-1. For each file in the changed files list, locate the corresponding test file(s) using the conventions in Pass 4.
-2. For each new or modified exported/public function, handler, or method, check whether any test references it by name.
-3. For each new code branch, error case, feature flag, or conditional path, check whether a test exercises it — see `pass-reference.md` § Pass 5 for what "covered" looks like in each language.
-4. For bug fixes: verify a **regression test** exists — a test that would have failed before the fix and passes after. For ALL new or modified tests, confirm the test can fail: the assertion depends on the changed code path, is not tautological, and the subject is not mocked away. A test that cannot fail counts as missing coverage.
-5. Flag missing coverage:
-   - **CRITICAL**: New public API endpoint, HTTP handler, Lambda entry point, or cron entry point with zero tests
-   - **HIGH**: New business-logic branch (new error case, new conditional, new feature flag) with no test
-   - **HIGH**: Bug fix with no regression test
-   - **MEDIUM**: Modified function where existing tests don't cover the new behavior
-   - **LOW**: Internal helper with no direct test but covered transitively by caller tests
-6. Report: `TEST COVERAGE: handler HandleCreateAutoTaunt has no test in <path>/autotaunt_test.go`
+**0. Cache check.** Cache file:
+`~/.claude/chad-review-cache/<sha256 of git remote get-url origin>.json`, keyed by
+origin URL so every worktree shares it and nothing touches the repo. Schema:
+`{ generatedAt, manifests: {<path>: <sha256>}, manifestSet: [sorted paths], table, severityLines, scannerUsed, lastLocalScanClean }`.
+Run manifest discovery and hash each manifest AND its lockfile.
 
-If zero issues, report "TEST COVERAGE: Clean — all changes have corresponding tests."
+- **FULL RUN** (steps 1 to 5, then write the cache) if ANY of: cache missing or
+  unparseable; manifest set differs from `manifestSet`; any hash differs;
+  `generatedAt` older than 7 days; shape is `deps`; the diff touches a manifest.
+- **CACHE HIT** otherwise: do NOT launch the sub-agent, do NOT call context7 or
+  WebSearch. In the parent, re-run ONLY the local CVE scan, which is cheap and
+  preserves same-day detection of new CVEs against unchanged deps. Clean means
+  report the cached table headed "FRESHNESS (cached <date>, manifests unchanged;
+  local CVE scan re-run this review: clean)". Anything new invalidates the cache
+  and forces a full run. The 7-day TTL is safe because the security signal is
+  never delayed; only latest-version and maturity data are cached, and their
+  consumers are the 60-to-90-day windows below.
 
-> What counts as "covered" per language (table-driven tests, it.each, @Test arguments, parametrize): `resources/pass-reference.md` § Pass 5.
+**1. Manifest discovery.** Find every manifest, pruning `vendor/`,
+`node_modules/`, `.git/`, `target/`, `build/`, `dist/`, `.next/`, `cdk.out/`,
+`DerivedData/`, `Pods/`. None recognized means report N/A and stop. Extract
+DIRECT dependencies plus the runtime constraint (`go` directive, `engines.node`,
+`environment: sdk`, `swift-tools-version`, `requires-python`, `rust-version`).
+Skip transitive deps here; step 3 still scans them for CVEs.
 
-## Pass 6 — OBSERVABILITY
+**2. Version resolution via context7.** Read each pinned version, then resolve
+latest version, whether a migration guide exists, and how large the breaking
+surface is (`resolve-library-id`, then `query-docs` on "latest version, migration
+guide, breaking changes"). context7 is weak on release DATES: where recency or
+patch count matters and it does not surface them, fall back to a lightweight
+WebSearch ("<lib> <version> release date") purely to gauge recency. Soft-cap
+lookups at about 12 to 15, prioritizing runtimes, core frameworks,
+security-relevant deps, and diff-touched deps; list the rest as "not individually
+version-checked this run".
 
-Goal: Production issues in this code can be debugged without a repro. Logs, metrics, and error context are sufficient to locate the failure from outside.
+**3. Security and EOL.** Run the ecosystem scanner (govulncheck, npm/pnpm audit,
+pip-audit, cargo audit, `dart pub outdated --mode=security`) or the
+language-agnostic `osv-scanner -r .`. If none is installed, say "security scan
+unavailable: install osv-scanner/govulncheck" rather than reporting clean.
+Cross-reference the runtime against end-of-life data (endoflife.date for Node,
+Python, Go; the framework's own window for majors).
 
-1. For each new or modified code path, check for:
-   - **Structured logging** at entry/exit of significant operations (slog, logger, console with context keys, log/slog, pino, structlog, etc.)
-   - **Error wrapping** — errors carry context up the stack (Go `fmt.Errorf("... %w", err)`, TS `new Error("...", { cause: err })`, Python `raise X from err`), not returned bare
-   - **Request/user/correlation identifiers** in logs for traceability (user ID, request ID, trace ID, Lambda request ID)
-   - **Key decision points logged** (e.g., "cache hit", "falling back to provider X", "skipping due to feature flag")
-   - **Metrics or timings** for rate-limited, queued, retried, or externally-dependent operations
-2. Flag gaps:
-   - **CRITICAL**: New error path that silently swallows failures (`if err != nil { return nil }`, empty `catch` block, ignored promise rejection, bare `except: pass`)
-   - **HIGH**: New handler, background job, or function entry point with no logging — production issues would be invisible
-   - **HIGH**: Error returned without wrapping, making root-cause hard to trace from a log entry
-   - **HIGH**: PII, credentials, or tokens logged in plain text
-   - **MEDIUM**: Slow operation (DB query, external API call, S3 put) with no timing log or metric
-   - **MEDIUM**: Removed log lines or metrics in the diff — confirm intent
-   - **LOW**: Missing debug-level log on a branch that would aid troubleshooting
-3. For Lambda/CloudWatch-deployed code (or equivalent serverless logging targets), confirm logs include enough context to correlate with the triggering request.
-4. Report: `OBSERVABILITY: HandleAutoTauntTrigger returns err without wrapping — log stack traces will lack context (db/autotaunt.go:142)`
-
-If zero issues, report "OBSERVABILITY: Clean — new code paths are debuggable."
-
-> Language-specific observability patterns (slog/pino/OSLog/structlog idioms, Lambda logging): `resources/pass-reference.md` § Pass 6.
-
-## Pass 7 — DOCUMENTATION
-
-Goal: Every user-visible, operator-visible, or API-visible change is documented. Stale docs are worse than missing docs.
-
-1. For each change in the diff, determine which docs should reflect it:
-   - **README.md** — setup steps, env vars, build/deploy commands, prerequisites
-   - **API specs** — `api.yaml` / `openapi.yaml` endpoint, schema, and example updates
-   - **Architecture / design docs** — files under `docs/`, ADRs, runbooks
-   - **Data model docs** — `docs/data-model.md`, `docs/dynamodb-data-model.md`, or equivalent
-   - **Inline doc comments** — godoc on exported Go symbols, TSDoc/JSDoc on exported TS symbols, Swift doc comments on public APIs, Python docstrings — see `pass-reference.md` § Pass 7
-   - **CHANGELOG / release notes** — user-facing behavior changes
-   - **Infrastructure/runbook docs** — CDK stack diagrams, Terraform docs, deployment runbooks, on-call playbooks
-   - **`.env.example`** — any new environment variable
-2. For each relevant doc location:
-   - If the doc file exists and was updated in the same diff → OK.
-   - If the doc file exists but was not touched → read it and flag any section made stale by this change.
-   - If the doc file is missing entirely for a surface that warrants one → flag.
-3. Flag gaps:
-   - **CRITICAL**: Public API change (endpoint added/removed/renamed, signature changed) without matching `api.yaml` / `openapi.yaml` update
-   - **HIGH**: New env var, config flag, or required setup step without `.env.example` or README update
-   - **HIGH**: Changed behavior contradicts existing doc statements (stale doc — the doc now lies)
-   - **HIGH**: New entity, table, or key pattern without data-model doc update
-   - **MEDIUM**: New exported function/type/class without doc comment (godoc/jsdoc/Swift doc/docstring)
-   - **MEDIUM**: Removed symbol still referenced in docs
-   - **LOW**: Minor internal changes where docs could be clearer but are not wrong
-4. Report: `DOCUMENTATION: New env var AUTO_TAUNT_LAMBDA_ARN used in cdk/lib/api-stack.ts but missing from .env.example and README setup section`
-
-If zero issues, report "DOCUMENTATION: Clean — all changes are documented."
-
-> Language-specific doc comment conventions (godoc, TSDoc, Swift ///, docstrings): `resources/pass-reference.md` § Pass 7.
-
-## Pass 8 — ADVERSARIAL
-
-Goal: Try to break the changes. Think like a malicious user, a race condition, or production data that doesn't match test assumptions.
-
-For each significant change, probe these angles:
-
-- **Requirements attack**: read the spec/ticket as a hostile lawyer. Do any two rules contradict? Is a stated absolute ("always", "never") revoked by another clause? Does the requested interface conflict with the requested behavior? If the diff silently resolves a spec contradiction, that is a finding (MEDIUM or higher): state the resolution chosen and flag it for the author. A flawless implementation of a broken spec is still broken.
-- **Auth/permissions**: What request would produce a 401 or 403 that didn't before? What if the user's token is expired, missing, or from a different provider?
-- **Empty/nil data**: What if the input is empty, nil, zero-length, or missing optional fields? What about empty arrays vs null?
-- **Production vs test data**: Are there assumptions about data shape that hold in tests but not in production? Old records missing new fields? Records with unexpected enum values?
-- **Concurrency**: Could two requests hitting this code simultaneously cause a race condition, double-write, or inconsistent state?
-- **Backward compatibility**: Would an older client (that doesn't know about this change) break, crash, or show wrong data?
-- **Boundary conditions**: Max values, very long strings, Unicode, special characters, time zones, midnight edge cases?
-- **Injection / untrusted input**: SQL/NoSQL injection, command injection, XSS, path traversal, SSRF in any new code path that consumes user input?
-
-> Language-specific gotchas (Go nil maps/goroutine leaks, TS hydration/undefined-vs-null/as-assertions, Swift IUO/Sendable/actor reentrancy, Python mutable defaults/async exceptions): `resources/pass-reference.md` § Pass 8. This pass runs in the parent: Read that section at execution time.
-
-
-
-Rate each finding:
-- **CRITICAL**: Will cause data loss, security bypass, or crash in production
-- **HIGH**: Likely to cause user-visible bugs under realistic conditions
-- **MEDIUM**: Edge case that could bite someone eventually
-- **LOW**: Theoretical concern, unlikely but worth noting
-
-## Pass 9 — FRESHNESS
-
-Goal: Every direct dependency, framework, and language runtime is current enough to be safe, carries no known CVE and no end-of-life runtime, and each staleness call separates an overdue or security-driven upgrade from one that is still too early to take.
-
-Unlike the other passes, Pass 9 is a WHOLE-PROJECT audit. It runs on every chad-review regardless of what the diff touches. It reads the changed-files list only to prioritize and to tag dependencies the current change touched, never to gate whether the pass runs.
-
-0. **Cache check.** Cache file: `~/.claude/chad-review-cache/<sha256 of git remote get-url origin>.json` (home-dir keyed by origin URL so all worktrees of a repo share it and nothing touches the repo). Schema: `{ generatedAt, manifests: {<repo-relative path>: <sha256 of content>}, manifestSet: [sorted paths], table: <markdown table verbatim>, severityLines: [...], scannerUsed, lastLocalScanClean }`.
-   - Run manifest discovery (step 1's glob with the prune list) and hash each discovered manifest AND its lockfile.
-   - **FULL RUN** (steps 1-5 as written, then write the cache) if ANY: cache file missing or unparseable; discovered manifest set differs from cached `manifestSet`; any hash differs; `generatedAt` older than 7 days; diff shape is `deps-only` or the diff touches any manifest.
-   - **CACHE HIT** otherwise: do NOT launch the FRESHNESS sub-agent and do NOT call context7/WebSearch. In the parent, re-run ONLY the local CVE scan (`osv-scanner -r .` or the ecosystem scanner: it is local, cheap, and preserves same-day detection of newly published CVEs against unchanged deps). If the scan is clean, report the cached table under Pass 9 with the header "FRESHNESS (cached <date>, manifests unchanged; local CVE scan re-run this review: clean)". If the scan finds anything new, invalidate the cache and do a FULL RUN. The 7-day TTL is safe because the security signal is never delayed; the only cached intelligence is latest-version/maturity data, whose consumers are the 60-90-day HOLD/UPGRADE windows.
-1. **Manifest discovery.** Find every dependency manifest in the project, pruning `vendor/`, `node_modules/`, `.git/`, `target/`, `build/`, `dist/`, `.next/`, `cdk.out/`, `DerivedData/`, `Pods/`. Use the ecosystem table below. If no recognized manifest exists, report N/A and stop. Read each manifest and extract DIRECT dependencies plus the runtime constraint (`go` directive, `engines.node`, `environment: sdk`, `swift-tools-version`, `requires-python`, `rust-version`). Skip transitive deps for version resolution; step 3 still scans them for CVEs.
-2. **Version resolution via context7.** For each direct dependency, read the pinned or current version from the manifest or lockfile, then resolve the latest version and migration intelligence from context7 (`resolve-library-id`, then `query-docs` with a topic like "latest version, migration guide, breaking changes"). Capture the three things context7 is good at: latest version, whether a migration guide exists, and how large the breaking surface is (count of breaking changes, codemods required). context7 is weak on exact release DATES: where you need release recency or patch-count and context7 does not surface it, fall back to a lightweight WebSearch ("<lib> <version> release date") purely to gauge recency. context7 stays the primary source. Soft-cap the number of context7 lookups (about 12 to 15), prioritizing runtimes, core frameworks, security-relevant deps, and diff-touched deps; list anything beyond the cap as "not individually version-checked this run."
-3. **Security and EOL check.** Run the ecosystem's CVE scanner (govulncheck, npm/pnpm audit, pip-audit, cargo audit, `dart pub outdated --mode=security`) or the language-agnostic `osv-scanner -r .` over the lockfiles. If no scanner is installed, say so ("security scan unavailable: install osv-scanner/govulncheck") rather than reporting clean. Cross-reference the runtime against end-of-life data (endoflife.date for Node, Python, Go; the framework's own support window for majors). A current version with a known CVE, or a runtime or framework major past support, is CRITICAL and OVERRIDES any "too early" hold from step 4.
-4. **Upgrade-timing judgment.** For each stale dependency, apply the heuristic below to decide UPGRADE (overdue or mature) versus HOLD (too early). This judgment is the point of the pass.
-5. **Report.** Emit the recommendation table, then list CRITICAL and HIGH findings as severity lines.
+**4. Upgrade-timing judgment**, then **5. Report**.
 
 ### Upgrade-timing heuristic
 
-Recommend **HOLD (too early to upgrade, non-blocking)** when ALL hold:
-- the gap is a MAJOR bump, and
-- the latest major shipped recently (roughly under 60 to 90 days, judged via the WebSearch recency probe), and
-- context7 shows a substantial breaking surface (a migration guide with many breaking changes, or required codemods), and
-- the new major has few patch releases so far (still x.0.0 or x.0.1, fewer than about 3 patches).
+**HOLD (too early, non-blocking)** when ALL hold: the gap is a MAJOR bump; the
+latest major shipped recently (roughly under 60 to 90 days); context7 shows a
+substantial breaking surface (many breaking changes or required codemods); and
+the new major has few patches so far (still x.0.0 or x.0.1, fewer than about 3).
 
-Recommend **UPGRADE** when ANY hold:
-- **Security/EOL override:** the current version has a known CVE, or the current runtime or framework major is end-of-life or out of support. CRITICAL, "upgrade now", overrides any HOLD.
-- the latest is MATURE: shipped more than about 90 days ago, reached x.2 or x.3 with several patches.
-- the gap is only MINOR or PATCH with no breaking surface.
-- the current major is itself losing support soon, making the upgrade overdue even if the new major is recent.
+**UPGRADE** when ANY hold: the current version has a known CVE, or the runtime or
+framework major is end-of-life or out of support (CRITICAL, overrides any HOLD);
+the latest is MATURE (shipped over ~90 days ago, at x.2 or x.3 with several
+patches); the gap is only MINOR or PATCH with no breaking surface; or the current
+major is itself losing support soon.
 
-**Pre-1.0 (0.x) caution:** under semver, a 0.y to 0.(y+1) MINOR bump is breaking, so treat it as major-equivalent and apply the same recency and patch-count caution. A brand-new 0.x minor with no follow-up patches is a HOLD.
+**Pre-1.0 caution:** under semver a 0.y to 0.(y+1) bump is breaking, so treat it
+as major-equivalent. A brand-new 0.x minor with no follow-up patches is a HOLD.
 
-### Severity mapping for this pass
+### Severity and disposition
 
-Severity reflects RISK; the **disposition** (do-now / schedule / hold / backlog) is the more important output. Outdated frameworks are a finding to ACTION, not debt to launder into a backlog nobody reads — keeping dependencies current is continuous maintenance, and every safe upgrade you defer compounds into a riskier big-bang migration later. That is the whole reason this pass exists.
+Severity reflects RISK; the **disposition** is the more important output. An
+outdated framework is a finding to ACTION, not debt to launder into a backlog
+nobody reads. Every safe upgrade deferred compounds into a riskier big-bang
+migration later, which is the whole reason this pass exists.
 
-- **CRITICAL**: current version has a known CVE, or the runtime or framework major is end-of-life or unsupported. Recommendation: UPGRADE NOW. Overrides any HOLD.
-- **HIGH**: a core framework or runtime is one or more majors behind AND the current major is in its support sunset, window closing, even without a CVE yet.
-- **MEDIUM**: a core framework or important direct dependency is meaningfully behind (a major behind, OR several minors, OR years stale) and the upgrade is SAFE — the target is mature and there is no breaking HOLD. This is the bread-and-butter finding of the pass; it is **do-now**, not "someday".
-- **LOW**: a single patch behind with no accumulation, on a non-core dependency. Reserve LOW for genuinely trivial lag — a *stack* of "only a minor/patch behind" deps is NOT trivial in aggregate; surface the batch.
-- **HOLD** is a recommendation, not a severity. Non-blocking, "too early to upgrade" (a brand-new breaking major). Attach a revisit signal ("after x.2" or "+90d").
+- **CRITICAL**: known CVE, or an end-of-life or unsupported runtime or framework
+  major. Overrides any HOLD.
+- **HIGH**: a core framework or runtime one or more majors behind AND in support
+  sunset, even without a CVE.
+- **MEDIUM**: a core framework or important direct dependency meaningfully behind
+  (a major, several minors, or years stale) where the target is mature and no
+  breaking HOLD applies. The bread-and-butter finding, and it is **do-now**.
+- **LOW**: a single patch behind on a non-core dependency. A *stack* of "only a
+  minor behind" deps is not trivial in aggregate; surface the batch.
 
-**Disposition — decide one per flagged dependency (this is the point of the pass):**
-- **UPGRADE NOW (safe)** — the DEFAULT for any HIGH/MEDIUM whose target is mature and not under a breaking HOLD (most stale frameworks land here). Do **not** file it to the backlog. Surface it prominently, recommend doing it in this change or an immediate fast-follow, and **offer to perform it** (bump → build → run the affected test/integration suite). If you catch yourself sending a mature, safe framework upgrade to the backlog, re-classify it as UPGRADE NOW.
-- **SCHEDULE** — a CRITICAL/EOL the diff did not touch and can't be done safely inside this commit → a required, dated follow-up, never silent backlog.
-- **HOLD** — a brand-new breaking major; the only disposition that genuinely means "wait", with a revisit signal.
-- **BACKLOG** — reserved for LOW trivial lag only.
+One disposition per flagged dependency:
+
+- **UPGRADE NOW (safe)**: the DEFAULT for any HIGH or MEDIUM whose target is
+  mature and not under a HOLD. Do NOT backlog it. Recommend doing it in this
+  change or an immediate fast-follow, and **offer to perform it** (bump, build,
+  run the affected suite). Catching yourself backlogging a mature, safe framework
+  upgrade means re-classifying it as UPGRADE NOW.
+- **SCHEDULE**: a CRITICAL or EOL the diff did not touch and that cannot be done
+  safely inside this commit. A dated follow-up, never a silent backlog.
+- **HOLD**: a brand-new breaking major, with a revisit signal ("after x.2",
+  "+90d"). The only disposition that means wait.
+- **BACKLOG**: LOW trivial lag only.
 
 ### Report format
 
-One row per direct dependency that is behind or flagged (current-and-clean deps summarized as a closing count, not listed):
+One row per dependency that is behind or flagged; summarize current-and-clean
+deps as a closing count.
 
-| Dependency | Current | Latest | Δ behind | Maturity / Released | Security | Recommendation |
+| Dependency | Current | Latest | Behind | Maturity / Released | Security | Recommendation |
 |---|---|---|---|---|---|---|
-| next | 14.2.30 | 15.0.1 | 1 major | shipped ~3 wks ago, 1 patch, large App Router migration | clean | HOLD (too early; revisit after 15.2 or +90d) |
-| react | 18.3.1 | 19.1.0 | 1 major | mature: ~9 mo ago, at 19.1.x, modest migration | clean | UPGRADE NOW (safe), MEDIUM |
-| mark3labs/mcp-go | v0.46.0 | v0.55.1 | 9 pre-1.0 minors | mature line, no migration guide needed | clean | UPGRADE NOW (safe), MEDIUM — bump + re-run the integration suite |
-| typescript (dev) | 4.9.3 | 5.9.3 (5.x) | 1 major behind; 6.0 exists but is days old | 5.x mature; 6.0 brand-new = HOLD | clean | UPGRADE NOW (safe) to 5.9.3; HOLD 6.0 |
+| next | 14.2.30 | 15.0.1 | 1 major | ~3 wks ago, 1 patch, large App Router migration | clean | HOLD (revisit after 15.2 or +90d) |
+| react | 18.3.1 | 19.1.0 | 1 major | mature: ~9 mo, at 19.1.x, modest migration | clean | UPGRADE NOW (safe), MEDIUM |
 | golang.org/x/net | v0.21.0 | v0.38.0 | several minors | n/a | CVE reachable per govulncheck | UPGRADE NOW, CRITICAL (overrides hold) |
-| some_dart_pkg | 0.8.1 | 0.9.0 | 0.x minor = major-equiv | shipped ~2 wks ago, 0 patches | clean | HOLD (0.x churn, brand-new) |
-| node (runtime) | 18.x | 22.x LTS | runtime, 18 EOL 2025-04-30 | n/a | EOL | UPGRADE NOW, CRITICAL (EOL) |
+| node (runtime) | 18.x | 22.x LTS | runtime | n/a | EOL 2025-04-30 | UPGRADE NOW, CRITICAL (EOL) |
 
-Then list CRITICAL and HIGH findings AND every **UPGRADE NOW (safe)** finding as severity lines (safe upgrades are the headline value of this pass — do not bury them), for example:
-- `FRESHNESS [security]: golang.org/x/net v0.21.0 is affected by a known CVE (reachable per govulncheck); upgrade to v0.38.0.`
-- `FRESHNESS [eol]: Node 18 runtime reached end-of-life 2025-04-30; upgrade to 22 LTS.`
-- `FRESHNESS [upgrade-now]: mark3labs/mcp-go is 9 pre-1.0 minors behind (v0.46.0 → v0.55.1), target is mature and clean; bump now and re-run the MCP integration suite. Safe, recommended this change.`
-- `FRESHNESS [hold]: next 15.0.1 shipped ~3 weeks ago with a large migration surface; hold at 14.2.x, revisit after 15.2.`
+Then list every CRITICAL, HIGH, and **UPGRADE NOW (safe)** finding as severity
+lines. Safe upgrades are the headline value of this pass; do not bury them:
 
-Tag any dependency the current diff touched with `(diff-touched)`.
+- `FRESHNESS [security] | golang.org/x/net v0.21.0 | CVE reachable per govulncheck, upgrade to v0.38.0`
+- `FRESHNESS [eol] | node 18 | end-of-life 2025-04-30, upgrade to 22 LTS`
+- `FRESHNESS [upgrade-now] | mark3labs/mcp-go | 9 pre-1.0 minors behind, target mature and clean, bump now`
+- `FRESHNESS [hold] | next 15.0.1 | shipped ~3 weeks ago, large migration surface, hold at 14.2.x`
 
-If zero issues, report "FRESHNESS: Clean. All direct dependencies are current or within a safe lag, no CVE and no end-of-life runtime." If no manifest is recognized, report "FRESHNESS: N/A — no recognized manifest detected."
+Tag anything the diff touched with `(diff-touched)`. Zero issues means
+"FRESHNESS: Clean. All direct dependencies current or within a safe lag, no CVE
+and no end-of-life runtime." No manifest means "FRESHNESS: N/A, no recognized
+manifest detected."
 
-> Ecosystem-specific manifest, version, and security sources (Go/Node/Dart/Swift/Python/Rust): `resources/pass-reference.md` § Pass 9.
+> Ecosystem manifest, version, and security sources: `pass-reference.md` §
+> FRESHNESS.
 
-## Performance Budget
+## 6. SIMPLIFY
 
-Target: under ~2 minutes wall-clock for a typical single-language PR (5-10 file changes) with a warm freshness cache; non-standard diff shapes (docs-only, config-only, tiny) should finish well under a minute. The bundled Phase A fan-out is one lever — three sub-agents (mechanical bundle + Pass 2 + FRESHNESS) running concurrently means the wall-clock time is dominated by the slowest single agent, not the sum. The diff-shape matrix (Pre-flight step 5) and the freshness cache (Pass 9 step 0) are the bigger levers: most runs launch just those few agents and zero network version lookups.
+The change is as small and as plain as it can be while still doing the job.
+Quality only: correctness defects belong to BEHAVIOR AND RISK.
 
-If the review is running long, cut in this order:
+- **Reuse missed**: a new helper duplicating an existing one. Name the existing
+  symbol and its path.
+- **Dead code**: added-then-unused code, refactor leftovers, unreachable
+  branches.
+- **Wrong altitude**: a handler doing storage-shaped work, a data layer making
+  presentation decisions.
+- **Needless abstraction**: an interface with one implementation, a wrapper
+  adding no behavior, generalization for a requirement that does not exist yet.
+- **Defensive noise**: handling, fallbacks, or validation for states that cannot
+  occur. Trust internal code and framework guarantees; validate at system
+  boundaries only.
+- **Compatibility scaffolding**: a feature flag or shim where the code could just
+  change.
 
-1. **Pass 9 (FRESHNESS)**: the cache (step 0) is the primary lever — a warm cache removes the entire network-bound version-resolution loop. On a forced full run, the context7 loop is the first thing to cap when the review runs long. Reduce the soft-cap, or resolve versions only for runtimes and core frameworks. NEVER skip the local security and EOL scan (`osv-scanner` / `govulncheck` / `pip-audit`): a CVE or EOL runtime is CRITICAL and the scan is cheap.
-2. **Pass 3 (SPEC DRIFT)**: sub-checks 3d and 3g (type regeneration and spec lint) are the most expensive because they compile or invoke external tools. If the diff has no handler changes, mark 3a–3c N/A immediately without running the generators.
-3. **Pass 4 (TEST)**: if the project's test suite is slow (full compile + integration tests), scope to `-run TestFunctionName` rather than `./...`. Only run the packages that contain changed files.
-4. **Pass 1 (STRUCTURAL)**: on diffs with many removed symbols, grep can be slow on large codebases. Scope grep to `--include="*.go"` / `--include="*.ts"` rather than all file types; skip `vendor/` and `node_modules/` aggressively.
-5. **Phase B / Phase C (TEST + ADVERSARIAL)**: Pass 4 runs in the parent; Pass 8 runs inline in the parent on opus/sonnet sessions (a Fable session delegates it to a JUDGE sub-agent after Phase A). When Pass 8 is inline and the Phase A sub-agents are still running, proceed to its adversarial reasoning (no tool calls needed) so it's ready to report when Phase A completes.
+Severity caps at **MEDIUM**: nothing here is a correctness defect. Report, never
+apply. The Fix Prompt hands these to `/tidy`.
 
-Never skip a pass to meet the time budget. Mark slow passes with a note ("3d skipped — codegen takes > 30s; run manually with `make generate-types` and check `git diff`") rather than silently omitting them.
+> Per-language simplification signals: `pass-reference.md` § SIMPLIFY.
 
-## When to Use chad-review vs Other Review Skills
+## Execution strategy
 
-**Use `chad-review`** (this skill) when:
-- You are about to commit or push and want a rigorous pre-commit gate
-- The changes touch multiple layers (e.g., Go handler + CDK + TypeScript frontend) and you want all 9 passes run with parallel sub-agents
-- You want a structured NO-GO / CONDITIONAL / GO verdict with a ready-to-use fix prompt
-- You want language-specific coverage analysis (table-driven tests, it.each, parametrize)
+### Model tiering (session-relative)
 
-**Use `/review` (Claude Code built-in)** when:
-- You want a quick read of a single file or a small change (< 3 files)
-- You don't need the 9-pass structure — just a second pair of eyes
-- You're in a fast iteration loop and a full 9-pass review would break your flow
+**ALWAYS pass an explicit `model` on every Agent launch.** This is load-bearing:
+since Claude Code v2.1.198 a launch with no explicit `model` silently inherits
+the parent session tier.
 
-**Use `pr-review-toolkit:review-pr` (marketplace skill)** when:
-- The code is already in a pull request on GitHub and you want PR-centric review (diff comments, reviewer context, CI status)
-- You want review feedback formatted as inline PR comments rather than a terminal report
-- The PR has been open long enough that it includes discussion context worth incorporating into the review
+- **MECH**: FRESHNESS and the parent's orchestration. **Always `sonnet`.**
+- **JUDGE**: the reviewer agent (it owns behavioral review), the parent's attack
+  probes, and CRITICAL re-verification. **`opus`, except a `sonnet` session stays
+  `sonnet`.**
 
-Rule of thumb: **chad-review is for before the commit; pr-review-toolkit is for after the PR is open.**
-
-## Final Report
-
-After all 9 passes, output a single consolidated report:
-
-```
-## Chad Review — Report
-Diff shape: <shape>
-
-### Pass 1 — STRUCTURAL
-[findings or "Clean"]
-
-### Pass 2 — BEHAVIORAL
-[behavior changes + flagged risks]
-
-### Pass 3 — SPEC DRIFT
-[findings per sub-check or "Clean"/"N/A"]
-
-### Pass 4 — TEST
-[test results + any proposed fixes]
-
-### Pass 5 — TEST COVERAGE
-[missing tests with severity or "Clean"]
-
-### Pass 6 — OBSERVABILITY
-[logging/error/metric gaps with severity or "Clean"]
-
-### Pass 7 — DOCUMENTATION
-[doc gaps with severity or "Clean"]
-
-### Pass 8 — ADVERSARIAL
-[findings with severity ratings]
-
-### Pass 9 — FRESHNESS
-[dependency currency table + CVE/EOL findings with severity, or "Clean"/"N/A"]
-
-### Verdict: [GO / NO-GO / CONDITIONAL]
-[1-2 sentence summary of whether to commit as-is, fix something first, or stop and rethink]
-```
-
-Each sub-agent pass section ends with its self-refutation tally line (`Self-refutation: X raised, Y refuted, Z reported`); refuted CRITICALs stay visible as "raised then refuted: <evidence>" so the parent can double-check them. When assembling the report, carry the sub-agents' finding lines and tallies verbatim but **strip any process narration** an agent emitted despite the output contract (methodology, "I checked…", restated diff) — findings in the deliverable, never the process.
-
-**How Pass 9 affects the verdict.** Because Pass 9 is whole-project and always-on, a pre-existing dependency issue unrelated to the diff should not hard-block an unrelated commit:
-
-- **CRITICAL (CVE or EOL) on a dependency the diff touched or introduced → NO-GO.** The change is adjacent to a known-vulnerable or end-of-life dependency; fix before committing.
-- **CRITICAL (CVE or EOL) that is pre-existing and NOT touched by the diff → CONDITIONAL**, with a prominent callout: the current change is safe to commit, but the project carries a CRITICAL dependency issue that must be scheduled now.
-- **HIGH (sunsetting major) → CONDITIONAL** if urgent, otherwise advisory with a recommendation to schedule.
-- **MEDIUM safe-upgrade findings (UPGRADE NOW) → never silently backlogged.** A GO stays a GO (a safe upgrade rarely needs to block a commit), but the report MUST surface these prominently and the post-report Fix Prompt MUST list them as recommended actions with a verify step — and you should OFFER to perform them in this change or an immediate fast-follow. Defaulting a mature framework upgrade to the backlog is the failure mode this pass exists to prevent.
-- **HOLD, and genuinely-trivial single-patch LOW lag → advisory only, never blocks.** These appear in the report; only these feed the BACKLOG.
-
-## After the Report — Fix Prompt
-
-If the verdict is NO-GO or CONDITIONAL — **or** if Pass 9 produced any **UPGRADE NOW (safe)** framework/dependency findings even on a GO — offer to generate a **fix prompt** the user can use to kick off a planning session. The fix prompt must:
-
-1. **List every finding that needs action** — include the pass, severity, file path, and line numbers.
-2. **Describe what each fix should accomplish** — not the implementation, but the outcome (e.g., "ghost.go should use Eastern time for the race date, matching how live races work").
-3. **Reference existing patterns** — point to code that already does the right thing in the codebase.
-4. **Separate blocking fixes from the rest — but fix all of them** — CRITICAL and HIGH block this commit; MEDIUM and LOW are fixed in the same change (or an immediate fast-follow), never deferred to a backlog. Every finding gets actioned; the split is only about what blocks the merge, not about what is worth fixing. One exception: a Pass 9 FRESHNESS CRITICAL that the diff did not touch (a pre-existing CVE or end-of-life runtime) is a required follow-up to schedule now, not a blocker for this specific commit. List it under required fixes but label it "schedule now, does not block this commit", consistent with the CONDITIONAL verdict rule.
-5. **Add a "Recommended — safe to do now" section for Pass 9 UPGRADE NOW (safe) findings** — every mature, non-breaking framework/dependency upgrade gets a line with its concrete bump (`current → target`) and a verify step (the build plus the test/integration suite that exercises it). These are not commit blockers, but they are the headline value of the freshness pass, so they get their own heading — never folded into "optional polish" and never dropped to the backlog. Explicitly **offer to perform them now** (in this change or an immediate fast-follow) rather than just listing them. Keep HOLD items out of this section (they carry a revisit signal instead).
-6. **End with a verification step** — "After fixing, run `/chad-review` again to confirm all issues are resolved."
-
-Present the prompt in a copyable code block. Then:
-
-- Ask "Want me to enter plan mode with this prompt, or do you want to edit it first?" ONLY when BOTH hold: the verdict is NO-GO or CONDITIONAL, AND this is a direct interactive session with the user. If **enter plan mode**: enter plan mode with the fix prompt as the task. If **edit first**: wait for the user's edit, then enter plan mode with the edited version.
-- On a GO verdict, print the report (including any "Recommended — safe to do now" section) and end the turn without asking.
-- When running as a subagent, inside another skill (e.g. /wrapup), or in any headless/autonomous invocation, never block on a question: the full fix prompt is already in the report body; return and let the caller act on the verdict.
-
-## Execution Strategy
-
-**Delegate passes to sub-agents in parallel.** Passes that only read the diff are self-contained and can run concurrently via the Agent tool. Single-message multi-tool-use batches the launches in parallel.
-
-### Model Tiering (session-relative)
-
-**ALWAYS pass an explicit `model` on every Agent launch** — computed from the session model, not hardcoded. This is load-bearing: since Claude Code v2.1.198 an Agent/`Explore` launch with NO explicit `model` inherits the *parent* (session) model, so an omitted model silently rides the parent tier. Do not soften this "ALWAYS" without understanding that.
-
-Two tiers, both derived from the session model **M** (read your own model from environment/system context during pre-flight):
-- **MECH** — the rote, rubric-driven passes: **1 STRUCTURAL, 3 SPEC DRIFT, 5 TEST COVERAGE, 6 OBSERVABILITY, 7 DOCUMENTATION, 9 FRESHNESS**, plus the parent's own orchestration.
-- **JUDGE** — the merge-gating judgment passes: **2 BEHAVIORAL, 8 ADVERSARIAL, and CRITICAL re-verification**.
-
-| Session **M** | Parent turn | MECH (1,3,5,6,7,9) | JUDGE (2, 8, CRITICAL re-verify) |
+| Session model | Parent | MECH | JUDGE |
 |---|---|---|---|
-| **opus** | opus | **sonnet** | **opus** |
-| **sonnet** | sonnet | sonnet | **sonnet** (trusted for judgment; no escalation) |
-| **fable** | fable | **opus** | **opus** |
-| unknown / haiku / other | = M | **sonnet** (floor) | **opus** |
+| opus | opus | sonnet | opus |
+| sonnet | sonnet | sonnet | sonnet |
+| fable | fable | sonnet | opus |
+| unknown / haiku / other | = session | sonnet | opus |
 
-Reading: an opus session keeps judgment on opus and drops the rote passes to sonnet; a sonnet session stays sonnet everywhere; a **Fable session keeps only the cheap orchestration shell on Fable and escalates every real review pass to opus** — the quality floor wins for that unusual case, so a Fable-session review costs about like an opus review by design. **Never haiku for any pass** — sonnet is the review floor.
+A sonnet session stays sonnet everywhere, so a deliberately cheap session is
+never force-upgraded. A fable session keeps only the orchestration shell on fable
+and runs the review on opus.
 
-**CRITICAL-escalation re-verification** runs at the JUDGE tier: if a MECH pass reports any CRITICAL, or says it could not confidently classify something, that specific finding is re-verified before it enters the verdict — inline in the parent when the parent is already at the JUDGE tier (opus/sonnet sessions), else folded into the dedicated JUDGE (opus) Pass 8 agent (see Phase C).
+**Never haiku**: sonnet is the review floor. **Never spawn fable**: at roughly
+double the Opus rate it buys no review advantage here. Use it only when asked for
+by name. `opus` and `sonnet` are aliases resolved at spawn time; never hardcode a
+dated model ID. Pricing snapshot 2026-07-25: Opus 5 $5/$25 per MTok, Sonnet 5
+$3/$15, Fable 5 $10/$50.
 
-### Phase A — bundled sub-agents in parallel (single Agent call batch)
+### Effort
 
-Per language block the routing script emits, launch exactly **two** sub-agents, plus **one** whole-project FRESHNESS agent for the review overall — all in ONE message (single-language diff = **3** Agent tool uses; a CDK + Go diff = 2 bundle + 2 Pass 2 + 1 FRESHNESS = **5**):
+The Agent tool exposes `model` but **no `effort` parameter** (verified on Claude
+Code 2.1.220; only the Workflow tool's `agent()` takes effort). Sub-agents inherit
+the session effort, so effort is a session-level dial this skill cannot set per
+pass. Use it deliberately: review accuracy holds well at lower effort, so run the
+everyday pre-commit pass at `medium` and reserve `high` or `xhigh` for a review
+that gates a release. It is the largest available speed lever and costs no code.
 
-**1. Mechanical bundle agent — Passes 1, 3, 5, 6, 7 → `general-purpose`, MECH tier.** One agent owns all five rote passes for the block (`general-purpose` because Pass 3 must run generators / spec validators / route-parity tests, not just grep). It reads the diff ONCE and emits **each pass as its own labeled section** (`## Pass 1 — STRUCTURAL`, etc.), findings-or-`Clean` per the output contract, then ONE combined self-refutation tally. Preserving the five distinct headings is what keeps the 9-heading report invariant intact.
+### Phase 1: fan out
 
-**2. Pass 2 BEHAVIORAL → the language specialist, JUDGE tier.** The one pass whose domain knowledge earns a heavyweight specialist (see picks below). For **CDK**, the `cloud-architect` Pass 2 brief ALSO sanity-checks IaC observability (log retention, X-Ray, alarms) since it already reads the CDK diff — this recovers the one specialist signal the bundle would otherwise dilute; the CDK bundle agent still runs Pass 6 for non-IaC-specific gaps.
+Per language block, launch **one reviewer**, plus **one** whole-project FRESHNESS
+agent for the review overall, all in ONE message (single-language = **2** Agent
+tool uses; CDK + Go = **3**).
 
-Each sub-agent gets: the relevant diff (for a single-language diff, the whole diff inline; for a **mixed-language** diff, ONLY this block's hunks per Pre-flight step 6); the changed-files list; a self-contained brief repeating project context it needs (the sub-agent cannot see the parent conversation); the strict output contract (see "Writing sub-agent prompts"); and an explicit **`model`** computed from §"Model Tiering" (MECH for the bundle, JUDGE for Pass 2).
+**Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), 4, and 6, at the
+JUDGE tier. `subagent_type` comes from the routing script
+(`feature-dev:code-reviewer` for Go, `cloud-architect` for CDK,
+`frontend-developer` for Next.js, `typescript-pro` for generic TS,
+`code-reviewer` for Swift, `general-purpose` otherwise). It reads the diff ONCE
+and emits each pass as its own labeled section, which is what keeps the
+six-heading invariant intact. It needs tool access to run generators, spec
+validators, and route-parity tests for DRIFT.
 
-**3. Pass 9 FRESHNESS is whole-project → `general-purpose`, MECH tier.** Launch it ONCE per review, not per language block, added to the same batch no matter how many blocks the script emits. Its brief:
-- The dependency manifests discovered project-wide (or instruct it to discover them with the prune list in Pass 9).
-- The changed files list, used ONLY to prioritize and tag `(diff-touched)` deps. State explicitly that the audit is whole-project and does not depend on the diff.
-- context7 as the primary source for latest version and migration intelligence; a lightweight WebSearch only as a release-recency probe.
-- Output: the recommendation table plus CRITICAL/HIGH/UPGRADE-NOW severity lines (per the Pass 9 report format), under about 350 words.
-- read-only, never edit or commit.
+**FRESHNESS** is whole-project, MECH tier, `general-purpose`, launched ONCE per
+review rather than per block. Brief it with the manifests discovered
+project-wide (or the discovery instructions), the changed-files list used ONLY to
+prioritize and tag `(diff-touched)`, an explicit note that the audit does not
+depend on the diff, context7 as primary with WebSearch only as a recency probe,
+and the report format above.
 
-**Preferred path: use `chad-review-route.sh` output** (see Pre-flight step 6) — it prints the mechanical-bundle row plus the right Pass 2 specialist and Context7 hints per language family.
+Wait for all Phase 1 results before proceeding.
 
-**Fallback picks** when the routing script is unavailable:
-- **Mechanical bundle (Passes 1,3,5,6,7)** → `general-purpose` at MECH tier, for every language. Fast grep + checklist + generator work; the lean built-in avoids the heavyweight-specialist system-prompt overhead that rote passes don't need.
-- **Pass 2 BEHAVIORAL** → the language specialist at JUDGE tier: **Go** `feature-dev:code-reviewer`; **CDK TypeScript** `cloud-architect` (+ IaC observability, Context7 `aws-cdk-lib`); **Next.js / React** `frontend-developer` (Context7 from `package.json`: `next`, `react`, `@tanstack/react-query`, `next-auth`, …); **generic TypeScript / JS** `typescript-pro` (Context7 from imported deps); **iOS Swift** `code-reviewer` (Context7 `swift` + the Apple frameworks the diff imports, per the script). If none matches, `general-purpose`.
+### Phase 2: the parent pass
 
-Wait for all Phase A sub-agent results (the per-language bundle + Pass 2 agents plus the single FRESHNESS agent) before proceeding.
+One pass, holding every finding at once:
 
-### Phase B — Pass 4 (TEST) in the parent turn
-
-Do not delegate tests. Run `go test` / `npx vitest` / `pytest` / etc. directly in the parent so test output streams to the user. Tests may reveal failures that need immediate follow-up, and the parent has the full context to propose fixes.
-
-### Phase C — Pass 8 (ADVERSARIAL) at the JUDGE tier
-
-Pass 8 is informed by *everything* the prior passes found, and it plus CRITICAL-escalation re-verification run at the **JUDGE tier**. Its execution mode depends on whether the parent is already at that tier:
-
-- **Parent already at the JUDGE tier (opus & sonnet sessions) → run Pass 8 INLINE in the parent.** The parent holds all prior-pass context; running inline avoids re-reading the diff or losing findings. Run adversarial probes inline with any targeted tool calls (grep, file reads) needed to confirm edge cases.
-- **Parent below the JUDGE tier (Fable / unknown sessions) → delegate Pass 8 to a dedicated JUDGE (opus) sub-agent** after Phase A completes. Feed it the full diff plus each prior pass's capped self-refutation digest (the findings + tallies, not raw scratch) so it inherits what it needs; have it also perform the CRITICAL-escalation re-verification for any MECH-pass CRITICALs.
-
-Either way, apply the same self-refutation discipline required of the sub-agents before any Pass 8 finding enters the report.
+1. **Run the tests.** Do not delegate: run them directly so output streams to the
+   user and the parent has full context to propose fixes.
+2. **Attack** (BEHAVIOR AND RISK, attack half) with targeted grep and file reads
+   to confirm edge cases. This is JUDGE-tier work: inline when the parent is
+   already there (opus and sonnet sessions), otherwise delegate this step alone
+   to one JUDGE sub-agent.
+3. **Filter once.** Sub-agents report unfiltered, so the parent is the only
+   filter. Drop or downgrade ONLY on a `file:line` that disproves the finding,
+   never on plausibility. Classic false-positive causes: a grep hit inside a
+   comment, string literal, test fixture, or generated file; a "missing test"
+   covered by a differently named or integration test; a "stale doc" statement
+   that still holds; a behavior change intended per an adjacent comment or the
+   commit message. Emit one `Filtered: N raised, M dropped` line. A dropped
+   CRITICAL stays visible as `[dropped: <=10-word evidence]`.
+4. **Re-verify CRITICALs.** Any CRITICAL, and anything marked `CONF lo`, is
+   confirmed against the code before it enters the verdict.
+5. **Write the verdict.**
 
 ### Writing sub-agent prompts
 
-Each sub-agent prompt MUST be self-contained:
-- State the goal in one sentence (for the bundle agent: name the five passes it owns).
-- Include the diff (sub-agents cannot see your conversation): the full diff for a single-language review, or ONLY this language block's hunks for a mixed-language review (Pre-flight step 6).
-- Read `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md` ONCE during prompt assembly and paste ONLY the section(s) for the pass(es) this agent owns and the language families the routing script detected — for the bundle agent that is the §Pass 1/3/5/6/7 sections for its language, pasted once. This step is mandatory: skipping it silently degrades sub-agent quality.
-- Name the project's specific spec files / validation commands / test harness / doc locations (detect these during pre-flight; if not found, tell the sub-agent the convention is absent and to mark sub-checks N/A).
-- Include the strict output contract below (it replaces any word budget).
-- Remind them: read-only, never edit or commit.
+Self-contained, always:
 
-**Strict output contract (paste verbatim into every sub-agent prompt).** This keeps sub-agent output — and the parent's cost to ingest it — minimal, and enforces "findings in the deliverable, never the process":
+- One sentence of goal, naming the passes the agent owns.
+- The diff. Sub-agents cannot see your conversation.
+- Read `pass-reference.md` ONCE during prompt assembly and paste ONLY the
+  sections for the passes this agent owns and the languages detected. Mandatory:
+  skipping it silently degrades quality.
+- The project's spec files, validation commands, test harness, and doc locations
+  as detected in pre-flight. Absent ones stated as absent, so the agent reports
+  that sub-check N/A.
+- The output contract verbatim, and read-only instructions.
+
+**Output contract (paste verbatim into every sub-agent prompt):**
 
 ```
-Output — STRICT, no exceptions:
+Output. Strict, no exceptions:
 - Zero preamble, zero restated diff, zero methodology narration.
-- One line per finding: SEVERITY | file:line | <=15-word finding
+- One line per finding:
+  SEVERITY | CONF hi|med|lo | file:line | <=15-word finding
+- Report EVERY issue you find, including ones you are uncertain about or
+  consider low severity. Do NOT filter for importance or confidence. A later
+  pass does that once, with every finding in view. Coverage is your job;
+  ranking is not. Use CONF to say how sure you are.
+- Emit one "## <PASS NAME>" heading per pass you own, findings underneath,
+  in the order the passes are numbered.
 - A pass with no findings outputs exactly: Clean
-- A refuted CRITICAL stays visible: SEVERITY | file:line | finding [refuted: <=10-word evidence]
-- End with exactly: Self-refutation: X raised, Y refuted, Z reported
-(Bundle agent: emit one "## Pass N — NAME" heading per owned pass with its
- finding lines or "Clean" underneath, then ONE combined Self-refutation line.)
-(Pass 9: emit the recommendation table (that is data), then its severity/
- UPGRADE-NOW lines as TAG | dep | <=15-word rec, then the tally.)
+- A sub-check whose project convention is absent outputs exactly:
+  TAG | N/A - convention not detected
+(FRESHNESS agent: emit the recommendation table first, that is data, then the
+ severity and UPGRADE-NOW lines as TAG | dep | <=15-word recommendation.)
 ```
 
-Example sub-agent prompt skeleton:
+Prompt skeleton:
 
 ```
-You are running Pass <N> of a pre-commit review on the <project> repo.
+You are reviewing a pre-commit diff on the <project> repo. You own passes
+1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS (coverage only, do not run tests),
+4 OBSERVABILITY, and 6 SIMPLIFY.
 
-Goal: <one sentence>
-
-The diff under review (captured from `git diff HEAD` + untracked files):
+The diff under review (from `git diff HEAD` + untracked files):
 <paste diff>
 
-Project-specific context (detected during pre-flight):
+Project context (detected during pre-flight):
 - OpenAPI spec: <path or "not present">
-- Type-generation script: <command or "not present">
+- Type-generation command / spec lint command: <or "not present">
 - Route-parity test: <command or "not present">
 - Data-model doc: <path or "not present">
 
-Your job:
-<numbered steps specific to this pass>
+Pass rubrics for the languages in this diff:
+<paste the matching pass-reference.md sections>
 
-Before reporting, attempt to refute every finding you raised: re-read the surrounding code and check the classic false-positive causes (grep hit inside a comment, string literal, test fixture, or generated file; a "missing test" actually covered by a differently named or integration test; a "stale doc" statement that still holds; a behavior change explicitly intended per an adjacent comment or the commit message). A finding may be dropped ONLY on concrete evidence (a file:line that disproves it), never on plausibility. Refuted CRITICALs are not deleted: report them per the contract.
-
-<paste the strict output contract here>. Read-only — do not edit files or run commits.
+<paste the output contract>. Read-only: do not edit files or run commits.
 ```
 
-Example Agent tool call (model is REQUIRED — the value comes from §"Model Tiering" for the current session; the bundle rides MECH, Pass 2 rides JUDGE):
+Agent call. `model` is REQUIRED, from §"Model tiering":
 
 ```json
 {
-  "description": "Mechanical bundle (Passes 1,3,5,6,7)",
-  "subagent_type": "general-purpose",
-  "model": "<MECH tier for this session — e.g. sonnet on an opus session, opus on a fable session>",
+  "description": "Reviewer: DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY",
+  "subagent_type": "feature-dev:code-reviewer",
+  "model": "<JUDGE tier for this session>",
   "prompt": "<self-contained prompt as above>"
 }
 ```
 
+## Performance budget
+
+Target: under ~2 minutes for a typical single-language change (5 to 10 files)
+with a warm freshness cache; `light` and `deps` well under a minute.
+
+The levers in order of size: the diff-shape matrix skips the fan-out entirely for
+most everyday changes; the freshness cache removes the network-bound version loop;
+and a two-agent fan-out means wall-clock is the slowest agent, not the sum.
+
+Running long, cut in this order:
+
+1. **FRESHNESS**: the cache is the primary lever. On a forced full run, cap the
+   context7 loop first, or resolve only runtimes and core frameworks. NEVER skip
+   the local security and EOL scan: a CVE or EOL runtime is CRITICAL and the scan
+   is cheap.
+2. **DRIFT `[types]` and `[spec/lint]`**: the most expensive sub-checks, since
+   they compile or shell out. With no handler changes, mark the spec sub-checks
+   N/A immediately without running generators.
+3. **TESTS**: scope to `-run TestFunctionName` rather than `./...`; only packages
+   containing changed files.
+4. **DRIFT `[symbol]`**: scope grep with `--include` rather than all file types.
+
+Never skip a pass to meet the budget. Mark a slow one with a note ("`[types]`
+skipped: codegen takes over 30s, run `make generate-types` and check
+`git diff`") rather than silently omitting it.
+
+## Choosing between review tools
+
+| Situation | Tool |
+|---|---|
+| About to commit or push; want the rigorous gate, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
+| Quality-only cleanup, applied, **before** the gate | `/tidy` |
+| Quick read of one file or a change under three files | `/review` (built-in) |
+| Code already in a GitHub PR; want inline PR comments and CI context | `pr-review-toolkit:review-pr` |
+
+chad-review is for before the commit; pr-review-toolkit is for after the PR is
+open. `/tidy` runs before chad-review, never after: applying edits after the gate
+mutates the reviewed diff and re-arms it. The cycle is build, test, `/tidy`,
+`/chad-review`, PR.
+
+## Final report
+
+Match length to findings: cover the substance, skip filler sections, restated
+findings, and summaries of summaries. Lead with the outcome.
+
+```
+## Chad Review
+Diff shape: <shape>
+
+### 1. DRIFT
+[findings or "Clean"]
+
+### 2. BEHAVIOR AND RISK
+[behavior changes, then attack findings, or "Clean"]
+
+### 3. TESTS
+[run results and any proposed fixes, then coverage gaps, or "Clean"]
+
+### 4. OBSERVABILITY
+[gaps with severity, or "Clean"]
+
+### 5. FRESHNESS
+[currency table + CVE/EOL/UPGRADE-NOW lines, or "Clean"/"N/A"]
+
+### 6. SIMPLIFY
+[quality findings, capped at MEDIUM, or "Clean"]
+
+Filtered: N raised, M dropped
+
+### Verdict: [GO / NO-GO / CONDITIONAL]
+[1-2 sentences: commit as-is, fix something first, or stop and rethink]
+```
+
+Carry finding lines verbatim but **strip any process narration** an agent emitted
+despite the contract. Findings in the deliverable, never the process.
+
+**How FRESHNESS affects the verdict.** Being whole-project and always-on, a
+pre-existing dependency issue unrelated to the diff should not hard-block an
+unrelated commit:
+
+- **CRITICAL on a dependency the diff touched or introduced: NO-GO.**
+- **CRITICAL that is pre-existing and untouched: CONDITIONAL**, with a prominent
+  callout. This change is safe to commit; the project carries a CRITICAL issue to
+  schedule now.
+- **HIGH (sunsetting major): CONDITIONAL** if urgent, otherwise advisory.
+- **MEDIUM UPGRADE NOW findings: never silently backlogged.** A GO stays a GO,
+  but the report surfaces them prominently, the Fix Prompt lists them with a
+  verify step, and you OFFER to perform them in this change or a fast-follow.
+  Backlogging a mature framework upgrade is the failure mode this pass prevents.
+- **HOLD and single-patch LOW lag: advisory only.** Only these feed the BACKLOG.
+
+## After the report: fix prompt
+
+Offer a copyable **fix prompt** when the verdict is NO-GO or CONDITIONAL, or when
+FRESHNESS produced UPGRADE NOW findings even on a GO, or when SIMPLIFY produced
+findings. Keep it proportional; no filler. It must:
+
+1. **List every finding needing action**, with pass, severity, file, and lines.
+2. **Describe the outcome of each fix**, not the implementation ("ghost.go should
+   use Eastern time for the race date, matching how live races work").
+3. **Point at existing patterns** in this codebase that already do it right.
+4. **Separate blocking from non-blocking, but fix all of them.** CRITICAL and
+   HIGH block this commit; MEDIUM and LOW are fixed in the same change or an
+   immediate fast-follow, never deferred to a backlog. The split is only about
+   what blocks the merge. One exception: a FRESHNESS CRITICAL the diff did not
+   touch is listed under required fixes labeled "schedule now, does not block
+   this commit".
+5. **Add a "Recommended, safe to do now" heading** for UPGRADE NOW findings, each
+   with its concrete bump (`current -> target`) and a verify step, plus an
+   explicit offer to perform them. Keep HOLD items out.
+6. **Add a `/tidy` handoff line** when SIMPLIFY produced findings: name the files
+   rather than restating each cleanup in prose.
+7. **End with** "After fixing, run `/chad-review` again to confirm all issues are
+   resolved."
+
+Then: ask "Want me to enter plan mode with this prompt, or do you want to edit it
+first?" ONLY when the verdict is NO-GO or CONDITIONAL AND this is a direct
+interactive session; enter plan mode with the prompt (or the user's edited
+version). On a GO, print the report and end the turn without asking. As a
+sub-agent, inside another skill (`/wrapup`), or headless, never block on a
+question: the fix prompt is already in the report body.
+
 ## Rules
 
-- NEVER edit any source file
-- NEVER commit anything
-- NEVER apply proposed fixes — only show them
-- NEVER silently skip a pass: all 9 passes appear as headings in every Final Report. A pass may return early per the diff-shape matrix (Pre-flight step 5), but only with the explicit line "N/A — not applicable to this diff shape (<shape>)", never by omission
-- ALWAYS pass an explicit `model` on every Agent launch, computed from the session model per §"Model Tiering" (MECH for the bundle + Pass 9; JUDGE for Pass 2 + Pass 8); never haiku. The explicit model is load-bearing — an omitted one silently inherits the parent/session tier (since Claude Code v2.1.198).
-- Pass 3 may run type generators, spec validators, and route-parity tests — these are non-destructive
-- If the diff is enormous (50+ files), ask the user if they want to scope the review to specific directories
-- If the project's conventions don't match any of the sub-check patterns, mark "N/A" and continue — don't fail the pass
+- NEVER edit a source file, commit, or apply a proposed fix. Show it only.
+- NEVER silently skip a pass. All six appear as headings in every report. A pass
+  may return early per the shape matrix, but only with the explicit line
+  "N/A - not applicable to this diff shape (<shape>)". The same holds one level
+  down: an absent convention says `N/A - convention not detected` rather than
+  vanishing.
+- ALWAYS pass an explicit `model` on every Agent launch, per §"Model tiering".
+  Never haiku, never fable.
+- **The prescribed agents are the entire budget**: one reviewer per language
+  block plus one FRESHNESS agent. Never spawn an agent to verify or double-check
+  another agent's finding; the parent does that in Phase 2. Never spawn a second
+  agent for work one can finish.
+- DRIFT may run type generators, spec validators, and route-parity tests. These
+  are non-destructive.
+- If the diff exceeds roughly 3000 changed lines, ask whether to scope the review
+  to specific directories.
