@@ -28,6 +28,9 @@ venv/
 env/
 ENV/
 
+# Claude Code local state and worktrees
+.claude/
+
 # IDE
 .vscode/
 .idea/
