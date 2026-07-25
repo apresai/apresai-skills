@@ -157,8 +157,10 @@ identical wording, no other changes: **[live]**
 | `That is wild.` (baseline, second run) | 1.356 s | 0.079 | 1.200–1.440 |
 | `[flibbertigibbet] That is wild.` (nonsense) | 2.088 s | 0.426 | 1.152–2.400 |
 
-**What this proves:** every bracketed form, recognized or not, measurably lengthens the
-output versus baseline. A nonsense token is *not* silently stripped. So passing
+**What this proves:** every bracketed form, recognized or not, lengthens the output versus
+baseline **on the mean**. Note the nonsense token's range (1.152 to 2.400 s) dips just below
+both baseline ranges at its low end, so the effect is a shift in distribution rather than a
+guarantee on any single render. A nonsense token is *not* silently stripped. So passing
 unrecognized bracketed text straight through to the API is not safe.
 
 **What this does NOT prove (UNVERIFIED):** which sound the model actually makes. The
@@ -199,10 +201,11 @@ audio.
   `sales@x.ai`. **No public numeric TTS rate limit exists**, and there is no self-service
   tier upgrade for voice. **[docs]**
 
-Practical read: TTS tolerates far more parallelism than Google Cloud TTS (150 RPM) or
-Gemini AI Studio (10 RPM). 8–12 workers is comfortable; because there are no headers and
-no published ceiling, keep retry-with-backoff on 429 rather than assuming the limit is
-absent.
+Practical read: a **single burst of 12** concurrent requests all succeeded. That is not a
+sustained-rate measurement and establishes no steady-state ceiling, so it cannot be compared
+against the published per-minute limits of Google Cloud TTS or Gemini AI Studio. Treat 8 to 12 workers as a
+starting point, watch for 429s under your own sustained load, and keep exponential backoff
+regardless: an unpublished ceiling is not an absent one. See `go-client.md` for the tuning detail.
 
 ## Pricing
 

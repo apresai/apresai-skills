@@ -39,7 +39,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
@@ -51,8 +50,8 @@ const ttsEndpoint = "https://api.x.ai/v1/tts"
 const maxTTSChars = 15000
 
 // bracketTag matches speech-tag-shaped tokens. Bracketed text is never silently
-// ignored: at N=6 per condition, every bracketed form measurably lengthened the
-// output versus baseline, including a nonsense token. What the model vocalizes for
+// ignored: at N=6 per condition, every bracketed form lengthened the mean output
+// versus baseline, including a nonsense token. What the model vocalizes for
 // an unrecognized tag is unverified, so do not pass one through. [live]
 var bracketTag = regexp.MustCompile(`\[[^\]]*\]`)
 
