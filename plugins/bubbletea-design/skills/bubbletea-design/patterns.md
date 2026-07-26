@@ -1,4 +1,4 @@
-# Patterns — TUI recipes
+# Patterns: TUI recipes
 
 Concrete, copy-pasteable patterns for the layouts that show up in 90% of TUIs. Each recipe ships with: the user-facing shape, the model struct, the Update routing, and the styling notes. Adapt these instead of inventing from scratch.
 
@@ -196,7 +196,7 @@ var slashCatalog = []slashCmd{
     {"/help",   "list slash commands",                          false},
     {"/clear",  "drop conversation history",                    false},
     {"/exit",   "exit",                                         false},
-    {"/model",  "switch chat model — no arg lists models",      true},
+    {"/model",  "switch chat model: no arg lists models",       true},
     {"/search", "multi-agent web search",                       true},
     {"/image",  "generate an image",                            true},
     {"/status", "reprint the footer line",                      false},
@@ -312,14 +312,14 @@ Render in `View()` between viewport and input. Add `palHeight()` to relayout mat
 ### Design notes
 
 - Put a **harmless first entry** in the catalog (e.g. `/help`). When the user types `/` + Enter without navigating, that's what runs. Destructive defaults are an easy footgun otherwise.
-- **Prefix-match, not fuzzy** for command palettes — predictability beats power here.
+- **Prefix-match, not fuzzy** for command palettes: predictability beats power here.
 - **Tab completes; Enter runs**. Tab is "fill into input"; Enter is "go".
 
 ---
 
 ## Pattern 3: Modal picker (model/file/option selection)
 
-Different from the slash palette — opens in response to a command, takes over the screen until dismissed.
+Different from the slash palette: opens in response to a command, takes over the screen until dismissed.
 
 ```go
 type modelPicker struct {
@@ -344,7 +344,7 @@ func (p *modelPicker) recompute() {
 
 ### Routing
 
-The picker is **modal** — it captures every key while open. Insert this BEFORE the regular palette/textarea routing:
+The picker is **modal**: it captures every key while open. Insert this BEFORE the regular palette/textarea routing:
 
 ```go
 if m.modelPicker.open {
@@ -568,7 +568,7 @@ if err := form.Run(); err != nil {
 
 **Branching**: `huh.NewGroup(...).WithCondition(func() bool { return deploy })` makes a group appear only if the prior selection met the condition.
 
-To embed in a Bubble Tea app instead of running standalone, treat the form like any other component — it has `Update` and `View`:
+To embed in a Bubble Tea app instead of running standalone, treat the form like any other component: it has `Update` and `View`:
 
 ```go
 type model struct {
@@ -672,7 +672,7 @@ func (m model) View() tea.View {
 }
 ```
 
-For more sophisticated easing, see `charm.land/harmonica` — spring physics for smooth interpolation.
+For more sophisticated easing, see `charm.land/harmonica` (spring physics for smooth interpolation).
 
 ---
 
@@ -787,7 +787,7 @@ func (m *model) viewPrompt() string {
 }
 ```
 
-`lipgloss.Place` centers the fixed-width box regardless of terminal size — no relayout math needed per step.
+`lipgloss.Place` centers the fixed-width box regardless of terminal size. No relayout math needed per step.
 
 ### Backtrack-safe focus reset
 
@@ -803,15 +803,15 @@ func (m *model) resetFocusForStep() {
 
 ### Why this works
 
-- **Single `currentStep` int** keeps routing trivial — no nested state machines.
-- **Esc always goes back one step** — consistent, no surprise exits.
+- **Single `currentStep` int** keeps routing trivial. No nested state machines.
+- **Esc always goes back one step**: consistent, no surprise exits.
 - **`lipgloss.Place` for centering** means each step can have its own fixed width box; no global relayout.
 - **Multi-field Tab cycling** in advanced steps: see gotcha #30 for the blur-all pattern.
-- **`generationCompleteMsg`** is sent from a goroutine via `prog.Send` (see Pattern 1's streaming idiom) — never block the event loop during generation.
+- **`generationCompleteMsg`** is sent from a goroutine via `prog.Send` (see Pattern 1's streaming idiom). Never block the event loop during generation.
 
 ---
 
-## Pattern 12: AltScreen vs inline — decision guide
+## Pattern 12: AltScreen vs inline (decision guide)
 
 | Shape | Use AltScreen | Use Inline |
 |---|---|---|
@@ -826,7 +826,7 @@ func (m *model) resetFocusForStep() {
 
 **Inline** (default when `v.AltScreen` is false): renders below the shell prompt, uses the terminal's own scrollback. Correct for short confirmations or for tools that need to print their output so it's accessible after the TUI exits.
 
-**Switching at runtime**: set `v.AltScreen` based on model state — you can enter and exit alt-screen mid-session (e.g., open a picker over the shell prompt, close it on selection, print the result inline).
+**Switching at runtime**: set `v.AltScreen` based on model state. You can enter and exit alt-screen mid-session (e.g., open a picker over the shell prompt, close it on selection, print the result inline).
 
 ```go
 func (m model) View() tea.View {
@@ -909,7 +909,7 @@ func TestModel_Golden(t *testing.T) {
 
 Golden files are stored in `testdata/` next to your `_test.go` file. Regenerate with `go test ./... -update`.
 
-**CI gotcha**: golden files contain ANSI escape sequences that vary by color profile. Either generate them in CI (not locally) or force a fixed profile — see gotcha #32.
+**CI gotcha**: golden files contain ANSI escape sequences that vary by color profile. Either generate them in CI (not locally) or force a fixed profile; see gotcha #32.
 
 ### WaitFor: poll until output matches
 
@@ -925,13 +925,13 @@ teatest.WaitFor(
 )
 ```
 
-Use `WaitFor` whenever your model has async operations (streaming, generation) — don't sleep.
+Use `WaitFor` whenever your model has async operations (streaming, generation). Don't sleep.
 
 ---
 
 ## See also
 
-- `architecture.md` — the runtime model that makes these patterns work
-- `components.md` — every bubble used here
-- `gotchas.md` — what'll break if you forget a v2 import path or msg type
-- `design.md` — the why behind the visual choices (color, spacing, alignment)
+- `architecture.md`: the runtime model that makes these patterns work
+- `components.md`: every bubble used here
+- `gotchas.md`: what'll break if you forget a v2 import path or msg type
+- `design.md`: the why behind the visual choices (color, spacing, alignment)

@@ -34,7 +34,7 @@ Also check for `deploy-infra:` as a fallback if `deploy:` is not found.
 Look for `ASC_KEY_ID` and `ASC_ISSUER_ID` in the project's `.env` file (gitignored), then verify the Makefile picks them up:
 
 ```bash
-# Check .env for key vars (this is the correct source — not Makefile hardcodes)
+# Check .env for key vars (this is the correct source, not Makefile hardcodes)
 grep -E "^ASC_KEY_ID|^ASC_ISSUER_ID" .env 2>/dev/null
 
 # Check Makefile reads .env and constructs the path
@@ -42,11 +42,11 @@ grep -E "ASC_KEY_PATH|include .env|-include .env" Makefile 2>/dev/null
 ```
 
 **Required variables** (from `.env`, never hardcoded in the Makefile):
-- `ASC_KEY_ID` — API key ID (e.g., `WT7YRT8J32`)
-- `ASC_ISSUER_ID` — Issuer ID (e.g., `69a6de8d-e64d-47e3-e053-5b8c7c11a4d1`)
-- `ASC_KEY_PATH` — Constructed by the Makefile as `$(HOME)/dev/certs/api-keys/AuthKey_$(ASC_KEY_ID).p8` or `$(HOME)/private_keys/AuthKey_$(ASC_KEY_ID).p8`
+- `ASC_KEY_ID`: API key ID (e.g., `WT7YRT8J32`)
+- `ASC_ISSUER_ID`: Issuer ID (e.g., `69a6de8d-e64d-47e3-e053-5b8c7c11a4d1`)
+- `ASC_KEY_PATH`: Constructed by the Makefile as `$(HOME)/dev/certs/api-keys/AuthKey_$(ASC_KEY_ID).p8` or `$(HOME)/private_keys/AuthKey_$(ASC_KEY_ID).p8`
 
-**Which key to use**: Key `WT7YRT8J32` has cloud signing enabled and is the correct key for uploads, archiving, and TestFlight. Key `62T8FXA8J7` is for API queries only — it cannot upload. If `.env` is missing or sets a different key ID, the upload will fail. Clipz is the reference implementation for this pattern.
+**Which key to use**: Key `WT7YRT8J32` has cloud signing enabled and is the correct key for uploads, archiving, and TestFlight. Key `62T8FXA8J7` is for API queries only. It cannot upload. If `.env` is missing or sets a different key ID, the upload will fail. Clipz is the reference implementation for this pattern.
 
 The API key must have at least the **App Manager** role in App Store Connect. Developer-only keys fail at the upload or cloud-signing step with a permissions error. Verify under App Store Connect → Users and Access → Keys.
 
@@ -135,7 +135,7 @@ increment-build:
     echo "Build: $$OLD -> $$NEW"
 ```
 
-**Never guess the build number.** Always read `BUILD_NUMBER` (the file on disk) before releasing. ASC rejects builds with duplicate build numbers — if a previous upload succeeded but the commit was lost, the file and ASC are out of sync. Check ASC first with `make appstore-status` or the API before incrementing.
+**Never guess the build number.** Always read `BUILD_NUMBER` (the file on disk) before releasing. ASC rejects builds with duplicate build numbers: if a previous upload succeeded but the commit was lost, the file and ASC are out of sync. Check ASC first with `make appstore-status` or the API before incrementing.
 
 **Version number bump** (`MARKETING_VERSION`) is a separate operation from build number increment. Projects use `make bump-patch`, `make bump-minor`, or `make bump-major` to update `project.yml`, then `xcodegen generate` to sync to `.xcodeproj`. Both changes must be committed before archiving.
 
@@ -158,7 +158,7 @@ grep -E "ERROR|errors returned by the App Store" /tmp/upload_output.txt
 
 With Xcode 26, `altool` may exit 0 even when the upload silently failed (fastlane issue #29743). Do not rely on the exit code alone. If the success strings are absent, or if any error strings appear, treat the upload as failed.
 
-Note: `xcrun altool --upload-app` (and its newer form `--upload-package`) is the correct tool for App Store and TestFlight uploads — it is not deprecated for this use. Only `altool --notarize-app` was retired (per Apple TN3147, November 2023); App Store uploads via altool remain supported.
+Note: `xcrun altool --upload-app` (and its newer form `--upload-package`) is the correct tool for App Store and TestFlight uploads. It is not deprecated for this use. Only `altool --notarize-app` was retired (per Apple TN3147, November 2023); App Store uploads via altool remain supported.
 
 ```bash
 make info
@@ -224,7 +224,7 @@ Once the build is VALID:
 
 ## Step 8: Submit for App Review
 
-Use the `reviewSubmissions` API (the legacy `appStoreVersionSubmissions` endpoint has been removed from Apple's documentation with no announced sunset date — do not use it):
+Use the `reviewSubmissions` API (the legacy `appStoreVersionSubmissions` endpoint has been removed from Apple's documentation with no announced sunset date; do not use it):
 
 1. **Create review submission:**
    ```
@@ -275,7 +275,7 @@ After completion, summarize:
 - **Build upload fails**: Check compilation errors, verify provisioning profile, ensure API key file exists. Run `make clean` and retry.
 - **403 on submission**: The `appStoreVersionSubmissions` endpoint has been removed. Use the `reviewSubmissions` three-step flow described in Step 8.
 - **409 "not in valid state"**: The version is missing required metadata (usually "What's New"). Ensure Step 7.2 completed successfully.
-- **Build not VALID**: Wait longer — Apple's processing can take up to 30 minutes for large binaries.
+- **Build not VALID**: Wait longer. Apple's processing can take up to 30 minutes for large binaries.
 - **Wrong key used**: If upload fails with a cloud signing or permissions error, confirm `.env` sets `ASC_KEY_ID=WT7YRT8J32` (not `62T8FXA8J7`). The latter has no cloud signing permission.
 - **Provisioning profile expired**: Run `make renew-profile` (eleven9s pattern) or `make renew-all-profiles` for multi-extension apps. Profiles expire annually; check expiry with `make info` before each release.
 - **Build number conflict**: If ASC already has the build number you're about to upload, it will reject with "CFBundleVersion already exists." Check ASC first, then manually increment `BUILD_NUMBER` to one above the highest build in ASC.

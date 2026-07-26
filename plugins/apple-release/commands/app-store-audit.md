@@ -1,18 +1,18 @@
 ---
 name: app-store-audit
-description: Pre-submission audit of an iOS/macOS Xcode project against the Apple App Store Review Guidelines. Use before submitting to App Review (or as a sanity check during development) to surface guideline violations and rejection risks. Detects empty/missing usage descriptions, Privacy Manifest gaps, tracking-SDK declaration mismatches, IAP avoidance, web-view-only apps, App Transport Security exceptions, placeholder metadata, and more. When App Store Connect access is available (an ASC API key) it also audits the live METADATA that ships alongside the binary — screenshots (incl. the no-prices/2.3.7 rule), Support/Privacy URLs, subscription localizations (MISSING_METADATA), the attached build, listing copy, and privacy labels. Reports findings rated CRITICAL / HIGH / MEDIUM / LOW with the exact guideline ID and quoted rule text.
+description: Pre-submission audit of an iOS/macOS Xcode project against the Apple App Store Review Guidelines. Use before submitting to App Review (or as a sanity check during development) to surface guideline violations and rejection risks. Detects empty/missing usage descriptions, Privacy Manifest gaps, tracking-SDK declaration mismatches, IAP avoidance, web-view-only apps, App Transport Security exceptions, placeholder metadata, and more. When App Store Connect access is available (an ASC API key) it also audits the live METADATA that ships alongside the binary: screenshots (incl. the no-prices/2.3.7 rule), Support/Privacy URLs, subscription localizations (MISSING_METADATA), the attached build, listing copy, and privacy labels. Reports findings rated CRITICAL / HIGH / MEDIUM / LOW with the exact guideline ID and quoted rule text.
 ---
 
-# App Store Audit — Pre-submission Risk Assessment
+# App Store Audit: Pre-submission Risk Assessment
 
-Audits an iOS / macOS / visionOS / watchOS Xcode project against the full App Store Review Guidelines (`resources/app-store-review-guidelines.md`). Read-only — never edits source.
+Audits an iOS / macOS / visionOS / watchOS Xcode project against the full App Store Review Guidelines (`resources/app-store-review-guidelines.md`). Read-only: never edits source.
 
 The output is a severity-rated report. CRITICAL findings will almost certainly cause rejection. HIGH findings are very likely to be flagged by App Review. MEDIUM are common ask-backs. LOW are best practices.
 
 ## Pre-flight
 
 1. **Confirm the guidelines asset is current.**
-   - Read the metadata header of `<skill_root>/resources/app-store-review-guidelines.md` (line 1-12) — it has the `Fetched:` date.
+   - Read the metadata header of `<skill_root>/resources/app-store-review-guidelines.md` (line 1-12). It has the `Fetched:` date.
    - If the fetch date is **older than 90 days**, tell the user:
      > "The App Store Review Guidelines on file were fetched on `<date>` (`<N>` days ago). Apple updates these without warning, often around WWDC. Want me to refresh before auditing? (y/n)"
    - If they say yes, run the refresh sequence below before continuing.
@@ -21,20 +21,20 @@ The output is a severity-rated report. CRITICAL findings will almost certainly c
    - If the user provided a path, use it.
    - Otherwise, look in the current working directory for `*.xcodeproj`, `*.xcworkspace`, or `Package.swift`. If there are multiple, ask which one to audit.
    - Extract: bundle ID (from `project.pbxproj` `PRODUCT_BUNDLE_IDENTIFIER`), product name, deployment target (`IPHONEOS_DEPLOYMENT_TARGET` / `MACOSX_DEPLOYMENT_TARGET`), supported platforms.
-   - If `project.yml` (XcodeGen) exists, prefer reading that — it's more parseable than `project.pbxproj`.
+   - If `project.yml` (XcodeGen) exists, prefer reading that: it's more parseable than `project.pbxproj`.
 
 3. **Announce the target** to the user in one line, e.g.:
-   - `App Store Audit — auditing ios/ForTheWin.xcodeproj (bundle ID com.apresai.forthewin, iOS 17.0+)`
+   - `App Store Audit: auditing ios/ForTheWin.xcodeproj (bundle ID com.apresai.forthewin, iOS 17.0+)`
 
 ## Audit passes
 
-Run the passes below in order. Each is independent — failures in one don't block the others. If a pass finds nothing, report "<Pass name>: Clean."
+Run the passes below in order. Each is independent. Failures in one don't block the others. If a pass finds nothing, report "<Pass name>: Clean."
 
-### Pass A — Info.plist usage descriptions (Guideline 5.1.1)
+### Pass A: Info.plist usage descriptions (Guideline 5.1.1)
 
 **Rule (quoted from 5.1.1):** "Apps that collect data using these technologies must clearly disclose their use, provide users with control over the data, and obtain user consent for the collection."
 
-1. Find the Info.plist (or the project's `INFOPLIST_FILE` / merged values from build settings). Be aware that some projects use `GENERATE_INFOPLIST_FILE = YES` and define keys in build settings instead — check both.
+1. Find the Info.plist (or the project's `INFOPLIST_FILE` / merged values from build settings). Be aware that some projects use `GENERATE_INFOPLIST_FILE = YES` and define keys in build settings instead: check both.
 2. Check every key matching `NS*UsageDescription` and `NSPrivacyAccessedAPITypes`:
    - `NSCameraUsageDescription`
    - `NSPhotoLibraryUsageDescription` / `NSPhotoLibraryAddUsageDescription`
@@ -58,14 +58,14 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - is missing but the entitlements / capability / framework is used (e.g., `import HealthKit` but no `NSHealthShareUsageDescription`)
    - exists but is empty (`<string></string>`)
    - contains placeholder text ("TODO", "Fill in", "App uses your X", "We need access to X")
-   - is < 20 characters (too short — Apple wants a real explanation)
-4. **Flag HIGH** for usage descriptions that are present but vague — generic strings like "We need your camera" without explaining why or what for.
+   - is < 20 characters (too short, Apple wants a real explanation)
+4. **Flag HIGH** for usage descriptions that are present but vague: generic strings like "We need your camera" without explaining why or what for.
 5. Cross-reference each declared usage description against actual API usage:
    - Grep the project for `AVCaptureDevice`, `PHPhotoLibrary`, `CLLocationManager`, `HKHealthStore`, `LAContext`, etc.
    - If the framework is used but the usage description is missing → CRITICAL.
    - If the usage description is declared but the framework is NOT used → MEDIUM (unused permission claim; remove it).
 
-### Pass B — Privacy Manifest (Guideline 5.1.1)
+### Pass B: Privacy Manifest (Guideline 5.1.1)
 
 **Rule (quoted from 5.1.1.v):** "Apps must include a privacy manifest file (PrivacyInfo.xcprivacy) that records the types of data collected, the required reason API categories used, and any tracking domains the app or any included third-party SDKs use."
 
@@ -77,13 +77,13 @@ Run the passes below in order. Each is independent — failures in one don't blo
      - Disk space (`URLResourceKey.volumeAvailableCapacityKey`, `attributesOfFileSystem`)
      - Active keyboard (`UITextInputMode.activeInputModes`)
      - User defaults (`UserDefaults` not via App Group)
-   - Flag HIGH otherwise — even apps that don't use these APIs need the manifest as of Spring 2024 enforcement.
+   - Flag HIGH otherwise: even apps that don't use these APIs need the manifest as of Spring 2024 enforcement.
 3. If **present**, validate structure:
    - Must have `NSPrivacyTracking`, `NSPrivacyTrackingDomains`, `NSPrivacyCollectedDataTypes`, `NSPrivacyAccessedAPITypes` keys.
    - If `NSPrivacyTracking = true` but `NSPrivacyTrackingDomains` is empty → CRITICAL.
    - If app uses any Required Reason API (per grep above) but `NSPrivacyAccessedAPITypes` doesn't declare it → CRITICAL.
 
-### Pass C — Third-party SDK Privacy declarations (Guideline 5.1.2)
+### Pass C: Third-party SDK Privacy declarations (Guideline 5.1.2)
 
 **Rule (quoted from 5.1.2):** "Apps that include third-party SDKs must use them in compliance with their terms and include their privacy disclosures in your own privacy nutrition labels."
 
@@ -92,7 +92,7 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - CocoaPods: `Podfile`, `Podfile.lock`
    - Carthage: `Cartfile`, `Cartfile.resolved`
 2. For each declared dependency, check against known tracking/analytics SDK list:
-   - **Tracking SDKs** (Apple's list — these MUST be declared in `NSPrivacyTracking`): Adjust, AppsFlyer, Branch, Singular, Kochava, Tenjin, Mixpanel, Amplitude, Sentry, Segment, mParticle
+   - **Tracking SDKs** (Apple's list, these MUST be declared in `NSPrivacyTracking`): Adjust, AppsFlyer, Branch, Singular, Kochava, Tenjin, Mixpanel, Amplitude, Sentry, Segment, mParticle
    - **Analytics SDKs**: Firebase Analytics, Google Analytics, Mixpanel, Amplitude, Heap, PostHog
    - **Ad SDKs**: Google AdMob, Meta Audience Network, AppLovin, Unity Ads, IronSource, AdColony
    - **Crash reporting**: Crashlytics (Firebase), Sentry, Bugsnag, Datadog RUM
@@ -101,11 +101,11 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - If it's an analytics/ad/crash SDK and PrivacyInfo.xcprivacy doesn't include a corresponding `NSPrivacyCollectedDataType` entry → HIGH.
    - If the SDK's own `PrivacyInfo.xcprivacy` (bundled with the SDK) wasn't merged into the app's manifest → MEDIUM (Xcode usually merges automatically but worth flagging).
 
-### Pass D — In-App Purchase enforcement (Guideline 3.1.1)
+### Pass D: In-App Purchase enforcement (Guideline 3.1.1)
 
 **Rule (quoted from 3.1.1):** "If you want to unlock features or functionality within your app, (by way of example: subscriptions, in-game currencies, game levels, access to premium content, or unlocking a full version), you must use in-app purchase."
 
-1. Grep the project for non-Apple payment SDKs in code (NOT in dependencies — those alone aren't conclusive):
+1. Grep the project for non-Apple payment SDKs in code (NOT in dependencies, those alone aren't conclusive):
    - `Stripe`, `StripePaymentSheet`
    - `PayPal`, `PayPalCheckout`
    - `Square`, `SquarePOS`
@@ -120,14 +120,14 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - Look for `import StoreKit` and `Product.products(for:)` / `Transaction.currentEntitlements`
    - If the app sells digital goods but doesn't use StoreKit → CRITICAL.
 
-### Pass E — Web-view-only app detection (Guideline 4.2)
+### Pass E: Web-view-only app detection (Guideline 4.2)
 
 **Rule (quoted from 4.2):** "Your app should include features, content, and UI that elevate it beyond a repackaged website."
 
 1. Grep all `.swift` and `.m`/`.mm` files for view types: `WKWebView`, `UIWebView` (deprecated), `WebKit`, `SFSafariViewController`.
 2. Grep for actual native UI: `UIView`, `UIViewController`, `SwiftUI.View`, `NSWindow`.
 3. Calculate the ratio. If the root content view is a `WKWebView` and there's no substantial native UI:
-   - Flag HIGH — "App appears to be a repackaged website. App Review requires meaningful native functionality (4.2)."
+   - Flag HIGH: "App appears to be a repackaged website. App Review requires meaningful native functionality (4.2)."
 4. Look for "web-app-like" red flags:
    - `URLRequest` to a single domain throughout the app
    - No native settings screen
@@ -135,7 +135,7 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - No platform-specific features (push notifications, share extension, widgets, etc.)
 5. Whitelist: if the app provides a native shell over the web view AND also has native components (settings, share extension, widgets, native push handling), reduce to MEDIUM or LOW.
 
-### Pass F — App Transport Security (Guideline 5.1.6 / Data Security)
+### Pass F: App Transport Security (Guideline 5.1.6 / Data Security)
 
 **Rule (quoted from 5.1.6):** "Apps should implement appropriate security measures to ensure proper handling of user information collected pursuant to the Apple Developer Program License Agreement and these Guidelines."
 
@@ -145,7 +145,7 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - `NSAllowsArbitraryLoadsInWebContent = true` → HIGH (must justify in App Review notes).
    - Per-domain `NSExceptionAllowsInsecureHTTPLoads = true` → MEDIUM (review will ask why; needs justification).
 
-### Pass G — Metadata sanity (Guideline 2.3)
+### Pass G: Metadata sanity (Guideline 2.3)
 
 **Rule (quoted from 2.3.1):** "Don't include any hidden, dormant, or undocumented features in your app; your app's functionality should be clear to end-users and App Review."
 
@@ -158,7 +158,7 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - `LSApplicationCategoryType` empty or set to dev default
 2. Flag MEDIUM for any of the above.
 
-### Pass H — User-Generated Content moderation (Guideline 1.2)
+### Pass H: User-Generated Content moderation (Guideline 1.2)
 
 **Rule (quoted from 1.2):** "Apps with user-generated content present particular challenges... Apps with UGC or social networking services must include: a method for filtering objectionable material; a mechanism to report offensive content and timely responses to concerns; the ability to block abusive users from the service; published contact information so users can easily reach you."
 
@@ -173,7 +173,7 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - **Contact**: developer contact in the app (Settings screen, Privacy section)
 3. For each missing feature: flag HIGH.
 
-### Pass I — VPN / Network Extension (Guideline 5.4)
+### Pass I: VPN / Network Extension (Guideline 5.4)
 
 **Rule (quoted from 5.4):** "Apps offering VPN services must utilize the NEVPNManager API and may only be offered by developers enrolled as an organization."
 
@@ -183,66 +183,66 @@ Run the passes below in order. Each is independent — failures in one don't blo
    - Confirm code uses `NEVPNManager` (not a third-party VPN library) → flag MEDIUM if third-party only.
    - Confirm a privacy policy URL is set.
 
-### Pass J — Subscription terms (Guideline 3.1.2)
+### Pass J: Subscription terms (Guideline 3.1.2)
 
 **Rule (quoted from 3.1.2):** "Subscriptions must work on all of the user's devices where the app is available."
 
 Only run if the app uses subscriptions (StoreKit `Product.SubscriptionInfo` references detected):
 1. Confirm subscription terms link in the app (look for URLs to `https://www.apple.com/legal/internet-services/itunes/dev/stdeula/` or custom EULA, plus a Privacy Policy URL).
-2. Required disclosures on the purchase screen (this is hard to detect statically — flag as MEDIUM "needs human review").
+2. Required disclosures on the purchase screen (this is hard to detect statically, flag as MEDIUM "needs human review").
 
-### Pass K — Common rejection causes (catch-all)
+### Pass K: Common rejection causes (catch-all)
 
 Quick checks for things that frequently trip up submissions:
-1. **Demo account credentials in App Review notes** — can't detect from code, but include as a reminder if the app has a login.
-2. **Crash on launch** — can't run the app, but check `Info.plist` for `UIApplicationSceneManifest` consistency and required device capabilities.
-3. **Background modes** — check `UIBackgroundModes` entries. Each must be justified by actual code usage. (e.g., `audio` requires playing audio in background; `location` requires `CLLocationManager.allowsBackgroundLocationUpdates = true`).
-4. **Push notifications without entitlement** — if the app calls `UNUserNotificationCenter.current().requestAuthorization` but the entitlements file lacks `aps-environment`, flag CRITICAL.
-5. **HealthKit** — if `HealthKit.framework` is linked or `import HealthKit` appears, verify both usage description AND `com.apple.developer.healthkit` entitlement.
+1. **Demo account credentials in App Review notes**: can't detect from code, but include as a reminder if the app has a login.
+2. **Crash on launch**: can't run the app, but check `Info.plist` for `UIApplicationSceneManifest` consistency and required device capabilities.
+3. **Background modes**: check `UIBackgroundModes` entries. Each must be justified by actual code usage. (e.g., `audio` requires playing audio in background; `location` requires `CLLocationManager.allowsBackgroundLocationUpdates = true`).
+4. **Push notifications without entitlement**: if the app calls `UNUserNotificationCenter.current().requestAuthorization` but the entitlements file lacks `aps-environment`, flag CRITICAL.
+5. **HealthKit**: if `HealthKit.framework` is linked or `import HealthKit` appears, verify both usage description AND `com.apple.developer.healthkit` entitlement.
 
 ## App Store Connect metadata passes (Pass L–Q)
 
-Passes A–K audit the **Xcode project + binary**. But a large share of rejections come from the **App Store Connect metadata** that ships *alongside* the build — screenshots, listing URLs, subscription localizations, the attached build, listing copy, and the privacy questionnaire. None of that lives in the project; it lives in ASC and must be checked there. Skipping it is the audit's biggest blind spot.
+Passes A–K audit the **Xcode project + binary**. But a large share of rejections come from the **App Store Connect metadata** that ships *alongside* the build: screenshots, listing URLs, subscription localizations, the attached build, listing copy, and the privacy questionnaire. None of that lives in the project; it lives in ASC and must be checked there. Skipping it is the audit's biggest blind spot.
 
 **Access.** These passes need App Store Connect data. Use one of:
-- An **App Store Connect API key** (Issuer ID + key ID + `.p8`) against the ASC REST API (`https://api.appstoreconnect.apple.com`). Many projects keep a tiny helper that signs an ES256 JWT and does `GET/POST/PATCH` — detect one: `grep -rilE "appstoreconnect|asc-tool|AuthKey_.*\.p8" cmd/ scripts/ tools/ Makefile 2>/dev/null`. Reads are always safe; **before any write (PATCH/POST to production metadata) confirm with the user.**
-- The **ASC UI** — if there's no API access, run each pass below as a MANUAL checklist item for the operator.
+- An **App Store Connect API key** (Issuer ID + key ID + `.p8`) against the ASC REST API (`https://api.appstoreconnect.apple.com`). Many projects keep a tiny helper that signs an ES256 JWT and does `GET/POST/PATCH`. Detect one: `grep -rilE "appstoreconnect|asc-tool|AuthKey_.*\.p8" cmd/ scripts/ tools/ Makefile 2>/dev/null`. Reads are always safe; **before any write (PATCH/POST to production metadata) confirm with the user.**
+- The **ASC UI**: if there's no API access, run each pass below as a MANUAL checklist item for the operator.
 
-If no ASC access is available, mark Pass L–Q **MANUAL** and emit the checklist for the human — never skip them silently.
+If no ASC access is available, mark Pass L–Q **MANUAL** and emit the checklist for the human: never skip them silently.
 
-### Pass L — Screenshots (Guideline 2.3.3, 2.3.7)
+### Pass L: Screenshots (Guideline 2.3.3, 2.3.7)
 
 **Rule (2.3.3):** "Screenshots should show the app in use, and not merely the title art, login page, or splash screen."
 **Rule (2.3.7):** "Metadata such as app names, subtitles, screenshots, and previews should not include prices, terms, or descriptions that are not specific to the metadata type."
 
 1. At least one screenshot for every advertised device size (6.9"/6.5" iPhone; 13" iPad if iPad-enabled). CRITICAL if a required size has none.
-2. **No prices, promo/discount, or "limited time" text** in screenshots (2.3.7). A **hardcoded price** ("$0.99/mo") is the classic trap — it goes stale on any price change and is wrong in every non-USD storefront (screenshots are static per-storefront metadata; StoreKit localizes prices, a PNG can't). HIGH for a hardcoded price or promo text. For a paywall screenshot, prefer tiers/value ("Monthly" / "Annual — best value", "Subscription required") and let StoreKit render the live price — or omit it (Apple requires only 1+ screenshot, not a paywall shot).
-3. **Currency:** screenshots must reflect the CURRENT shipping UI. If the build's UI changed but screenshots predate it → MEDIUM "screenshots stale — re-capture."
+2. **No prices, promo/discount, or "limited time" text** in screenshots (2.3.7). A **hardcoded price** ("$0.99/mo") is the classic trap: it goes stale on any price change and is wrong in every non-USD storefront (screenshots are static per-storefront metadata; StoreKit localizes prices, a PNG can't). HIGH for a hardcoded price or promo text. For a paywall screenshot, prefer tiers/value ("Monthly" / "Annual, best value", "Subscription required") and let StoreKit render the live price, or omit it (Apple requires only 1+ screenshot, not a paywall shot).
+3. **Currency:** screenshots must reflect the CURRENT shipping UI. If the build's UI changed but screenshots predate it → MEDIUM "screenshots stale, re-capture."
 
-### Pass M — Listing URLs (Guideline 2.3.1, 1.5.1)
+### Pass M: Listing URLs (Guideline 2.3.1, 1.5.1)
 
-1. **Support URL** — REQUIRED; must resolve (HTTP 200), not 404: `curl -sS -o /dev/null -w '%{http_code}' <url>`. CRITICAL if missing/dead.
-2. **Privacy Policy URL** — REQUIRED for apps that collect data / use Sign in with Apple / subscriptions; must resolve. CRITICAL if missing/dead.
-3. **Marketing URL** — optional; if set must resolve, else blank. LOW.
+1. **Support URL**: REQUIRED; must resolve (HTTP 200), not 404: `curl -sS -o /dev/null -w '%{http_code}' <url>`. CRITICAL if missing/dead.
+2. **Privacy Policy URL**: REQUIRED for apps that collect data / use Sign in with Apple / subscriptions; must resolve. CRITICAL if missing/dead.
+3. **Marketing URL**: optional; if set must resolve, else blank. LOW.
 
-### Pass N — Subscription / IAP metadata (Guideline 3.1.2)
+### Pass N: Subscription / IAP metadata (Guideline 3.1.2)
 
 Only if the app has IAP/subscriptions (StoreKit detected in Pass D):
-1. Every in-app purchase / subscription is in a **submittable state — NOT `MISSING_METADATA`** (it blocks the whole submission). The classic cause: the **subscription group has no localization** (customer-facing display name) and/or a subscription lacks its localized name + review screenshot. CRITICAL for any `MISSING_METADATA` product. (Check: `GET /v1/apps/{id}/subscriptionGroups` → `…/subscriptionGroupLocalizations` (empty = the bug) and each subscription's `state`.)
-2. On-purchase disclosures exist in the paywall (price, duration, renewal, "cancel anytime") — cross-check Pass J.
+1. Every in-app purchase / subscription is in a **submittable state, NOT `MISSING_METADATA`** (it blocks the whole submission). The classic cause: the **subscription group has no localization** (customer-facing display name) and/or a subscription lacks its localized name + review screenshot. CRITICAL for any `MISSING_METADATA` product. (Check: `GET /v1/apps/{id}/subscriptionGroups` → `…/subscriptionGroupLocalizations` (empty = the bug) and each subscription's `state`.)
+2. On-purchase disclosures exist in the paywall (price, duration, renewal, "cancel anytime"): cross-check Pass J.
 
-### Pass O — Build attachment (Guideline 2.1)
+### Pass O: Build attachment (Guideline 2.1)
 
-1. The in-flight App Store version has a **build attached**, it is **VALID** (finished processing), and it is the **intended/latest** build — not a stale earlier one. HIGH if no build attached, or if the attached build is older than the binary just audited (operator forgot to re-select after a new upload). (Check: `GET /v1/appStoreVersions/{id}/build`.)
+1. The in-flight App Store version has a **build attached**, it is **VALID** (finished processing), and it is the **intended/latest** build, not a stale earlier one. HIGH if no build attached, or if the attached build is older than the binary just audited (operator forgot to re-select after a new upload). (Check: `GET /v1/appStoreVersions/{id}/build`.)
 2. Version string + build number incremented vs the last released version.
 
-### Pass P — Listing copy & review notes (Guideline 2.3.1)
+### Pass P: Listing copy & review notes (Guideline 2.3.1)
 
-1. Description / keywords / what's-new contain no placeholder ("Lorem ipsum", "TODO") and no **"coming soon"** for features not in this build — functionality must be available to App Review. HIGH for "coming soon"; MEDIUM for placeholder.
-2. Description claims match shipped features (don't describe a feature the build lacks — a frequent 2.3.1 rejection). MEDIUM "verify claims vs build."
+1. Description / keywords / what's-new contain no placeholder ("Lorem ipsum", "TODO") and no **"coming soon"** for features not in this build: functionality must be available to App Review. HIGH for "coming soon"; MEDIUM for placeholder.
+2. Description claims match shipped features (don't describe a feature the build lacks, a frequent 2.3.1 rejection). MEDIUM "verify claims vs build."
 3. **Review notes** give demo access for any login-gated app (credentials, or instructions for Sign in with Apple / passkey) and don't reference unshipped features. MEDIUM.
 
-### Pass Q — Privacy nutrition labels (Guideline 5.1.1, 5.1.2)
+### Pass Q: Privacy nutrition labels (Guideline 5.1.1, 5.1.2)
 
 1. The ASC **App Privacy** answers must match the app's actual data collection AND the `PrivacyInfo.xcprivacy` manifest (Pass B). If the manifest sets `NSPrivacyTracking = false`, ASC "Data Used to Track You" must be **None**. The public API doesn't fully expose these answers → MEDIUM "verify ASC App Privacy matches the manifest + collected data types."
 
@@ -251,34 +251,34 @@ Only if the app has IAP/subscriptions (StoreKit detected in Pass D):
 After all passes, output a single consolidated report:
 
 ```
-## App Store Audit — Report
+## App Store Audit: Report
 
 **Target**: <project name> (<bundle ID>)
 **Platform**: <iOS X.0+ / macOS X.0+>
 **Guidelines version**: fetched <date> from developer.apple.com
 
-### CRITICAL (will likely cause rejection — N findings)
+### CRITICAL (will likely cause rejection, N findings)
 - [<guideline ID>] <finding title>
   - Evidence: <file:line or code snippet>
   - Rule: "<verbatim quote from guidelines>"
   - Fix: <specific action>
 
-### HIGH (likely flagged in review — N findings)
+### HIGH (likely flagged in review, N findings)
 ...
 
-### MEDIUM (review may ask — N findings)
+### MEDIUM (review may ask, N findings)
 ...
 
-### LOW (informational — N findings)
+### LOW (informational, N findings)
 ...
 
 ### Verdict: [GO / NO-GO / NEEDS-FIXES]
 [1-2 sentence summary. NO-GO if any CRITICAL findings; NEEDS-FIXES if HIGH findings; GO otherwise.]
 ```
 
-Always quote the guideline text verbatim from `resources/app-store-review-guidelines.md` — never paraphrase, since paraphrasing loses Apple's exact language and could be misleading.
+Always quote the guideline text verbatim from `resources/app-store-review-guidelines.md`: never paraphrase, since paraphrasing loses Apple's exact language and could be misleading.
 
-## After the Report — Fix Prompt
+## After the Report: Fix Prompt
 
 If the verdict is NO-GO or NEEDS-FIXES, offer to generate a **fix prompt** for the user to kick off a planning session:
 
@@ -312,10 +312,10 @@ If `pandoc` is not installed: `brew install pandoc`.
 
 ## Rules
 
-- NEVER edit project source files — read-only.
-- NEVER suggest skipping App Review — the audit is to PASS review, not to circumvent it.
+- NEVER edit project source files: read-only.
+- NEVER suggest skipping App Review: the audit is to PASS review, not to circumvent it.
 - ALWAYS quote guideline text verbatim from the saved asset; do not paraphrase Apple's rules.
 - ALWAYS include the guideline ID (e.g., "5.1.1.ii") in findings so the user can cite it in App Review responses.
 - If the saved guidelines are older than 90 days, offer to refresh BEFORE auditing.
 - If a check is ambiguous (e.g., "does this app provide meaningful native functionality"), flag as MEDIUM with a "needs human judgment" note rather than guessing.
-- Passes A–K audit the project/binary; Passes L–Q audit App Store Connect metadata (screenshots, URLs, subscription localizations, attached build, listing copy, privacy labels). When ASC API access isn't available, run L–Q as a MANUAL checklist for the operator — surface them, never drop them silently. The audit is still one input among several; pair it with a human read of the final ASC listing and a demo-account check for the review team.
+- Passes A–K audit the project/binary; Passes L–Q audit App Store Connect metadata (screenshots, URLs, subscription localizations, attached build, listing copy, privacy labels). When ASC API access isn't available, run L–Q as a MANUAL checklist for the operator: surface them, never drop them silently. The audit is still one input among several; pair it with a human read of the final ASC listing and a demo-account check for the review team.

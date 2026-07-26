@@ -1,4 +1,4 @@
-# Styling — Lip Gloss v2
+# Styling: Lip Gloss v2
 
 Lip Gloss is to TUIs what CSS is to web. It composes immutable Style values, renders them to ANSI-styled strings, and provides layout primitives (Join, Place) that compose those rendered strings into rich layouts. This file is the working reference.
 
@@ -48,9 +48,9 @@ The renderer detects the terminal's color profile (TrueColor / 256 / 16 / NoColo
 
 | Range | Use for |
 |---|---|
-| `0–7` | Standard ANSI (respects user theme) — use these when you want theme parity |
+| `0–7` | Standard ANSI (respects user theme): use these when you want theme parity |
 | `8–15` | Bright ANSI (respects user theme) |
-| `16–231` | The 6×6×6 RGB cube — most "saturated" colors live here |
+| `16–231` | The 6×6×6 RGB cube: most "saturated" colors live here |
 | `232–255` | 24-step grayscale, dark → light |
 
 **Greys for backgrounds**: 232 (near-black), 235, 236, 237, 238, 240, 244 (medium), 250, 255 (near-white). Hex `#3a3a3a` ≈ 237; `#5a5a5a` ≈ 240. 240 reads as "chalky grey" on most dark themes; 236 reads warmer and can look brown on warm terminal palettes.
@@ -116,7 +116,7 @@ gradient := lipgloss.NewStyle().
     Padding(1, 2)
 ```
 
-Gradient borders are striking but expensive — they recompute on every render. Use sparingly (one or two per screen).
+Gradient borders are striking but expensive. They recompute on every render. Use sparingly (one or two per screen).
 
 ## Borders
 
@@ -153,7 +153,7 @@ lipgloss.NewStyle().
     BorderLeftForeground(lipgloss.Color("#FFFF00"))
 ```
 
-**Pattern — section headers**: a bottom-only border feels lighter than a full box:
+**Pattern (section headers)**: a bottom-only border feels lighter than a full box:
 
 ```go
 section := lipgloss.NewStyle().
@@ -271,7 +271,7 @@ func leftRight(width int, left, right string) string {
 }
 ```
 
-Use `lipgloss.Width` (not `len`) — it strips ANSI escapes so spacing is correct on styled strings.
+Use `lipgloss.Width` (not `len`). It strips ANSI escapes so spacing is correct on styled strings.
 
 ## Composing styles by inheritance
 
@@ -349,7 +349,7 @@ block := lipgloss.JoinVertical(lipgloss.Center, art, "", tag)
 empty := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, block)
 ```
 
-Use `chafa` (CLI tool — `brew install chafa`) to convert a PNG logo into Braille glyphs:
+Use `chafa` (CLI tool, `brew install chafa`) to convert a PNG logo into Braille glyphs:
 
 ```sh
 chafa --symbols=braille --fg-only --colors=none --size=60x16 --preprocess=on \
@@ -360,14 +360,14 @@ Paste the output as a Go raw-string constant.
 
 ## Pitfalls
 
-- **Don't measure with `len()`** on rendered styled strings. Use `lipgloss.Width(s)` — `len` counts ANSI escape bytes.
-- **Don't expect Background to fill outside Width**. If your line is shorter than the style's Width, the bg fills to the Width but no further. To fill an entire box, set Width AND let lines be shorter — lipgloss pads with the bg color automatically.
+- **Don't measure with `len()`** on rendered styled strings. Use `lipgloss.Width(s)`. `len` counts ANSI escape bytes.
+- **Don't expect Background to fill outside Width**. If your line is shorter than the style's Width, the bg fills to the Width but no further. To fill an entire box, set Width AND let lines be shorter; lipgloss pads with the bg color automatically.
 - **Don't mutate a Style and expect the original to change**. Styles are values; assignment is a copy.
 - **Don't use 24-bit hex on terminals that don't support TrueColor** without trusting the downsampler. Test in macOS Terminal.app (256-color only) and a TrueColor terminal (iTerm2, Ghostty, Kitty, Alacritty) at least.
-- **Don't put gradients on every element**. They draw the eye — use them on the one or two things that matter most.
+- **Don't put gradients on every element**. They draw the eye; use them on the one or two things that matter most.
 
 ## See also
 
-- `components.md` — every bubble has its own `Styles` struct; the lipgloss patterns here apply to all of them
-- `design.md` — when to use which color, spacing, alignment for a polished result
-- `patterns.md` — full layouts (chat, dashboard, picker) showing styling in context
+- `components.md`: every bubble has its own `Styles` struct; the lipgloss patterns here apply to all of them
+- `design.md`: when to use which color, spacing, alignment for a polished result
+- `patterns.md`: full layouts (chat, dashboard, picker) showing styling in context

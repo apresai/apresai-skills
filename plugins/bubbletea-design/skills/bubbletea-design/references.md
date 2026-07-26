@@ -1,6 +1,6 @@
-# References — upstream docs, examples, ecosystem
+# References: upstream docs, examples, ecosystem
 
-Quick lookup index. Everything here is upstream — when in doubt, the source of truth is the GitHub repo, not this skill.
+Quick lookup index. Everything here is upstream. When in doubt, the source of truth is the GitHub repo, not this skill.
 
 ## Core libraries (canonical paths)
 
@@ -48,8 +48,8 @@ Quick lookup index. Everything here is upstream — when in doubt, the source of
 | `bubbletea/examples/*` | Reference patterns for every bubble |
 | `bubbletea-app-template` | A scaffold for a real app (CI, GoReleaser, golangci-lint) |
 | `grok-chat` (this codebase) | Chat REPL + slash palette + model picker + concurrent streaming + Braille banner + filled input |
-| `gimage` (`~/dev/gimage/internal/tui/`) | Multi-step wizard (8 steps), NavigateMsg screen routing, Tab-cycled multi-component focus, lipgloss.Place centering — v1 but the patterns translate 1:1 to v2 |
-| `emailz` (`~/dev/emailz/internal/cli/tui.go`) | Minimal list+textinput config manager — canonical example of bubbles/list + textinput with view-enum routing — v1, migrate to v2 for production use |
+| `gimage` (`~/dev/gimage/internal/tui/`) | Multi-step wizard (8 steps), NavigateMsg screen routing, Tab-cycled multi-component focus, lipgloss.Place centering; v1 but the patterns translate 1:1 to v2 |
+| `emailz` (`~/dev/emailz/internal/cli/tui.go`) | Minimal list+textinput config manager: canonical example of bubbles/list + textinput with view-enum routing; v1, migrate to v2 for production use |
 | `glow` (charmbracelet/glow) | Markdown viewer; shows great use of viewport + lipgloss styles |
 | `gum` (charmbracelet/gum) | CLI prompt primitives; pairs huh patterns with shell-friendly composability |
 | `wishlist` (charmbracelet/wishlist) | SSH directory; multi-pane layout, mouse focus, BubbleZone |
@@ -63,9 +63,9 @@ Supported terminals (Kitty protocol): Ghostty, Kitty, WezTerm, foot, Alacritty (
 
 ## Image / ASCII art tooling
 
-- `chafa` — image → terminal text. `brew install chafa`. See `patterns.md` recipe for Braille banner.
-- `figlet` — ASCII text from a string. `brew install figlet`.
-- `lolcat` — gradient color wrapper for any text. `brew install lolcat`.
+- `chafa`: image → terminal text. `brew install chafa`. See `patterns.md` recipe for Braille banner.
+- `figlet`: ASCII text from a string. `brew install figlet`.
+- `lolcat`: gradient color wrapper for any text. `brew install lolcat`.
 
 ## Color references
 
@@ -79,8 +79,8 @@ For a new TUI developer landing in this skill:
 1. Skim **SKILL.md** for the big picture and the minimum-viable program.
 2. Read **architecture.md** to internalize Model / Update / View / Cmd.
 3. Read **components.md** to know what's already built.
-4. Skim **styling.md** — refer back when laying out a specific thing.
-5. Read **patterns.md** — pick the recipe closest to what you're building.
+4. Skim **styling.md**. Refer back when laying out a specific thing.
+5. Read **patterns.md**. Pick the recipe closest to what you're building.
 6. Read **gotchas.md** before your first commit.
 7. Refer to **design.md** when reviewing what you've built.
 8. Use **references.md** for upstream verification.

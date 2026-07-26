@@ -76,7 +76,7 @@ Your Xcode project needs a `Makefile` with these targets:
 All App Store Connect API keys are stored in `~/dev/certs/api-keys/` as `AuthKey_<KEY_ID>.p8`, with symlinks in `~/private_keys/`. **Never hardcode a key ID in the Makefile.** Instead, load it from `.env`:
 
 ```makefile
-# Correct pattern — read from .env, never hardcode
+# Correct pattern: read from .env, never hardcode
 -include .env
 export
 
@@ -88,8 +88,8 @@ ASC_KEY_PATH  ?= $(HOME)/dev/certs/api-keys/AuthKey_$(ASC_KEY_ID).p8
 **`.env` (gitignored) for each project:**
 ```bash
 # App Store Connect API Key
-# WT7YRT8J32 = cloud signing enabled — USE THIS for uploads
-# 62T8FXA8J7 = API queries only — cannot upload
+# WT7YRT8J32 = cloud signing enabled: USE THIS for uploads
+# 62T8FXA8J7 = API queries only: cannot upload
 ASC_KEY_ID=WT7YRT8J32
 ASC_ISSUER_ID=69a6de8d-e64d-47e3-e053-5b8c7c11a4d1
 ```
@@ -109,12 +109,12 @@ The API key must have at least the **App Manager** role in App Store Connect. De
 
 Every App Store app uses **manual signing**: the export step signs the shipped artifact with the
 shared distribution cert `KZ4VK235YL` (*Apple Distribution: Apres AI LLC*, team `CNRU7L924E`),
-referenced by a **stable provisioning-profile Name** (`"<App> App Store"`) — never by UUID, never
+referenced by a **stable provisioning-profile Name** (`"<App> App Store"`), never by UUID, never
 via Fastlane. This is what makes the artifact *provably* signed by the shared cert and keeps annual
-cert rotation a no-edit chore. (`/release-testflight` stays signing-agnostic — it reads each
+cert rotation a no-edit chore. (`/release-testflight` stays signing-agnostic: it reads each
 project's `signingStyle` rather than assuming one.)
 
-`ExportOptions.plist` — manual, generic cert, profile by Name; multi-target apps add one entry per
+`ExportOptions.plist`: manual, generic cert, profile by Name; multi-target apps add one entry per
 bundle ID (a Share extension, a Watch app, widgets):
 ```xml
 <plist version="1.0"><dict>
@@ -134,14 +134,14 @@ bundle ID (a Share extension, a Watch app, widgets):
 
 **Cert reference.** The generic `"Apple Distribution"` name is the target, valid once exactly one
 "Apple Distribution" identity exists in the keychain. While superseded identities linger, an app may
-pin its cert by SHA-1 (`CODE_SIGN_CERT_SHA1` in `.env`, e.g. eleven9s) to disambiguate — that is
+pin its cert by SHA-1 (`CODE_SIGN_CERT_SHA1` in `.env`, e.g. eleven9s) to disambiguate. That is
 correct, not a defect.
 
 **Archive style.** Archive Manual too (`CODE_SIGN_STYLE=Manual`, `DEVELOPMENT_TEAM=CNRU7L924E`,
 **no `-allowProvisioningUpdates` on the archive step**). Automatic + `-allowProvisioningUpdates`
 silently mints/modifies profiles at build time, so the embedded profile isn't declared or provable.
 
-No Fastlane / `match` anywhere — all signing is ASC-direct via `xcodebuild` (or `flutter build ipa`
+No Fastlane / `match` anywhere: all signing is ASC-direct via `xcodebuild` (or `flutter build ipa`
 for Flutter apps) + the ASC API key. See `/release-consistency` for the full model + the once-a-year
 rotation runbook.
 
@@ -153,7 +153,7 @@ All projects use a plain text `BUILD_NUMBER` file as the authoritative build cou
 ios/BUILD_NUMBER    # single integer, e.g. "60"
 ```
 
-The `increment-build` Makefile target reads the file, adds 1, writes it back, updates `project.yml`, and re-runs `xcodegen generate`. The build number is passed to `xcodebuild` via `CURRENT_PROJECT_VERSION`. **The commit of `BUILD_NUMBER` and `project.yml` happens only after a successful upload**, not before — so a failed upload doesn't burn a build number.
+The `increment-build` Makefile target reads the file, adds 1, writes it back, updates `project.yml`, and re-runs `xcodegen generate`. The build number is passed to `xcodebuild` via `CURRENT_PROJECT_VERSION`. **The commit of `BUILD_NUMBER` and `project.yml` happens only after a successful upload**, not before, so a failed upload doesn't burn a build number.
 
 ```makefile
 # Canonical pattern (eleven9s): bump after archive succeeds, commit after upload succeeds
@@ -170,7 +170,7 @@ If an upload fails mid-way: run `make reset-bump` to restore `BUILD_NUMBER` and 
 
 ## Makefile Example (iOS, manual signing)
 
-The canonical manual-signing pattern — mirrors the `/release-testflight` reference Makefile (keep the two in sync). Archive is **Manual** with a pinned cert + team and **no `-allowProvisioningUpdates`** (which would silently mint profiles at build time and defeat provability); the export step keeps the ASC API key.
+The canonical manual-signing pattern: mirrors the `/release-testflight` reference Makefile (keep the two in sync). Archive is **Manual** with a pinned cert + team and **no `-allowProvisioningUpdates`** (which would silently mint profiles at build time and defeat provability); the export step keeps the ASC API key.
 
 ```makefile
 -include .env
@@ -241,9 +241,9 @@ Note: `-exportArchive` produces the `.ipa` but does not upload it. The upload ha
 
 For full App Store submission, use the `reviewSubmissions` three-step API flow (the legacy `appStoreVersionSubmissions` endpoint is removed):
 
-1. `POST /v1/reviewSubmissions` — create submission
-2. `POST /v1/reviewSubmissionItems` — attach the version
-3. `PATCH /v1/reviewSubmissions/{ID}` with `"submitted": true` — confirm
+1. `POST /v1/reviewSubmissions`: create submission
+2. `POST /v1/reviewSubmissionItems`: attach the version
+3. `PATCH /v1/reviewSubmissions/{ID}` with `"submitted": true`: confirm
 
 See `/release` for the full flow with polling and "What's New" text.
 
@@ -260,7 +260,7 @@ Run `xcodebuild -version` before releasing and confirm you are on a supported ve
 
 `xcodebuild -exportArchive` with `destination = upload` (which internally uses altool) is the correct tool for uploading iOS and macOS App Store builds. It is **not** deprecated for this purpose.
 
-`xcrun notarytool` is for macOS **Developer ID** notarization — distributing outside the App Store. Per Apple TN3147, `altool --notarize-app` was retired in November 2023, but App Store/TestFlight uploads remain supported.
+`xcrun notarytool` is for macOS **Developer ID** notarization: distributing outside the App Store. Per Apple TN3147, `altool --notarize-app` was retired in November 2023, but App Store/TestFlight uploads remain supported.
 
 For macOS apps distributed via Sparkle (auto-update, outside App Store), use Developer ID signing + `xcrun notarytool`. This is a separate distribution path not covered by these skills.
 

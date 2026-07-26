@@ -1,6 +1,6 @@
-# Design — principles for sexy TUIs
+# Design: principles for sexy TUIs
 
-A terminal isn't a small browser. The constraints are different: monospace grid, 256-or-fewer-colors, no images (mostly), keyboard-first input, instant feedback. The TUIs that feel amazing aren't the ones that fight those constraints — they're the ones that use them as a feature.
+A terminal isn't a small browser. The constraints are different: monospace grid, 256-or-fewer-colors, no images (mostly), keyboard-first input, instant feedback. The TUIs that feel amazing aren't the ones that fight those constraints; they're the ones that use them as a feature.
 
 This file is the *why*. The other files are the *how*.
 
@@ -21,17 +21,17 @@ var (
 
 The accent does double duty as a focus indicator. When you have multiple panes, the focused one borders in the accent; the others border in `colorBorder` (a dim grey). The eye knows where to look without a second cue.
 
-When you need two accents (e.g., a warn and an error state), pick the SECOND accent from a different hue family so they're never confused. Amber (`214`) + red (`203`) work for warning + danger. Accent green + amber + red gives you three semantic states — that's the max.
+When you need two accents (e.g., a warn and an error state), pick the SECOND accent from a different hue family so they're never confused. Amber (`214`) + red (`203`) work for warning + danger. Accent green + amber + red gives you three semantic states. That's the max.
 
 ### 2. Vertical and horizontal axes, never diagonals.
 
 Terminals can't draw diagonals well. Everything aligns to either a vertical or horizontal axis. Use this. A status footer's left edge aligns with the input's left edge aligns with the viewport's left edge. The right edge of a hint aligns with the right edge of the terminal. Three visible alignment lines: left margin, center axis (for centered empty states), right margin.
 
-Lip Gloss's `JoinVertical(Left, ...)` and `JoinHorizontal(Top, ...)` are your friends. `Place` snaps content to a corner or center. Don't be cute with alignment positions like `0.7` — pick `Left`, `Center`, or `Right`.
+Lip Gloss's `JoinVertical(Left, ...)` and `JoinHorizontal(Top, ...)` are your friends. `Place` snaps content to a corner or center. Don't be cute with alignment positions like `0.7`: pick `Left`, `Center`, or `Right`.
 
 ### 3. Borders group concepts. Whitespace separates them.
 
-A rounded border around the input box says "this is the input." Bordering everything weakens the signal — borders are heavy. Box the things the user interacts with. Leave the rest open.
+A rounded border around the input box says "this is the input." Bordering everything weakens the signal: borders are heavy. Box the things the user interacts with. Leave the rest open.
 
 Whitespace is free in a terminal. A blank line between sections feels expensive on paper but is the cheapest way to slow the eye in a TUI. Don't pack content together; give it room.
 
@@ -50,7 +50,7 @@ Two rows max. Four rows is a wall of text. Every footer row should answer a ques
 - **Row 1**: where am I and what's happening? (model, context %, in-flight state)
 - **Row 2**: last-turn deltas, cost, or whatever's tracking-but-secondary
 
-Move the keybind hint to the right side of row 1 instead of its own row — that's free real estate. Replace the hint with a `⏳ working…` indicator when something's in flight; the user doesn't need the hints during a stream, they need to know it's running.
+Move the keybind hint to the right side of row 1 instead of its own row. That's free real estate. Replace the hint with a `⏳ working…` indicator when something's in flight; the user doesn't need the hints during a stream, they need to know it's running.
 
 ```
 [████░░░░░░] 23%  grok-4.3  4,521↑ 1,830↓                    ↵ send · ⇧↵ newline · /exit
@@ -59,7 +59,7 @@ last: +412↑ +180↓ $0.0040 · session $0.043
 
 ### 5. The empty state is the first impression. Don't waste it.
 
-When the user launches a fresh TUI or runs `/clear`, the viewport is empty. Default behavior is to show nothing — that's a missed opportunity. Use the space for:
+When the user launches a fresh TUI or runs `/clear`, the viewport is empty. Default behavior is to show nothing. That's a missed opportunity. Use the space for:
 
 - Centered ASCII / Braille banner of the brand mark
 - One-line tagline below it
@@ -76,7 +76,7 @@ When the user launches a fresh TUI or runs `/clear`, the viewport is empty. Defa
                        subscription chat with xAI Grok
 ```
 
-Use `chafa` to convert a logo PNG to Braille. The resulting density depends on the source — a high-contrast monochrome logo works best.
+Use `chafa` to convert a logo PNG to Braille. The resulting density depends on the source: a high-contrast monochrome logo works best.
 
 ## Color palette specifics
 
@@ -160,7 +160,7 @@ Never just freeze. A 5-second pause with no visible change is a bug.
 
 ## Mouse vs keyboard
 
-Default to keyboard-first. Bind mouse wheel to viewport scroll because it's expected, and bind mouse click to focus (in multi-pane TUIs) because it's cheap. Beyond that, don't make mouse the primary interaction — keyboard is faster and works over SSH.
+Default to keyboard-first. Bind mouse wheel to viewport scroll because it's expected, and bind mouse click to focus (in multi-pane TUIs) because it's cheap. Beyond that, don't make mouse the primary interaction; keyboard is faster and works over SSH.
 
 Document the keyboard surface in a `/help` command and (compactly) in the footer.
 
@@ -180,12 +180,12 @@ If you can describe:
 - **Multiple accent colors** competing for attention.
 - **Bordering everything** until borders mean nothing.
 - **Dense footers** that take up half the screen.
-- **No empty-state design** — just a blank viewport.
+- **No empty-state design**: just a blank viewport.
 - **Placeholder text as keybind reference** (it gets in the way of typing).
 - **Status text in plain default color** that's indistinguishable from the body.
 - **Truecolor hex on terminals that don't support it** without trusting the downsampler.
-- **Centered alignment for paragraphs** — bad in TUIs. Left-align body text; center only short titles and banners.
-- **Animations that don't add information** — spinners belong on operations, not on idle UI.
+- **Centered alignment for paragraphs**: bad in TUIs. Left-align body text; center only short titles and banners.
+- **Animations that don't add information**: spinners belong on operations, not on idle UI.
 - **The cursor moving for no reason** between renders. Lock it where you want it.
 
 ## A worked example: grok-chat's final design
@@ -195,9 +195,9 @@ The grok-chat TUI uses every principle here:
 - **One accent** (color 82, cyan-green) for the brand mark, the input's left-edge bar, the working indicator, and the slash-palette selection marker.
 - **Bordered input** (rounded border, padding 0,1) with a filled grey background. Single focal point.
 - **Two-row footer**: row 1 has the status bar (left) and hint/working indicator (right); row 2 has last-turn deltas. Free real estate; nothing wasted.
-- **Empty-state banner** — Braille rendering of the xAI Grok mark, centered in the viewport, with a single-line tagline below.
+- **Empty-state banner**: Braille rendering of the xAI Grok mark, centered in the viewport, with a single-line tagline below.
 - **Slash palette** with `/help` as the first entry (harmless default).
-- **Live streaming** for /search and /image — every persona event scrolls in live; the user sees motion within a second of submitting.
+- **Live streaming** for /search and /image: every persona event scrolls in live; the user sees motion within a second of submitting.
 - **Working indicator** in the footer when `inflight > 0`, showing a count if multiple are in flight.
 - **Mouse wheel** scrolls the viewport. Ctrl+U scrolls a half-page up. Ctrl+C and `/exit` both quit.
 
@@ -205,5 +205,5 @@ None of these are decorative. Each one answers a specific UX question. That's th
 
 ## See also
 
-- `styling.md` — how to actually achieve these looks in Lip Gloss
-- `patterns.md` — the layouts that bring these principles together
+- `styling.md`: how to actually achieve these looks in Lip Gloss
+- `patterns.md`: the layouts that bring these principles together

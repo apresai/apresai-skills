@@ -9,7 +9,7 @@ In 2026, the canonical web image pipeline is: **AVIF primary, WebP fallback, JPE
 
 - **AVIF**: ~95% global browser support (caniuse.com, May 2026). 20-50% smaller than WebP at equivalent quality. Lighthouse's preferred next-gen format.
 - **WebP**: ~96% global support. Right choice for the fallback tier and for batch UI/screenshot work where AVIF's encode overhead doesn't pay off.
-- **JPEG XL**: Chrome 145 (Feb 2026) ships jxl-rs decoder but it's off by default; Firefox 152 (Jun 2026) also behind a flag; Safari supports it natively since Safari 17 but no animation. Roughly 12-17% global support concentrated in Safari. Not yet production-viable — revisit H2 2026 if Chrome enables by default.
+- **JPEG XL**: Chrome 145 (Feb 2026) ships jxl-rs decoder but it's off by default; Firefox 152 (Jun 2026) also behind a flag; Safari supports it natively since Safari 17 but no animation. Roughly 12-17% global support concentrated in Safari. Not yet production-viable: revisit H2 2026 if Chrome enables by default.
 - **libwebp2**: Experimental playground, no release plan. Do not use.
 
 Install: `brew install libavif libwebp`
@@ -50,7 +50,7 @@ For responsive sizes with `srcset` + `sizes`:
 </picture>
 ```
 
-Rule of thumb for `sizes`: describe how wide the image actually renders at each viewport breakpoint — the browser uses this to pick the right `srcset` descriptor before layout runs. Always provide `width` + `height` on the `<img>` to prevent layout shift.
+Rule of thumb for `sizes`: describe how wide the image actually renders at each viewport breakpoint. The browser uses this to pick the right `srcset` descriptor before layout runs. Always provide `width` + `height` on the `<img>` to prevent layout shift.
 
 ---
 
@@ -82,7 +82,7 @@ export default nextConfig;
 
 Notes:
 - AVIF compresses ~20% smaller than WebP but encodes ~50% slower on first request. Acceptable for CDN-cached assets; heavy for uncached pages with many images.
-- With a custom `loaderFile` (as in the sophie project), Next.js optimization is bypassed entirely — serve pre-encoded AVIF/WebP from the CDN directly and use `<picture>` cascades for format negotiation instead.
+- With a custom `loaderFile` (as in the sophie project), Next.js optimization is bypassed entirely: serve pre-encoded AVIF/WebP from the CDN directly and use `<picture>` cascades for format negotiation instead.
 - `priority` is deprecated in Next.js 16+. Use `loading="eager" fetchPriority="high"` for LCP images.
 
 ---
@@ -92,7 +92,7 @@ Notes:
 | Use case | Best choice |
 |----------|-------------|
 | Web photos, hero images, LCP images | AVIF primary, WebP fallback |
-| Web UI, screenshots, dashboards | WebP (`-preset picture` / `-preset text`) — AVIF marginal gain for small images |
+| Web UI, screenshots, dashboards | WebP (`-preset picture` / `-preset text`): AVIF marginal gain for small images |
 | Line art, diagrams, icons | WebP lossless or AVIF lossless |
 | Older browser compatibility required | WebP (broader support floor) |
 | `avifenc` unavailable in the pipeline | WebP |
@@ -102,7 +102,7 @@ Notes:
 
 ---
 
-## AVIF — avifenc
+## AVIF: avifenc
 
 ### Install
 
@@ -110,7 +110,7 @@ Notes:
 brew install libavif   # provides avifenc and avifdec
 ```
 
-### Single file — recommended defaults
+### Single file: recommended defaults
 
 Per the [libavif man page (2025-04-11)](https://github.com/AOMediaCodec/libavif/blob/main/doc/avifenc.1.md), the codec default speed is **6** and the default job count is **all**. Speed 6 is the official default balance point; use it unless you have a reason to go slower.
 
@@ -170,7 +170,7 @@ avifdec input.avif output.png
 
 ---
 
-## WebP — cwebp / dwebp / webpinfo
+## WebP: cwebp / dwebp / webpinfo
 
 Requires libwebp >= 0.6.0 for `-sharp_yuv`; >= 1.6.0 for `-resize_mode`.
 
@@ -308,7 +308,7 @@ cwebp -q 85 -mt -sharp_yuv -preset photo hero.jpg -o hero.webp
 </picture>
 ```
 
-Real project pattern (podcaster portal — media card with mobile variant):
+Real project pattern (podcaster portal, media card with mobile variant):
 
 ```tsx
 // Mobile-specific WebP swap via <picture> + media query (no AVIF tier needed
@@ -328,7 +328,7 @@ Real project pattern (podcaster portal — media card with mobile variant):
 </picture>
 ```
 
-Note: none of the projects in this stack use a full AVIF + WebP `<picture>` cascade in JSX — they rely on the Next.js `<Image>` optimizer for format negotiation (except sophie, which uses a custom CDN loader that bypasses optimization and serves pre-encoded files directly).
+Note: none of the projects in this stack use a full AVIF + WebP `<picture>` cascade in JSX: they rely on the Next.js `<Image>` optimizer for format negotiation (except sophie, which uses a custom CDN loader that bypasses optimization and serves pre-encoded files directly).
 
 ---
 

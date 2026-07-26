@@ -8,7 +8,7 @@ description: Quick TestFlight upload - archive and upload app to App Store Conne
 Build, archive, and upload an app to TestFlight (skips infrastructure deployment).
 
 This skill is a **thin, project-detecting driver over a standardized `make upload` / `make info`
-interface**. It does not prescribe a signing style or a build-number policy — it reads each from the
+interface**. It does not prescribe a signing style or a build-number policy: it reads each from the
 project and delegates the mechanics to the project's Makefile. Every apresai App Store app signs
 ASC-direct (no Fastlane); the shipped artifact is signed by the shared distribution cert
 `KZ4VK235YL` (*Apple Distribution: Apres AI LLC*, team `CNRU7L924E`).
@@ -18,17 +18,17 @@ ASC-direct (no Fastlane); the shipped artifact is signed by the shared distribut
 Not every app is a TestFlight target, and the entrypoint differs per repo. Detect before doing anything.
 
 ```bash
-# Non-App-Store (Developer ID / Sparkle) — e.g. codexbar: NOT a TestFlight target.
+# Non-App-Store (Developer ID / Sparkle), e.g. codexbar: NOT a TestFlight target.
 # Signs with an upstream Developer ID identity, ships via notarize + appcast, not ASC.
 ls *.xcodeproj >/dev/null 2>&1 && grep -rql "SUFeedURL\|Sparkle" . 2>/dev/null \
   && ! ls ExportOptions*.plist ios/ExportOptions*.plist >/dev/null 2>&1 \
-  && echo "SPARKLE/Developer-ID app — STOP: use notarytool, not TestFlight"
+  && echo "SPARKLE/Developer-ID app. STOP: use notarytool, not TestFlight"
 
-# Flutter — e.g. sophie: build via the Flutter toolchain, not xcodebuild directly.
-test -f pubspec.yaml && echo "FLUTTER app — use the Flutter upload target (e.g. make mobile)"
+# Flutter, e.g. sophie: build via the Flutter toolchain, not xcodebuild directly.
+test -f pubspec.yaml && echo "FLUTTER app: use the Flutter upload target (e.g. make mobile)"
 ```
 
-- **Sparkle / Developer ID app** (no `app-store-connect` ExportOptions): **stop** — it has no
+- **Sparkle / Developer ID app** (no `app-store-connect` ExportOptions): **stop**. It has no
   TestFlight path. Route to `xcrun notarytool` + appcast, out of scope for this skill.
 - **Flutter app**: the repo wraps `flutter build ipa` + upload behind a Makefile target (e.g.
   `make mobile`). Use that target wherever the steps below say `make upload`.
@@ -43,13 +43,13 @@ if grep -qE '^(upload|ios-upload):' Makefile 2>/dev/null; then
 elif test -f ios/Makefile && grep -qE '^upload:' ios/Makefile; then
   UP="make -C ios upload"; INFO="make -C ios info"
 else
-  echo "No upload/ios-upload target found — ask the user which target builds+uploads this app."
+  echo "No upload/ios-upload target found: ask the user which target builds+uploads this app."
 fi
 echo "upload target: $UP   info target: $INFO"
 ```
 
 Use the detected `$UP` / `$INFO` in every step below. (Standardizing every repo on bare
-`make upload` / `make info` is the goal — until then, detect.)
+`make upload` / `make info` is the goal; until then, detect.)
 
 ## Step 1: Validate requirements
 
@@ -74,7 +74,7 @@ test -f "$HOME/dev/certs/api-keys/AuthKey_${KEY_ID}.p8" \
   && echo "Key file OK" || echo "Key file NOT found for $KEY_ID"
 ```
 
-### 1.2 Signing — stay agnostic; read it, don't assume it
+### 1.2 Signing: stay agnostic; read it, don't assume it
 
 Apps differ, and the export step is what signs the shipped artifact. **Do not assume a signing
 style and do not assert "no profiles needed."** Read the actual style from the project's
@@ -90,7 +90,7 @@ done
 The portfolio standard is **manual export + generic `"Apple Distribution"` + provisioning profiles
 referenced by stable Name** (e.g. `dev.apresai.myapp = "MyApp App Store"`). Multi-target apps carry
 one profile per bundle ID (e.g. a Share extension → `"<App> Share App Store"`). If a project still
-has a SHA-1-pinned cert (`CODE_SIGN_CERT_SHA1` in `.env`, e.g. eleven9s), that is valid — it
+has a SHA-1-pinned cert (`CODE_SIGN_CERT_SHA1` in `.env`, e.g. eleven9s), that is valid: it
 disambiguates among multiple keychain identities. If the project exposes `make check-signing`
 (or `make -C ios check-signing`), run it to preflight certs + profiles before archiving.
 
@@ -122,13 +122,13 @@ actual project config, never against memory of the last release.
 Run these before any archive/upload; they exist to prevent stale-build-number uploads and
 accidental churn:
 
-1. **Stale-build hygiene** — if the previous archive for this project failed or behaved oddly,
+1. **Stale-build hygiene**: if the previous archive for this project failed or behaved oddly,
    clear derived data first: `rm -rf ~/Library/Developer/Xcode/DerivedData/<project>*`. Skip when
    the last build was clean (a full rebuild costs minutes).
-2. **State what you're uploading, then proceed** — when the user has asked to push a build, name
+2. **State what you're uploading, then proceed**: when the user has asked to push a build, name
    the app, version, and build number and go (if the Makefile bumps inside the upload target, say
    so: "current build N, upload carries N+1"). Do NOT block for an explicit yes on a push the user
-   already requested, and do NOT push back on a repeat upload — deliberate, repeated TestFlight
+   already requested, and do NOT push back on a repeat upload: deliberate, repeated TestFlight
    pushes are normal in a dev cycle, and a monotonic bump-on-success pipeline already prevents
    build-number collisions. Only stop if something is actually wrong (a real blocker), not for
    ceremony. Ask first only when the user did NOT clearly ask to upload (e.g. an ambiguous "ship it"
@@ -140,10 +140,10 @@ accidental churn:
 $UP 2>&1 | tee /tmp/upload_output.txt   # e.g. make upload / make ios-upload / make mobile
 ```
 
-**The Makefile owns the mechanics** — increment + `xcodegen generate` + `xcodebuild archive` +
+**The Makefile owns the mechanics**: increment + `xcodegen generate` + `xcodebuild archive` +
 `xcodebuild -exportArchive` (signing per the project's ExportOptions) + ASC upload. It also owns the
 **build-number / commit policy**: some repos commit the bump *after* a successful upload, some bump
-before archive, some inside the upload target. Do not impose a generic bump/commit narrative — let
+before archive, some inside the upload target. Do not impose a generic bump/commit narrative: let
 each Makefile do what it does. If a repo splits into `archive-upload` + `upload-only` (or
 `archive-only` + `upload-only`), run them in sequence so a transient upload failure can retry without
 re-archiving.
@@ -158,7 +158,7 @@ grep -E "ERROR|errors returned by the App Store" /tmp/upload_output.txt
 Treat the build as uploaded only if `EXPORT SUCCEEDED` is present and no `ERROR` lines appear.
 
 **Xcode 26 altool silent-failure:** `altool` may exit 0 while the upload silently failed (fastlane
-issue #29743 — a tracked altool bug report, *not* a Fastlane dependency). Do not trust the exit code
+issue #29743, a tracked altool bug report, *not* a Fastlane dependency). Do not trust the exit code
 alone; rely on the success/error strings and confirm the build appears in App Store Connect →
 TestFlight within a few minutes.
 
@@ -176,34 +176,34 @@ TestFlight within a few minutes.
 
 ## Common failure modes
 
-**Wrong API key** — upload fails with a cloud-signing / permission error. Confirm
+**Wrong API key**: upload fails with a cloud-signing / permission error. Confirm
 `ASC_KEY_ID=WT7YRT8J32`; `62T8FXA8J7` cannot upload.
 
-**Stale `.xcodeproj`** — archive picks up an old `MARKETING_VERSION` because `xcodegen generate`
+**Stale `.xcodeproj`**: archive picks up an old `MARKETING_VERSION` because `xcodegen generate`
 wasn't run after bumping `project.yml`. Well-formed `archive` targets run `generate` first.
 
-**Build number already exists** — ASC rejects "CFBundleVersion already exists." Set `BUILD_NUMBER`
+**Build number already exists**: ASC rejects "CFBundleVersion already exists." Set `BUILD_NUMBER`
 to one above the highest build in ASC and re-run.
 
-**`EXPORT SUCCEEDED` absent, exit 0** — the Xcode 26 altool silent failure above. Check
+**`EXPORT SUCCEEDED` absent, exit 0**: the Xcode 26 altool silent failure above. Check
 `/tmp/upload_output.txt` for error strings; retry the `upload-only` half if the archive is still
 present, else re-archive + upload.
 
-**Export resolves the wrong / an expired provisioning profile** — happens when two installed
+**Export resolves the wrong / an expired provisioning profile**: happens when two installed
 profiles share the same Name (a stale cert dupe next to the current one). The rotation tooling
 (`renew-profile.sh`) self-cleans to one-profile-per-Name; if you hit this, decode
 `~/Library/MobileDevice/Provisioning Profiles/*` by `:Name` and remove the stale duplicate.
 
-**"No certificate for team" at export** — the named profile's cert isn't in the keychain, or the
+**"No certificate for team" at export**: the named profile's cert isn't in the keychain, or the
 profile expired. For projects with rotation tooling (eleven9s: `make -C ios renew-profile` /
 `renew-portfolio-profiles`), re-mint and retry. For others, re-mint the profile via the ASC API.
 
-**Extension targets missing profiles** — multi-target apps (Share, Widget, Watch) need one
+**Extension targets missing profiles**: multi-target apps (Share, Widget, Watch) need one
 provisioning profile per bundle ID, each referenced by Name in `ExportOptions.plist`.
 
 ## Reference: standard Makefile shape (manual signing, by-name profile)
 
-The portfolio standard — manual export, generic `"Apple Distribution"`, profile by stable Name:
+The portfolio standard (manual export, generic `"Apple Distribution"`, profile by stable Name):
 
 ```makefile
 -include .env
@@ -254,7 +254,7 @@ upload: archive
 	    || { echo "$$OUTPUT"; echo "Upload failed."; exit 1; }
 ```
 
-`ExportOptions.plist` (commit it — never gitignore the manual config):
+`ExportOptions.plist` (commit it, never gitignore the manual config):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -276,7 +276,7 @@ upload: archive
 ```
 
 > Annual cert rotation re-mints every named profile onto the new shared cert and self-cleans to
-> one-profile-per-Name — so this `ExportOptions.plist` never changes across rotations (the Name is
+> one-profile-per-Name, so this `ExportOptions.plist` never changes across rotations (the Name is
 > stable; only the UUID + cert underneath rotate). See `/release-consistency` for the model and the
 > rotation runbook.
 

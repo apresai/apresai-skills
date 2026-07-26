@@ -10,7 +10,7 @@ description: Deploy Next.js applications to AWS Lambda using OpenNext and CDK. U
 Deploy Next.js applications to AWS using:
 - **OpenNext**: Transforms Next.js build output for AWS Lambda
 - **CDK**: Infrastructure as Code with TypeScript
-- **Node.js 22** Lambda runtime (`NODEJS_22_X`) — required; `NODEJS_20_X` reached Lambda EOL 2026-04-30
+- **Node.js 22** Lambda runtime (`NODEJS_22_X`): required; `NODEJS_20_X` reached Lambda EOL 2026-04-30
 
 ## Choosing a Construct (Start Here)
 
@@ -22,7 +22,7 @@ Three live options for deploying Next.js on AWS CDK as of 2026:
 | `cdklabs/cdk-nextjs` (AWS Labs) | npm | 0.5 beta | Next.js 16.2+ on the public Adapter API; AWS's strategic direction; not yet stable |
 | Manual CDK | aws-cdk-lib | Always available | Full control; function splitting; custom routing logic |
 
-**Pick `cdk-nextjs-standalone`** for new projects today unless you specifically need the public Adapter API topology options from `cdklabs/cdk-nextjs`. The AWS Labs construct is still in beta (0.5.0-beta) as of May 2026 — wait for stable before using in production.
+**Pick `cdk-nextjs-standalone`** for new projects today unless you specifically need the public Adapter API topology options from `cdklabs/cdk-nextjs`. The AWS Labs construct is still in beta (0.5.0-beta) as of May 2026. Wait for stable before using in production.
 
 **Future direction**: Next.js 16.2 shipped a stable public Adapter API in March 2026. OpenNext is rebuilding on it; `cdklabs/cdk-nextjs` uses it today. Expect a v5-era OpenNext paired with a stable `cdklabs/cdk-nextjs` to become the recommendation by late 2026.
 
@@ -30,7 +30,7 @@ Three live options for deploying Next.js on AWS CDK as of 2026:
 
 ## OpenNext v3 vs v4
 
-`@opennextjs/aws` installs the latest by default — **v4.x as of May 2026**.
+`@opennextjs/aws` installs the latest by default: **v4.x as of May 2026**.
 
 - **v3.10.x**: Targets Next.js up to 15.x. SWR tag revalidation, non-200 ISR status codes, query-string preservation through i18n redirects, symlink dereferencing in `public/`. Still works; `cdk-nextjs-standalone` 4.x uses it.
 - **v4.0+ (May 2026)**: First version coordinated with the Next.js 16.2 stable Adapter API. Rebuilt internal interface; new monorepo structure with Cloudflare/AWS adapters co-developed. Required for full Next.js 16 support including Cache Components and Dynamic IO.
@@ -74,7 +74,7 @@ export default nextConfig;
 
 **Note**: The `experimental.ppr` flag and `experimental_ppr` route segment config are **removed** in Next.js 16. Do not use them.
 
-### Partial Prerendering (PPR) — Now Default
+### Partial Prerendering (PPR): Now Default
 
 PPR is default behavior under `cacheComponents: true`. No separate flag needed. Routes that mix static and dynamic content automatically benefit from shell-first streaming.
 
@@ -85,7 +85,7 @@ Turbopack is stable in Next.js 16. Use it for development to dramatically reduce
 next dev --turbopack
 ```
 
-OpenNext consumes the standard `.next` build output — Turbopack affects only the dev experience and build performance, not the Lambda artifact.
+OpenNext consumes the standard `.next` build output. Turbopack affects only the dev experience and build performance, not the Lambda artifact.
 
 ### React Compiler (Stable)
 
@@ -363,7 +363,7 @@ export class NextjsManualStack extends cdk.Stack {
       visibilityTimeout: cdk.Duration.seconds(60),
     });
 
-    // Server function — Node 22, ARM64
+    // Server function: Node 22, ARM64
     const serverFunction = new lambda.Function(this, "ServerFunction", {
       runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
@@ -390,7 +390,7 @@ export class NextjsManualStack extends cdk.Stack {
     cacheTable.grantReadWriteData(serverFunction);
     revalidationQueue.grantSendMessages(serverFunction);
 
-    // Image optimization function — Node 22, ARM64
+    // Image optimization function: Node 22, ARM64
     const imageFunction = new lambda.Function(this, "ImageFunction", {
       runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
@@ -408,7 +408,7 @@ export class NextjsManualStack extends cdk.Stack {
 
     bucket.grantRead(imageFunction);
 
-    // Revalidation function — Node 22, ARM64
+    // Revalidation function: Node 22, ARM64
     const revalidationFunction = new lambda.Function(
       this,
       "RevalidationFunction",
@@ -470,7 +470,7 @@ export class NextjsManualStack extends cdk.Stack {
           cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
       },
       additionalBehaviors: {
-        // Static assets from S3 — served directly, long TTL
+        // Static assets from S3: served directly, long TTL
         "_next/static/*": {
           origin: s3Origin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -1111,7 +1111,7 @@ const config: OpenNextConfig = {
 };
 ```
 
-**Note**: For simple request/response manipulation (header rewrites, geolocation-based redirects), CloudFront Functions are now the preferred pattern — sub-millisecond execution, and they have access to geolocation/CloudFront headers that Lambda@Edge Viewer Request lacks.
+**Note**: For simple request/response manipulation (header rewrites, geolocation-based redirects), CloudFront Functions are now the preferred pattern: sub-millisecond execution, and they have access to geolocation/CloudFront headers that Lambda@Edge Viewer Request lacks.
 
 ### Cold Starts Too Slow
 
@@ -1164,7 +1164,7 @@ If you don't need full AWS customization (VPC, fine-grained IAM, cost optimizati
 - Enable streaming for faster Time to First Byte
 - Use ARM64 architecture for Lambda (`lambda.Architecture.ARM_64`)
 - Set appropriate memory (1024-2048 MB for server function)
-- Use `NODEJS_22_X` runtime — `NODEJS_20_X` reached Lambda EOL 2026-04-30
+- Use `NODEJS_22_X` runtime: `NODEJS_20_X` reached Lambda EOL 2026-04-30
 
 ### DON'T
 
@@ -1174,8 +1174,8 @@ If you don't need full AWS customization (VPC, fine-grained IAM, cost optimizati
 - Don't skip CloudFront invalidation after on-demand revalidation
 - Don't store secrets in environment variables without encryption
 - Don't deploy without testing ISR behavior locally
-- Don't use `experimental.ppr` flag or `experimental_ppr` segment config — removed in Next.js 16
-- Don't use deprecated `origins.S3Origin(bucket)` — use `origins.S3BucketOrigin.withOriginAccessControl(bucket)`
+- Don't use `experimental.ppr` flag or `experimental_ppr` segment config (removed in Next.js 16)
+- Don't use deprecated `origins.S3Origin(bucket)`; use `origins.S3BucketOrigin.withOriginAccessControl(bucket)`
 
 ### Performance Checklist
 
@@ -1222,7 +1222,7 @@ All projects use `cdk-opennext` (`NextjsSite` from `"cdk-opennext"`) or hand-rol
 ### cdk-opennext: Minimal Production Instantiation
 
 ```typescript
-// chadneal.com — chadneal-web/cdk/lib/chadneal-stack.ts
+// chadneal.com: chadneal-web/cdk/lib/chadneal-stack.ts
 import { NextjsSite } from "cdk-opennext";
 
 const site = new NextjsSite(this, "NextjsSite", {
@@ -1254,7 +1254,7 @@ const site = new NextjsSite(this, "NextjsSite", {
 highScoresTable.grantReadWriteData(site.defaultServerFunction);
 ```
 
-**cdk-opennext exposes `site.defaultServerFunction`** — use it for `table.grantReadWriteData(...)` and `bucket.grantReadWrite(...)` instead of constructing ARNs manually.
+**cdk-opennext exposes `site.defaultServerFunction`**. Use it for `table.grantReadWriteData(...)` and `bucket.grantReadWrite(...)` instead of constructing ARNs manually.
 
 ### Disabling CloudFront SSR Caching (Required Pattern)
 
@@ -1315,7 +1315,7 @@ site.distribution!.addBehavior("/api/*", apiOrigin, {
 
 ### Hand-Rolled CDK with Streaming Invoke Mode (eleven9s Admin)
 
-When you need fine-grained IAM, use the manual path. Note `invokeMode: lambda.InvokeMode.RESPONSE_STREAM` on the server function URL — this enables Lambda response streaming for reduced TTFB:
+When you need fine-grained IAM, use the manual path. Note `invokeMode: lambda.InvokeMode.RESPONSE_STREAM` on the server function URL; this enables Lambda response streaming for reduced TTFB:
 
 ```typescript
 // eleven9s/infrastructure/lib/admin-stack.ts (simplified)
@@ -1358,7 +1358,7 @@ new s3deploy.BucketDeployment(this, "DeployCache", {
   destinationBucket: assetsBucket,
   destinationKeyPrefix: "_cache",
   memoryLimit: 512,
-  prune: false,  // never prune — cache entries must persist across deploys
+  prune: false,  // never prune: cache entries must persist across deploys
 });
 ```
 
@@ -1409,7 +1409,7 @@ const app = new cdk.App();
 new DangerouslySkipStack(app, "DangerouslySkipStack", { env });
 new GitHubOidcStack(app, "GitHubOidcStack", { env });
 
-// Standard cost tag schema — applies to every resource in both stacks
+// Standard cost tag schema: applies to every resource in both stacks
 cdk.Tags.of(app).add("project", "dangerously-skip");
 cdk.Tags.of(app).add("env", "prod");
 cdk.Tags.of(app).add("managed-by", "cdk");
@@ -1451,7 +1451,7 @@ Reference this role ARN in your GitHub Actions workflow under `role-to-assume`.
 
 ### EventBridge Cron for Background Workers (models-apresai)
 
-The models-apresai collector runs every 4 hours and calls the Next.js `/api/revalidate` endpoint afterward — a clean pattern for decoupling data collection from page rendering:
+The models-apresai collector runs every 4 hours and calls the Next.js `/api/revalidate` endpoint afterward, a clean pattern for decoupling data collection from page rendering:
 
 ```typescript
 // models-apresai/infrastructure/lib/models-apresai-stack.ts
@@ -1525,7 +1525,7 @@ This is the eleven9s admin portal pattern. It is the recommended approach for in
 
 **Why not middleware?**
 
-Next.js middleware runs in the Edge runtime by default. On Lambda/OpenNext, deploying middleware as `external: true` requires Lambda@Edge — adding cost, cold starts, and SDK compatibility constraints. For an admin portal where every route is protected, calling `auth()` directly in each Server Component is simpler and runs entirely in the existing Node.js Lambda.
+Next.js middleware runs in the Edge runtime by default. On Lambda/OpenNext, deploying middleware as `external: true` requires Lambda@Edge, adding cost, cold starts, and SDK compatibility constraints. For an admin portal where every route is protected, calling `auth()` directly in each Server Component is simpler and runs entirely in the existing Node.js Lambda.
 
 ```typescript
 // eleven9s/admin/src/lib/auth.ts
@@ -1551,7 +1551,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: { signIn: "/login", error: "/login" },
   callbacks: {
     async signIn({ user }) {
-      // Allowlist check — only permitted emails can sign in
+      // Allowlist check: only permitted emails can sign in
       return config.allowedEmails
         .map((e) => e.toLowerCase())
         .includes((user.email ?? "").toLowerCase());
@@ -1667,7 +1667,7 @@ export const authConfig: NextAuthConfig = {
       if (token.expires_at && Date.now() < token.expires_at * 1000) {
         return token; // Token still valid
       }
-      // Token expired — refresh via Google
+      // Token expired: refresh via Google
       const res = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
         body: new URLSearchParams({
@@ -1692,7 +1692,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);
 
 **Cookie naming with `__Secure-` prefix**: Use `__Secure-authjs.session-token` in production, not `__Host-`. CloudFront strips the `Path` attribute that `__Host-` requires, causing silent auth failures. All projects use `__Secure-` (or `__Secure-next-auth.session-token` on older NextAuth naming).
 
-**RBAC via session callback**: The podcaster pattern stamps `role` and `status` from DynamoDB onto the session in `sessionCallback`. Downstream checks do `session.user.role !== "admin"` — they never trust a client-supplied role claim.
+**RBAC via session callback**: The podcaster pattern stamps `role` and `status` from DynamoDB onto the session in `sessionCallback`. Downstream checks do `session.user.role !== "admin"`; they never trust a client-supplied role claim.
 
 ```typescript
 // podcaster/portal/src/lib/auth-callbacks.ts
@@ -1719,7 +1719,7 @@ export async function sessionCallback({ session, token }) {
 Used in regist. The Go API issues JWTs stored in AWS Secrets Manager. The Next.js frontend validates these tokens server-side without Cognito or NextAuth.
 
 ```typescript
-// regist/infrastructure/lib/regist-stack.ts — JWT secret setup
+// regist/infrastructure/lib/regist-stack.ts: JWT secret setup
 const jwtSecret = new secretsmanager.Secret(this, "JwtSecret", {
   secretName: "regist-jwt-secret",
   generateSecretString: {
@@ -1762,7 +1762,7 @@ defaultFunctionProps: {
 OpenNext ISR requires four resources. The naming and schema matter:
 
 ```typescript
-// sophie-web/infrastructure/lib/sophie-web-stack.ts — ISR setup
+// sophie-web/infrastructure/lib/sophie-web-stack.ts: ISR setup
 const cacheBucket = new s3.Bucket(this, "CacheBucket", {
   bucketName: `sophie-web-cache-prod-${this.account}`,
   lifecycleRules: [
@@ -1792,7 +1792,7 @@ const revalidationQueue = new sqs.Queue(this, "RevalidationQueue", {
 });
 ```
 
-The DynamoDB GSI name must be `revalidate` (lowercase) — OpenNext looks for this index by name.
+The DynamoDB GSI name must be `revalidate` (lowercase): OpenNext looks for this index by name.
 
 **When to use `revalidate: 0` vs. ISR**: Use `revalidate: 0` (or `export const dynamic = "force-dynamic"`) for pages that must be fresh on every request: admin dashboards, user-specific data, anything that reads from session. Use ISR with a positive revalidation interval for public content that can tolerate stale data (blog posts, product listings, public stats).
 
@@ -1827,7 +1827,7 @@ The `REVALIDATE_TOKEN` is generated by CDK (`generateSecretString`) and injected
 Sophie maintains one `openapi/spec/openapi.yaml` and generates types for Go (server), TypeScript (web), and Dart (mobile) from it. The eleven9s pattern extends this to Swift.
 
 ```makefile
-# sophie/Makefile — type generation targets
+# sophie/Makefile: type generation targets
 generate-types:
 	# Step 1: Go types
 	cd sophie-api/openapi && $(MAKE) generate-go
@@ -1844,14 +1844,14 @@ check-sync:
 ```
 
 ```makefile
-# eleven9s/Makefile — generates TypeScript for the admin Next.js app
+# eleven9s/Makefile: generates TypeScript for the admin Next.js app
 gen-admin-types:
 	cd admin && npx openapi-typescript ../openapi/admin-api.yaml -o src/api/types.ts
 ```
 
 ### Spec-First Deploy Guard (sophie)
 
-Sophie blocks deploys on uncommitted changes — pre-commit hooks validate that `generate-types` was run:
+Sophie blocks deploys on uncommitted changes; pre-commit hooks validate that `generate-types` was run:
 
 ```makefile
 deploy: $(SCHEMA_MARKER)
@@ -1894,7 +1894,7 @@ deploy: clean build
 dev:
 	npm run dev
 
-# CDK-only shortcut (skips next.js rebuild — useful when only infra changed)
+# CDK-only shortcut (skips next.js rebuild, useful when only infra changed)
 diff:
 	cd infrastructure && npx cdk diff
 
@@ -1905,7 +1905,7 @@ synth:
 For monorepos (regist, models-apresai) where the CDK project is a sibling directory:
 
 ```makefile
-# models-apresai pattern — explicit build chain
+# models-apresai pattern: explicit build chain
 build-opennext: build-web
 	cd web && npx open-next build     # writes web/.open-next/
 
@@ -2040,7 +2040,7 @@ cfnDistribution.addPropertyOverride(
 
 ### Deployment Checklist
 
-- [ ] Run `make audit` — no `NODEJS_(16|18|20)_X` or `Architecture.X86_64` in CDK code
+- [ ] Run `make audit`: no `NODEJS_(16|18|20)_X` or `Architecture.X86_64` in CDK code
 - [ ] `.env.production` sourced before `cdk deploy` (secrets reach Lambda environment)
 - [ ] `OPEN_NEXT_FORCE_NON_EMPTY_RESPONSE=true` set on server function
 - [ ] `NEXTAUTH_URL` matches the deployed domain exactly
