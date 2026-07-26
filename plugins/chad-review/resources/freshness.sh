@@ -150,16 +150,35 @@ emit_prereqs() {
 # --- Security scan ---------------------------------------------------------
 # Never report "clean" because no scanner was installed. That is the one result
 # here that would be actively misleading.
+#
+# One SCAN record per output line, never a truncated-and-flattened summary. The
+# first version piped through `tail -5 | tr '\n' ' '`, which on a real repo cut
+# the vulnerability table off mid-row and ran the survivors together: it dropped
+# findings and mangled the ones it kept, on the single most important output this
+# script produces. Volume is not a reason to truncate a CVE list.
 emit_scan() {
+  local tool="" out=""
   if command -v osv-scanner >/dev/null 2>&1; then
-    printf 'SCAN\tosv-scanner\t%s\n' "$(osv-scanner -r . 2>&1 | tail -5 | tr '\n' ' ')"
+    tool=osv-scanner; out=$(osv-scanner -r . 2>&1)
   elif command -v govulncheck >/dev/null 2>&1 && [[ -f go.mod ]]; then
-    printf 'SCAN\tgovulncheck\t%s\n' "$(govulncheck ./... 2>&1 | tail -5 | tr '\n' ' ')"
+    tool=govulncheck; out=$(govulncheck ./... 2>&1)
   elif [[ -f package.json ]] && command -v npm >/dev/null 2>&1; then
-    printf 'SCAN\tnpm-audit\t%s\n' "$(npm audit --json 2>/dev/null | jq -c '.metadata.vulnerabilities // "unreadable"' 2>/dev/null)"
+    tool=npm-audit; out=$(npm audit 2>&1)
   else
     printf 'SCAN\tnone\tunavailable: install osv-scanner (do NOT report clean)\n'
+    return 0
   fi
+  # Keep only lines carrying a vulnerability identifier or an explicit verdict,
+  # so the record count reflects findings rather than table borders.
+  local kept=0 line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if [[ "$line" =~ (CVE-|GHSA-|GO-[0-9]{4}-|OSV-|[Vv]ulnerabilit|No\ issues|no\ vulnerabilities|found\ 0) ]]; then
+      printf 'SCAN\t%s\t%s\n' "$tool" "$(tr -s ' \t' ' ' <<<"$line" | sed 's/^ *//;s/ *$//')"
+      kept=$((kept+1))
+    fi
+  done <<< "$out"
+  [[ "$kept" == 0 ]] && printf 'SCAN\t%s\tran, no vulnerability lines matched; check manually if this looks wrong\n' "$tool"
   return 0
 }
 
