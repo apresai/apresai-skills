@@ -1,4 +1,4 @@
-.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions validate-scripts check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
+.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
 
 # Release targets rely on prerequisites running in the listed order
 # (check-clean and check-branch must both run before anything writes a
@@ -19,6 +19,7 @@ help:
 	@echo "  validate-plugins   - Validate all plugin.json manifests"
 	@echo "  validate-structure - Validate directory structure"
 	@echo "  validate-versions  - Check plugin.json versions match marketplace.json"
+	@echo "  validate-resource-refs - Check every resources/ pointer resolves"
 	@echo "  validate-scripts   - Run plugin resource script test suites"
 	@echo ""
 	@echo "Version Management:"
@@ -34,6 +35,42 @@ help:
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  clean              - Remove build artifacts"
+
+# Every `resources/<file>` a plugin's markdown points at must exist. A plugin's
+# instructions are executable content, so a pointer that does not resolve is a
+# broken reference, not a typo: the model reads the instruction, the file is not
+# there, and it proceeds without whatever the file was supposed to supply. That
+# fails silently, which is why it needs a check rather than a convention.
+# Matches `resources/name.ext` in a plugin's own .md files. Two exclusions, both
+# learned by writing the naive version first and watching it produce four false
+# positives on this repo:
+#   - A scheme prefix (`obsidian:resources/aws-cost-tagging.md`) is a pointer
+#     into somewhere else entirely, not into this marketplace. The negative
+#     lookbehind on `:` drops those.
+#   - A plugin may legitimately cite ANOTHER plugin's resource, as tidy's
+#     SKILL.md cites chad-review's pass-reference.md. So a reference resolves if
+#     the file exists under ANY plugin's resources/, not only its own. The bug
+#     worth catching is a pointer to a file that exists nowhere.
+validate-resource-refs:
+	@echo "==> Validating resource pointers..."
+	@fail=0; \
+	for p in plugins/*/; do \
+		for md in $$(find "$$p" -name '*.md' 2>/dev/null); do \
+			for ref in $$(grep -ohE '(^|[^:A-Za-z0-9._-])resources/[A-Za-z0-9._-]+\.(md|sh|json|yaml|yml|txt)' "$$md" 2>/dev/null \
+			              | grep -oE 'resources/[A-Za-z0-9._-]+\.[a-z]+' | sort -u); do \
+				found=0; \
+				for q in plugins/*/; do \
+					[ -e "$$q$$ref" ] && found=1 && break; \
+				done; \
+				if [ "$$found" = "0" ]; then \
+					echo "  ❌ $$md points at $$ref, which exists in no plugin"; \
+					fail=1; \
+				fi; \
+			done; \
+		done; \
+	done; \
+	if [ "$$fail" = "1" ]; then exit 1; fi; \
+	echo "  ✅ All resource pointers resolve"
 
 # Run the shell test suites that ship alongside plugin resources. Content repo,
 # so this is the only executable code here that CAN be tested; the untracked
@@ -244,7 +281,7 @@ validate-versions:
 	echo "✅ All plugin versions match their marketplace entries"
 
 # Run all validations
-validate: validate-marketplace validate-plugins validate-structure validate-versions validate-scripts
+validate: validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts
 	@echo ""
 	@echo "================================"
 	@echo "✅ All validations passed!"

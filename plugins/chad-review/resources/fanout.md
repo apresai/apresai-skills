@@ -18,8 +18,15 @@ Self-contained, always:
 - One sentence of goal, naming the passes the agent owns.
 - The diff. Sub-agents cannot see your conversation.
 - The rubric's PATH and section names, never its text. Sub-agents cannot see
-  your conversation, but they can read files, and `CLAUDE_PLUGIN_ROOT` resolves
-  for them too. Pasting the sections spends the parent's context on the read,
+  your conversation, but they can read files.
+
+  **Resolve the path before you paste it.** A sub-agent prompt is a string, not
+  a shell: a literal `${CLAUDE_PLUGIN_ROOT:-...}` arrives unexpanded and the
+  agent's Read fails on a path containing `${`, which is a silent failure since
+  the agent then reviews without the rubric it was told was mandatory. Expand it
+  in the parent first, for example with
+  `echo "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md"`,
+  and paste the absolute path the shell prints. Pasting the sections spends the parent's context on the read,
   the parent's output tokens on the copy, and the agent's input on receiving it,
   all to hand over a file the agent can open itself. Naming the sections is
   mandatory and so is the agent reading them: skipping the rubric silently
@@ -77,7 +84,7 @@ Project context (detected during pre-flight):
 - Data-model doc: <path or "not present">
 
 Pass rubrics. Read these BEFORE you start; they are required, not background:
-  file: ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md
+  file: <RESOLVED absolute path, see below>
   sections: <only the § headings for the passes this agent owns>
 Within each section read only the language subsections matching this diff
 (<languages detected>). Do not read the whole file.
