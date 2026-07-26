@@ -85,6 +85,11 @@ printf 'Text before.\n\n```\nsome -- thing in a fence\n```\n\nText after.\n' > "
 clean "fenced code is skipped entirely" "$r"
 rm -rf "$r"
 
+r=$(newrepo)
+printf 'Text before.\n\n~~~\nsome -- thing in a tilde fence\n~~~\n\nText after.\n' > "$r/a.md"; commit "$r"
+clean "tilde fences are skipped too" "$r"
+rm -rf "$r"
+
 r=$(newrepo); printf 'Run it with --dry-run and --force flags.\n' > "$r/a.md"; commit "$r"
 clean "CLI flags are never flagged" "$r"
 rm -rf "$r"

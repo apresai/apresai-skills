@@ -19,6 +19,12 @@
 # A check that flagged those would be turned off within a week, so the ` -- `
 # rule applies to markdown only and skips fenced and inline code.
 #
+# KNOWN LIMIT
+# A line carrying an ODD number of backticks leaves its unclosed span unstripped,
+# so a ` -- ` inside it is reported. That line is malformed markdown already, and
+# the repo has none, so this is left as a loud false positive rather than guessed
+# at: the report names the exact line, which is enough to fix or exempt.
+#
 # USAGE
 #   bash scripts/check-prose.sh            # report violations, exit 1 if any
 #   bash scripts/check-prose.sh --list     # one `path:line: text` per violation
@@ -79,7 +85,7 @@ while IFS= read -r f; do
     [[ -z "$hit" ]] && continue
     report "$f:$hit"
   done < <(awk '
-    /^[ \t]*```/ { fence = !fence; next }
+    /^[ \t]*(```|~~~)/ { fence = !fence; next }   # CommonMark allows either fence
     fence { next }
     {
       line = $0
