@@ -102,7 +102,7 @@ symbols, and user intents that should activate it.
 ```json
 {
   "name": "xai-voice",
-  "version": "1.6.1",
+  "version": "1.2.3",
   "description": "One paragraph. This is what users see when browsing.",
   "author": { "name": "Chad Neal", "email": "chad.neal@gmail.com" }
 }
@@ -120,7 +120,7 @@ is invisible to users, even if its directory is perfect. Add an entry:
 {
   "name": "xai-voice",
   "description": "Shown in the marketplace listing.",
-  "version": "1.6.1",
+  "version": "1.2.3",
   "author": { "name": "Chad Neal" },
   "source": "./plugins/xai-voice",
   "category": "ai-tooling"
@@ -137,10 +137,12 @@ stay in sync. `make validate-versions` enforces this, and runs as part of
 2. Add `commands/<name>.md`, or `skills/<name>/SKILL.md`, or both.
 3. Register the plugin in `.claude-plugin/marketplace.json`.
 4. Add a row to the plugin table in `README.md`.
-5. Update this file: the repository-structure tree above, the
-   `commands/` versus `skills/` split table, and the version range under
-   Versioning. Three separate reviews have caught this file going stale
-   because the checklist stopped at `README.md`.
+5. Update this file: the repository-structure tree above and the
+   `commands/` versus `skills/` split table. Three separate reviews have
+   caught this file going stale because the checklist stopped at
+   `README.md`. The version numbers that used to need chasing here are
+   gone: the JSON snippets carry an illustrative `1.2.3` and the prose
+   points at `marketplace.json` instead of restating it.
 6. Run `make validate`.
 
 ## Versioning
@@ -153,10 +155,10 @@ Two independent things carry versions.
   untagged. Every release from `v1.6.2` on has been tagged by the
   `deploy` target, which is what makes the tag reliable rather than the
   convention alone.
-- **Each plugin** has its own version, advancing at its own pace. As of
-  this writing they range from 1.0.0 to 2.2.0. A plugin's version lives
-  in two files that must agree: its own `plugin.json` and its entry in
-  `marketplace.json`.
+- **Each plugin** has its own version, advancing at its own pace, and
+  `marketplace.json` is the authoritative list of what those are. A
+  plugin's version lives in two files that must agree: its own
+  `plugin.json` and its entry in `marketplace.json`.
 
 `make bump-patch` / `bump-minor` / `bump-major` move the **marketplace**
 version only. They deliberately do not touch per-plugin versions; bump a
