@@ -166,8 +166,9 @@ that earned the bump.
 ## Makefile
 
 ```bash
-make validate          # runs all four validate-* checks below
+make validate          # runs all six validate-* checks
 make validate-versions # plugin.json versions match their marketplace.json entries
+make validate-resource-refs # every resources/ pointer a plugin's markdown names resolves
 make version           # print the current marketplace version
 make bump-patch        # marketplace version only (also bump-minor, bump-major)
 make clean             # remove stray .pyc / __pycache__ / .DS_Store
