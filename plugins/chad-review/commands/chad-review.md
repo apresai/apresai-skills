@@ -6,7 +6,21 @@ description: 6-pass autonomous pre-commit code review. Use when the user wants t
 # Chad Review: 6-Pass Code Review
 
 Autonomous review of uncommitted working-tree changes, or the last commit if the
-tree is clean. Read-only except for running tests and type regeneration.
+tree is clean.
+
+**This skill is not read-only, and calling it read-only has been wrong.** It
+never edits the change under review, never commits, and never applies a fix, and
+those three are real invariants. But getting there means executing the project's
+own commands: its gate, its tests, its codegen, its linters, its vulnerability
+scanner. Those write to disk. `go mod tidy` rewrites manifests, `npm ci` rewrites
+`node_modules`, a formatter in a `validate` target rewrites source, and a
+generator rewrites generated files. The sub-agents additionally hold Bash, Edit,
+and Write, so even "never edits" is enforced by prompt wording rather than by
+tool restriction.
+
+Treat it as a skill that runs your build. If a command in your test, gate, or
+codegen path has side effects you would not want a reviewer triggering, that is
+a real exposure, not a theoretical one.
 
 Each pass answers one distinct question, so no defect is reported twice:
 
@@ -43,10 +57,11 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    and a clean tree means say "Nothing to review" and STOP. Either way, build the
    **changed files list**.
 
-   **Back up untracked files first.** This skill's read-only guarantee is
-   enforced by prompt wording, not by tool restriction: the reviewer agents are
+   **Back up untracked files first.** The skill's no-edit rule is enforced by
+   prompt wording, not by tool restriction: the reviewer agents are
    `general-purpose` and language specialists holding Bash, Edit, and Write, and
-   the review runs the project's own test and codegen commands. On 2026-06-14 a
+   the review runs the project's own gate, test, and codegen commands, which
+   write to disk by design. On 2026-06-14 a
    review sub-agent "restored" the tree with a git command that sweeps untracked
    files; an untracked test file under review was gone from disk afterwards while
    the review reported success. Any of those paths can do it, so back them up on
@@ -71,7 +86,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    unprotected tree. That includes exit 127 on an install predating the script
    (unlike `chad-review-route.sh`, this one has no fallback and is not meant to
    have one: routing degrades to a worse default, but skipping the guard silently
-   drops the only thing standing behind the read-only guarantee).
+   drops the only thing standing behind the no-edit rule).
 
 3. **Announce the target and tier** in one line, mapping your session model per
    §"Model tiering":
@@ -143,8 +158,12 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    - a `package.json` script named `validate` or `check`, or `lint` plus
      `typecheck`
    - a `justfile` recipe or `Taskfile.yml` task of those names
-   - the `run:` steps of `.github/workflows/*.yml`, authoritative even when no
-     local target exists
+   - a `run:` step of `.github/workflows/*.yml`, but **only a check-shaped one**
+     (build, test, lint, typecheck, vet, audit) and never one that deploys,
+     publishes, releases, migrates, or pushes. CI steps run with different
+     assumptions than a review does, and executing one blind is how a code
+     review ships a release. Anything you cannot classify from its name, skip
+     and say you skipped it
    - failing all of those, the language default for what the diff contains
      (`go build ./... && go vet ./...`, `tsc --noEmit`, `cargo check`,
      `swift build`)
@@ -688,11 +707,18 @@ question: the fix prompt is already in the report body.
 - NEVER edit a source file, commit, or apply a proposed fix. Show it only. The
   single exception is Phase 2 step 5 restoring a file that vanished during the
   review, which puts the tree back as it was rather than changing the diff.
-- This read-only rule binds the sub-agents too, but it is only prompt-enforced:
-  they hold Bash, Edit, and Write, and Phase 2 runs the project's own test and
-  codegen commands. A `git stash -u`, `git clean`, or `git checkout` from any of
-  those destroys untracked files under review. That is why pre-flight step 2
-  backs them up and step 5 verifies they survived.
+- **The no-edit rule is not a read-only guarantee, and it is not tool-enforced.**
+  Sub-agents hold Bash, Edit, and Write, and the review runs the project's own
+  gate, tests, and codegen, all of which write to disk. A `git stash -u`,
+  `git clean`, or `git checkout` from any of those destroys untracked files under
+  review. That is why pre-flight step 2 backs them up and step 5 verifies they
+  survived: the guard exists precisely because the guarantee does not.
+- **Run checks, not actions.** Every command this skill triggers must be one that
+  inspects: build, test, lint, typecheck, generate-and-diff, scan. Never run a
+  target that deploys, publishes, releases, migrates, or pushes, even when it
+  appears in the project's own gate or CI workflow. When a discovered command's
+  effect is not obvious from its name, do not run it: report it as undetermined
+  and say what you skipped.
 - NEVER silently skip a pass. All six appear as headings in every report. A pass
   may return early per the shape matrix, but only with the explicit line
   "N/A - not applicable to this diff shape (<shape>)". The same holds one level

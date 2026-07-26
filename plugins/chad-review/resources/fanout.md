@@ -28,7 +28,7 @@ Self-contained, always:
 - The project's spec files, validation commands, test harness, and doc locations
   as detected in pre-flight. Absent ones stated as absent, so the agent reports
   that sub-check N/A.
-- The output contract verbatim, and read-only instructions.
+- The output contract verbatim, plus the no-edit and checks-not-actions rules.
 
 **Output contract (paste verbatim into every sub-agent prompt):**
 
@@ -72,7 +72,9 @@ Pass rubrics. Read these BEFORE you start; they are required, not background:
 Within each section read only the language subsections matching this diff
 (<languages detected>). Do not read the whole file.
 
-<paste the output contract>. Read-only: do not edit files or run commits.
+<paste the output contract>. Do not edit files, do not commit, and do not run any
+command that deploys, publishes, releases, or migrates. Running the project's
+build, tests, linters, and generators IS expected and they do write to disk.
 ```
 
 Agent call. `model` is REQUIRED, from §"Model tiering":
