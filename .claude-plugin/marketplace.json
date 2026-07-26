@@ -60,8 +60,8 @@
     },
     {
       "name": "chad-review",
-      "description": "6-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification. Every sub-check reports or marks itself N/A, so spec drift, codegen staleness, and doc rot stay individually visible. Diff-shape aware (light and deps-only diffs skip the fan-out). Tuned for Claude Opus 5: 2 sub-agents rather than 3, sub-agents report everything with a confidence tag while the parent filters once, session-relative sonnet/opus tiering. Read-only on the diff, and it backs up untracked files first because that guarantee is prompt-enforced, not tool-enforced.",
-      "version": "2.1.0",
+      "description": "6-pass autonomous pre-commit code review. Reviews uncommitted working-tree changes (or the last commit if clean) across drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification. Runs the project's own deterministic gate in the parent before any agent launches, and a repo with no validation entrypoint is itself a finding with a ready-to-paste target. FRESHNESS finds work by census (declared manifests, pinned external references such as runtime enums and model IDs, undeclared prerequisites) rather than by manifest filename, so doc, prompt, and IaC repos get audited instead of marked N/A, and no agent is ever spawned just to discover whether there is work. Every sub-check reports or marks itself N/A. Diff-shape aware (light and deps-only diffs skip the fan-out). Sub-agents receive the rubric's path rather than pasted rubric text, and the prompt contract loads only when a launch is imminent. Session-relative sonnet/opus tiering with an explicit model on every launch. Read-only on the diff, and it backs up untracked files when there are any, because that guarantee is prompt-enforced, not tool-enforced.",
+      "version": "2.2.0",
       "author": {
         "name": "Chad Neal"
       },
