@@ -566,9 +566,14 @@ Self-contained, always:
 
 - One sentence of goal, naming the passes the agent owns.
 - The diff. Sub-agents cannot see your conversation.
-- Read `pass-reference.md` ONCE during prompt assembly and paste ONLY the
-  sections for the passes this agent owns and the languages detected. Mandatory:
-  skipping it silently degrades quality.
+- The rubric's PATH and section names, never its text. Sub-agents cannot see
+  your conversation, but they can read files, and `CLAUDE_PLUGIN_ROOT` resolves
+  for them too. Pasting the sections spends the parent's context on the read,
+  the parent's output tokens on the copy, and the agent's input on receiving it,
+  all to hand over a file the agent can open itself. Naming the sections is
+  mandatory and so is the agent reading them: skipping the rubric silently
+  degrades quality, which is why the instruction is phrased as a requirement in
+  the skeleton below.
 - The project's spec files, validation commands, test harness, and doc locations
   as detected in pre-flight. Absent ones stated as absent, so the agent reports
   that sub-check N/A.
@@ -610,8 +615,11 @@ Project context (detected during pre-flight):
 - Route-parity test: <command or "not present">
 - Data-model doc: <path or "not present">
 
-Pass rubrics for the languages in this diff:
-<paste the matching pass-reference.md sections>
+Pass rubrics. Read these BEFORE you start; they are required, not background:
+  file: ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md
+  sections: <only the § headings for the passes this agent owns>
+Within each section read only the language subsections matching this diff
+(<languages detected>). Do not read the whole file.
 
 <paste the output contract>. Read-only: do not edit files or run commits.
 ```
