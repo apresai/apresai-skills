@@ -41,7 +41,13 @@
 #
 # USAGE
 #   bash freshness.sh              # audit the repo containing $PWD
-#   bash freshness.sh --scan-only  # skip discovery, just run the vuln scanner
+#
+# There is no scan-only mode. There was one, and it skipped discovery, which left
+# no lockfile targets, so no pass 2 and no cross-check, while still printing
+# `coverage_gaps=0`. On regist that read `ecosystems=0 scanned_ecosystems=0
+# coverage_gaps=0` over three live ecosystems: the exact failure this file exists
+# to prevent, reachable by flag. Nothing invoked it. A flag whose only effect is
+# to make the output lie is not a flag worth keeping.
 #
 # OUTPUT
 # Labeled blocks on stdout, one record per line, tab-separated. Empty blocks are
@@ -55,18 +61,26 @@
 #   PREREQ    <binary>  <where it is required>
 #   SCANNED   <path>  <tool>
 #   SCAN      <tool>  <result>
-#   FIX       <source>  <package>  <current>  <target>  <advisories>  <max CVSS>
+#   FIX       <source>  <package>  <current>  <target>  <advisories>  <max CVSS>  <prod|dev|mixed>
 #   COVERAGE  <ecosystem>  <covered|GAP>  <detail>
 #   NOTE      <topic>  <detail>
 #   SUMMARY   files=N ecosystems=M scanned_ecosystems=S coverage_gaps=G manifests=X
 #             deps=Y refs=Z prereqs=P
 #
+# NO RECORD CARRIES AN EMPTY FIELD, and that is a contract rather than a habit.
+# Tab is an IFS *whitespace* character, so `IFS=$'\t' read` collapses consecutive
+# tabs even with IFS set to tab alone: one empty cell silently shifts every field
+# after it. Verified: `printf 'a\t\tc'` read into three vars gives a, c, empty.
+# The alias-row bug emitted exactly that shape before it was fixed.
+#
 # REF records carry their surrounding line ON PURPOSE. `NODEJS_20_X reached EOL`
 # is a correct warning, not a finding, and only the context distinguishes it from
 # a prescription. Stripping it here would force the judgment step to guess.
 #
-# FIX records are the remediation view of SCAN. 21 advisories on regist collapse to
-# 10 upgrades, and one of them (next 16.2.10 -> 16.2.11) closes nine. The grouping
+# FIX records are the remediation view of SCAN. Measured on regist 2026-07-26, 21
+# advisories collapsed to 10 upgrades and one of them (next 16.2.10 -> 16.2.11)
+# closed nine; that repo has since patched down to 5 and 5, so read the numbers as
+# dated evidence rather than a current claim. The grouping
 # key is (package, source, installed version) with the highest fixed version, NOT
 # package alone: brace-expansion appears at three installed versions across two
 # lockfiles with two different fixed versions, so a package-only key would print
@@ -81,9 +95,6 @@
 # error. Note osv-scanner exits 1 when it FINDS something and 127 on an
 # unextractable -L path, so neither of those is a scanner failure either.
 set -uo pipefail
-
-scan_only=0
-[[ "${1:-}" == "--scan-only" ]] && scan_only=1
 
 root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$root" || exit 1
@@ -442,7 +453,12 @@ emit_fixes() {
       if (fixed[key] == "" || cmpv($7, fixed[key]) > 0) fixed[key] = $7
       if ($3 + 0 > cvss[key] + 0) cvss[key] = $3
       src[key] = $8; name[key] = pkg; cur[key] = $6
-      dev[key] = ($5 ~ /\(dev\)$/) ? " (dev)" : ""
+      # Scope is its own column. Concatenating it onto the name produced
+      # "brace-expansion (dev)", which is not a package name, so anything reading
+      # the name field got a value that matches no registry entry. A group can
+      # legitimately contain both scopes at one version, hence mixed.
+      s = ($5 ~ /\(dev\)$/) ? "dev" : "prod"
+      scope[key] = (key in scope && scope[key] != s) ? "mixed" : s
     }
     function cmpv(a, b,   x, y, i, m) {
       split(a, x, "."); split(b, y, ".")
@@ -452,7 +468,7 @@ emit_fixes() {
     }
     END {
       for (k in n)
-        printf "FIX\t%s\t%s%s\t%s\t%s\t%d\t%s\n", src[k], name[k], dev[k], cur[k], fixed[k], n[k], cvss[k]
+        printf "FIX\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", src[k], name[k], cur[k], fixed[k], n[k], cvss[k], scope[k]
     }
   ' <<< "$out" | sort -t"$(printf '\t')" -k7,7nr -k6,6nr
   return 0
@@ -544,15 +560,13 @@ emit_coverage() {
   return 0
 }
 
-if [[ "$scan_only" == 0 ]]; then
-  discover
-  compute_ignored
-  emit_manifests
-  emit_refs
-  emit_prereqs
-fi
+discover
+compute_ignored
+emit_manifests
+emit_refs
+emit_prereqs
 emit_scan
-[[ "$scan_only" == 0 ]] && emit_coverage
+emit_coverage
 
 n_files=$(find . \( "${PRUNE[@]}" \) -prune -o -type f -print 2>/dev/null | wc -l | tr -d ' ')
 n_eco=$(printf '%s' "$ecosystems" | wc -w | tr -d ' ')

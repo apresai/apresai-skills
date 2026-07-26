@@ -247,10 +247,41 @@ cat > "$r/table.txt" <<'TBL'
 Total 2 packages affected by 5 known vulnerabilities (0 Critical, 4 High, 1 Medium, 0 Low, 0 Unknown) from 1 ecosystem.
 TBL
 out=$(runstub "$r" "package-lock.json" "$r/table.txt")
-check "advisories collapse to one upgrade"  "FIX	package-lock.json	next	16.2.10	16.2.11	2	8.3" "$out"
-check "highest fixed version wins"          "FIX	package-lock.json	brace-expansion	5.0.6	5.0.8	2	7.7" "$out"
-check "installed versions stay separate"    "FIX	package-lock.json	brace-expansion	1.1.16	5.0.8	1	7.5" "$out"
+check "advisories collapse to one upgrade"  "FIX	package-lock.json	next	16.2.10	16.2.11	2	8.3	prod" "$out"
+check "highest fixed version wins"          "FIX	package-lock.json	brace-expansion	5.0.6	5.0.8	2	7.7	prod" "$out"
+check "installed versions stay separate"    "FIX	package-lock.json	brace-expansion	1.1.16	5.0.8	1	7.5	prod" "$out"
 absent "table borders are not findings"     "SCAN	osv-scanner	+---"     "$out"
+rm -rf "$r"
+
+# --- dev scope is its own field, not glued to the package name ------------
+# "brace-expansion (dev)" is not a package name, and anything reading the name
+# field got a value matching no registry entry.
+r=$(newrepo); mkstub "$r"
+printf '{"name":"t","lockfileVersion":3,"packages":{}}\n' > "$r/package-lock.json"
+cat > "$r/dev.txt" <<'TBL'
+| https://osv.dev/GHSA-aaaa-1111-bbbb | 7.5  | npm       | fast-uri (dev)  | 3.1.3   | 3.1.4         | package-lock.json |
+Total 1 package affected by 1 known vulnerability (0 Critical, 1 High, 0 Low, 0 Unknown) from 1 ecosystem.
+TBL
+out=$(runstub "$r" "package-lock.json" "$r/dev.txt")
+check  "scope is a separate column" "FIX	package-lock.json	fast-uri	3.1.3	3.1.4	1	7.5	dev" "$out"
+# Scoped to FIX rows on purpose: a SCAN record quotes the scanner's own table row
+# verbatim, so "fast-uri (dev)" legitimately appears there and asserting over the
+# whole output would fail for the wrong reason.
+absent "and never inside the name field" "fast-uri (dev)" "$(grep '^FIX' <<<"$out")"
+rm -rf "$r"
+
+# --- there is no scan-only mode ------------------------------------------
+# The flag skipped discovery, so no lockfile targets, no pass 2, and no
+# cross-check, while still printing coverage_gaps=0. On regist it read
+# `ecosystems=0 scanned_ecosystems=0 coverage_gaps=0` over three live ecosystems:
+# this file's own bug, reachable by flag. An unknown argument must not resurrect
+# it by being silently ignored into a half-run either.
+r=$(newrepo); mkstub "$r"
+printf 'module x\n\ngo 1.26\n' > "$r/go.mod"
+out=$( cd "$r" && PATH="$r/.stub:$PATH" OSV_STUB_SCANNED="go.mod" bash "$SCRIPT" --scan-only 2>&1 )
+absent "--scan-only cannot skip discovery" "ecosystems=0"     "$out"
+check  "discovery runs regardless"         "MANIFEST	go.mod	go" "$out"
+check  "and coverage is still reported"    "COVERAGE	go	"    "$out"
 rm -rf "$r"
 
 # --- a walk is not a query: coverage needs a verdict ----------------------
