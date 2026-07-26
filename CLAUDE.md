@@ -166,15 +166,16 @@ that earned the bump.
 ## Makefile
 
 ```bash
-make validate          # runs all six validate-* checks
+make validate          # runs all seven validate-* checks
 make validate-versions # plugin.json versions match their marketplace.json entries
 make validate-resource-refs # every resources/ pointer a plugin's markdown names resolves
+make validate-prose    # no em-dashes, no " -- " used as sentence punctuation
 make version           # print the current marketplace version
 make bump-patch        # marketplace version only (also bump-minor, bump-major)
 make clean             # remove stray .pyc / __pycache__ / .DS_Store
 ```
 
-`make validate` is the check to run before opening a PR. It runs six checks, the last of which executes any `plugins/*/resources/*.test.sh` suite, and the one before it confirms that every `resources/...` path a plugin's markdown points at resolves in some plugin. It verifies that
+`make validate` is the check to run before opening a PR. It runs seven checks. The last enforces the prose convention below, failing on an em-dash or on ` -- ` used as sentence punctuation; it skips fenced blocks and inline code spans, so CLI flags and the `--` end-of-options marker never trip it, and it exempts Apple's verbatim saved guidelines along with the checker and its own suite. The one before it runs the shell test suites, both `plugins/*/resources/*.test.sh` and `scripts/*.test.sh`, and the one before that confirms that every `resources/...` path a plugin's markdown points at resolves in some plugin. It verifies that
 `marketplace.json` is valid JSON with `name`, `owner`, and a `plugins`
 array; that every `plugin.json` is valid JSON with a `name` and, if it
 declares `commands`, that those paths start with `./`; that every
@@ -209,5 +210,8 @@ release from `main`.
   entry, and its `README.md` row, then grepping the repository root for
   leftover references. A prior removal left stale docs behind for two
   months, which is why this line exists.
-- Prose in this repository avoids em-dashes and emoji. Existing `Makefile`
-  echo output predates that convention.
+- Prose in this repository avoids em-dashes and emoji, and `make validate-prose`
+  now enforces the em-dash half rather than trusting it. This line stood for
+  months while 393 em-dashes accumulated across 26 files, including the README
+  table and the marketplace descriptions, which is why it is a check now. Emoji
+  stay unchecked because the `Makefile` echo output is built from them.
