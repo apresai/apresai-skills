@@ -16,7 +16,7 @@ Each pass answers one distinct question, so no defect is reported twice:
 | 2. BEHAVIOR AND RISK | What changed, and what breaks it | agent + parent |
 | 3. TESTS | Do affected tests pass, and do tests exist | parent + agent |
 | 4. OBSERVABILITY | Debuggable in production without a repro | reviewer agent |
-| 5. FRESHNESS | Deps current, CVE-free, not end-of-life | own agent |
+| 5. FRESHNESS | Deps current, CVE-free, not end-of-life | parent, or its own agent when the census returns work for one |
 | 6. SIMPLIFY | Is it clean | reviewer agent |
 
 **Model tiering is session-relative.** There is deliberately NO `model:`
@@ -617,8 +617,8 @@ six-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
 
 **FRESHNESS** is whole-project, MECH tier, `general-purpose`, launched ONCE per
-review rather than per block, and only when the census in pass 5 step 1 returns
-work an agent is needed for. On a `light` diff it is the only agent that can
+review rather than per block, and only when the census in pass 5 step 0 returns
+work that step 1's table routes to an agent. On a `light` diff it is the only agent that can
 launch. Brief it with **the census itself**, never with the discovery
 instructions: it must not repeat a `find` the parent already ran, and handing it
 the tier lists is what turns the spawn from a question into work. Add the
