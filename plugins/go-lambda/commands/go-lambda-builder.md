@@ -8,7 +8,7 @@ description: Generate production-ready Go Lambda functions with provided.al2023 
 ## Overview
 
 This skill generates production-ready Go Lambda functions optimized for:
-- **Runtime**: `provided.al2023` (required for new functions; `provided.al2` is deprecated July 31, 2026 — do not use)
+- **Runtime**: `provided.al2023` (required for new functions; `provided.al2` is deprecated July 31, 2026; do not use)
 - **Architecture**: ARM64 for up to 20% cheaper, often faster (standard Lambda ARM64 is backed by Graviton2; Graviton4 is available only via Lambda Managed Instances)
 - **SDK**: AWS SDK for Go v2
 - **Infrastructure**: AWS CDK v2 with TypeScript
@@ -62,7 +62,7 @@ func init() {
 	// on older versions of the library.
 	slog.SetDefault(slog.New(lambda.NewLogHandler()))
 
-	// Load AWS config — use log.Fatal so failures emit a clean runtime init error
+	// Load AWS config: use log.Fatal so failures emit a clean runtime init error
 	// in CloudWatch rather than an unhandled panic.
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
@@ -134,7 +134,7 @@ func (context.Context, TIn) (TOut, error)
 
 ### Generic Handler (aws-lambda-go v1.47+, RECOMMENDED for new code)
 
-`StartHandlerFunc` provides compile-time type safety via Go generics — prefer it for new functions:
+`StartHandlerFunc` provides compile-time type safety via Go generics. Prefer it for new functions:
 
 ```go
 import "github.com/aws/aws-lambda-go/lambda"
@@ -166,7 +166,7 @@ func main() {
 	lambda.StartWithOptions(handler,
 		lambda.WithEnableSIGTERM(func() {
 			// Flush logs, drain pools, close DB connections
-			slog.Info("SIGTERM received — shutting down")
+			slog.Info("SIGTERM received, shutting down")
 		}),
 	)
 }
@@ -866,7 +866,7 @@ func putItemSafe(ctx context.Context, client *dynamodb.Client, item map[string]t
 
 **Preferred: `lambda.NewLogHandler()` (aws-lambda-go v1.54+)**
 
-`lambda.NewLogHandler()` reads `AWS_LAMBDA_LOG_FORMAT` and `AWS_LAMBDA_LOG_LEVEL` set by the Lambda console or CDK, and auto-injects `requestId` into every log line — no manual wiring required:
+`lambda.NewLogHandler()` reads `AWS_LAMBDA_LOG_FORMAT` and `AWS_LAMBDA_LOG_LEVEL` set by the Lambda console or CDK, and auto-injects `requestId` into every log line (no manual wiring required):
 
 ```go
 import (
@@ -1502,7 +1502,7 @@ func TestGetUser(t *testing.T) {
 
 ## Production Patterns (mined from real projects)
 
-The sections below document patterns extracted from ~12 production Lambda projects. Where the pattern originates from a specific project it's noted explicitly — use that as a reference when you need the full context.
+The sections below document patterns extracted from ~12 production Lambda projects. Where the pattern originates from a specific project it's noted explicitly. Use that as a reference when you need the full context.
 
 ---
 
@@ -1510,7 +1510,7 @@ The sections below document patterns extracted from ~12 production Lambda projec
 
 Global vars are initialized once at cold start and reused across all invocations in that container's lifetime. Fail fast with `os.Exit(1)` or `log.Fatalf` so a bad environment surfaces as a clean runtime init error in CloudWatch rather than a misleading panic or a handler invocation that silently does nothing.
 
-The pattern from **emailz** (`cmd/email-forwarder/main.go`) — note the bounded timeout on `LoadDefaultConfig` to prevent a hung IMDS call from pinning the cold start indefinitely:
+The pattern from **emailz** (`cmd/email-forwarder/main.go`). Note the bounded timeout on `LoadDefaultConfig` to prevent a hung IMDS call from pinning the cold start indefinitely:
 
 ```go
 var (
@@ -1587,7 +1587,7 @@ func init() {
 
 **Rules:**
 - Load all env vars at the top of `init()` and fail immediately if required ones are missing.
-- Use `os.Exit(1)` (with `slog.Error`) or `log.Fatalf` — never `panic()`.
+- Use `os.Exit(1)` (with `slog.Error`) or `log.Fatalf`. Never `panic()`.
 - Wrap `config.LoadDefaultConfig` with a `context.WithTimeout` (10 s is enough).
 - Assign AWS clients to package-level vars so the handler function never calls `NewFromConfig`.
 
@@ -1595,7 +1595,7 @@ func init() {
 
 ### DynamoDB Single-Table with Typed Go Structs
 
-Every project uses `PK`/`SK` compound keys with entity-type prefixes and `dynamodbav` struct tags. **Never use `map[string]interface{}`** — DynamoDB's attribute marshaller corrupts ULIDs and RFC3339 timestamps when they go through `interface{}` round-trips.
+Every project uses `PK`/`SK` compound keys with entity-type prefixes and `dynamodbav` struct tags. **Never use `map[string]interface{}`**: DynamoDB's attribute marshaller corrupts ULIDs and RFC3339 timestamps when they go through `interface{}` round-trips.
 
 **Entity prefix inventory across projects:**
 
@@ -1605,7 +1605,7 @@ Every project uses `PK`/`SK` compound keys with entity-type prefixes and `dynamo
 | for-the-win | `USER#`, `GROUP#`, `LEADERBOARD#` |
 | regist | `USER#`, `REFRESH#`, `HASH#`, `MEETING#`, `CONTACT#` |
 | sophie | `WINE#`, `UPLOAD#`, `REVIEW#`, `ENRICHMENT#`, `AI_CALL#`, `ENTITY#` |
-| emailz | N/A — no DDB (SES → S3 only) |
+| emailz | N/A: no DDB (SES → S3 only) |
 
 **Standard struct shape** (from sophie's `internal/db/dynamodb.go`):
 
@@ -1617,7 +1617,7 @@ type WineItem struct {
     PK string `dynamodbav:"PK"` // WINE#{wineId}
     SK string `dynamodbav:"SK"` // METADATA
 
-    // Embed the domain model — avoids duplicating every field.
+    // Embed the domain model: avoids duplicating every field.
     Data models.Wine `dynamodbav:"Data"`
 
     // GSI keys (omitempty so sparse indexing works correctly)
@@ -1631,7 +1631,7 @@ type WineItem struct {
 **Key construction helpers** (from for-the-win's `internal/db/`):
 
 ```go
-// Key helpers — small functions prevent typos in ad-hoc string concat.
+// Key helpers: small functions prevent typos in ad-hoc string concat.
 func userPK(userID string) string            { return "USER#" + userID }
 func groupPK(groupID string) string          { return "GROUP#" + groupID }
 func leaderboardSK(period, date string) string {
@@ -1639,7 +1639,7 @@ func leaderboardSK(period, date string) string {
 }
 ```
 
-**Shared DB client wrapper** (from for-the-win and eleven9s — identical pattern):
+**Shared DB client wrapper** (from for-the-win and eleven9s, identical pattern):
 
 ```go
 // internal/db/client.go
@@ -1680,7 +1680,7 @@ import (
 )
 
 // New returns a freshly generated ULID string (26 chars, Crockford base32).
-// ULIDs sort lexicographically and encode a timestamp — preferred over UUID v4.
+// ULIDs sort lexicographically and encode a timestamp, preferred over UUID v4.
 func New() string {
     return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
 }
@@ -1755,14 +1755,14 @@ func handler(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.AP
 
 The `httpadapter` package is `github.com/awslabs/aws-lambda-go-api-proxy/httpadapter`.
 
-**Route parity test** — for-the-win's `TestRoutesMatchSpec` (`packages/api/internal/handlers/routes_test.go`) parses the Go 1.22+ `mux.HandleFunc` call strings with `go/ast` and compares them to `api.yaml` paths loaded via `github.com/getkin/kin-openapi/openapi3`. Any route in code but not in spec (or vice versa) fails the test. Run it with:
+**Route parity test**: for-the-win's `TestRoutesMatchSpec` (`packages/api/internal/handlers/routes_test.go`) parses the Go 1.22+ `mux.HandleFunc` call strings with `go/ast` and compares them to `api.yaml` paths loaded via `github.com/getkin/kin-openapi/openapi3`. Any route in code but not in spec (or vice versa) fails the test. Run it with:
 
 ```bash
 make test-api-spec
 # expands to: go test ./internal/handlers/ -run TestRoutesMatchSpec -v
 ```
 
-The spec also drives Swift client generation (`gen-swift-client`) and TypeScript types (`gen-go-types`) from the same YAML — one spec, four generated artifacts.
+The spec also drives Swift client generation (`gen-swift-client`) and TypeScript types (`gen-go-types`) from the same YAML: one spec, four generated artifacts.
 
 ---
 
@@ -1788,7 +1788,7 @@ func Error(ctx context.Context, code, msg string, args ...any) {
 }
 ```
 
-Usage: `logging.Error(ctx, logging.RGDB001, "token lookup failed", "error", err)` — the `error_code` field lets CloudWatch Insights group errors by type independently of the message string.
+Usage: `logging.Error(ctx, logging.RGDB001, "token lookup failed", "error", err)`. The `error_code` field lets CloudWatch Insights group errors by type independently of the message string.
 
 **2. Structured phase logging for multi-step Lambdas** (from sophie's `generate-article`):
 
@@ -1873,7 +1873,7 @@ func handler(ctx context.Context, rawEvent json.RawMessage) (*GenerateResult, er
     if err := json.Unmarshal(rawEvent, &sqsEvent); err == nil && len(sqsEvent.Records) > 0 {
         var envelope struct{ Detail json.RawMessage `json:"detail"` }
         if err := json.Unmarshal([]byte(sqsEvent.Records[0].Body), &envelope); err != nil {
-            // Malformed — drop, don't retry (parse errors are never retryable)
+            // Malformed: drop, don't retry (parse errors are never retryable)
             return &GenerateResult{Error: "malformed SQS body"}, nil
         }
         json.Unmarshal(envelope.Detail, &event)
@@ -1890,7 +1890,7 @@ func handler(ctx context.Context, rawEvent json.RawMessage) (*GenerateResult, er
 }
 ```
 
-**Scheduled cron** (from models-apresai — runs every 4 hours via CDK EventBridge rule):
+**Scheduled cron** (from models-apresai, runs every 4 hours via CDK EventBridge rule):
 
 ```typescript
 // infrastructure/lib/models-apresai-stack.ts
@@ -1908,7 +1908,7 @@ The Go handler for scheduled events receives an `events.CloudWatchEvent` (or `js
 
 ### STS AssumeRole Pattern
 
-Regist's `api-auth` Lambda issues scoped STS credentials so the iOS SDK can call DynamoDB and S3 directly without proxying through the API — this eliminates a per-request Lambda invocation for streaming workloads like Transcribe.
+Regist's `api-auth` Lambda issues scoped STS credentials so the iOS SDK can call DynamoDB and S3 directly without proxying through the API. This eliminates a per-request Lambda invocation for streaming workloads like Transcribe.
 
 The session policy restricts DDB to `USER#{userID}` leading keys and S3 to `{userID}/*` prefixes. Two scope levels are provided: full (DDB + S3 + Transcribe) and Transcribe-only for web clients.
 
@@ -1971,7 +1971,7 @@ func assumeRoleForUser(ctx context.Context, userID string) (*sts.AssumeRoleOutpu
 
 ### DDB Schema Enforcement (make ddb-lint)
 
-**eleven9s** declares every DynamoDB attribute in `docs/ddb-schema.yaml` and enforces it with `TestSchemaDrift` in `backend/internal/ddb/schema_test.go`. The YAML is the source of truth — edit it first, then update the `*Row` struct, then the handler, all in the same commit.
+**eleven9s** declares every DynamoDB attribute in `docs/ddb-schema.yaml` and enforces it with `TestSchemaDrift` in `backend/internal/ddb/schema_test.go`. The YAML is the source of truth: edit it first, then update the `*Row` struct, then the handler, all in the same commit.
 
 ```makefile
 # Root Makefile
@@ -1985,7 +1985,7 @@ ddb-lint:
 3. DDB type in YAML (`S`, `N`, `BOOL`) is consistent with the Go type.
 
 ```go
-// schema_test.go — register every entity you want validated
+// schema_test.go: register every entity you want validated
 types := map[string]reflect.Type{
     "User":   reflect.TypeOf(UserRow{}),
     "Media":  reflect.TypeOf(MediaRow{}),
@@ -2005,7 +2005,7 @@ Wire this into CI as `make ddb-lint` so a schema change that forgets to update t
 Every project applies four standard tags to the entire CDK app in `infrastructure/bin/<project>.ts`. This ensures all resources (Lambda, DDB, S3, CloudFront, API Gateway) carry consistent tags for Cost Explorer filtering.
 
 ```typescript
-// infrastructure/bin/myapp.ts — apply after creating the app, before synth
+// infrastructure/bin/myapp.ts: apply after creating the app, before synth
 const app = new cdk.App();
 new MyAppStack(app, 'MyAppStack', { env: { account: '...', region: 'us-east-1' } });
 
@@ -2015,7 +2015,7 @@ cdk.Tags.of(app).add('managed-by', 'cdk');
 cdk.Tags.of(app).add('owner',      'chad');
 ```
 
-`cdk.Tags.of(app).add(...)` applies the tag to every resource in every stack under the app via a CDK Aspect — no per-resource tagging required. Apply it to the app object, not the stack, so it propagates to nested stacks.
+`cdk.Tags.of(app).add(...)` applies the tag to every resource in every stack under the app via a CDK Aspect: no per-resource tagging required. Apply it to the app object, not the stack, so it propagates to nested stacks.
 
 Reference: `obsidian:resources/aws-cost-tagging.md` for the full tagging policy.
 
@@ -2035,7 +2035,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
 cd build && zip -q email-forwarder.zip bootstrap
 ```
 
-**Multiple Lambdas (eleven9s pattern — parallel-friendly via make's default jobserver):**
+**Multiple Lambdas (eleven9s pattern, parallel-friendly via make's default jobserver):**
 
 ```makefile
 LAMBDAS := api apple-webhook admin-ops sweep egress-analyzer
@@ -2045,7 +2045,7 @@ GOENV := GOOS=linux GOARCH=arm64 CGO_ENABLED=0
 
 build: $(LAMBDAS)
 
-# Pattern rule — each Lambda name expands to this recipe.
+# Pattern rule: each Lambda name expands to this recipe.
 $(LAMBDAS):
     @mkdir -p $(BUILD_DIR)/$@
     $(GOENV) go build $(GOFLAGS) -o $(BUILD_DIR)/$@/bootstrap ./cmd/$@
@@ -2088,7 +2088,7 @@ Usage: `make build-lambda-api-auth`.
 
 ### Powertools-for-Go
 
-**There is no Powertools for Lambda Go package.** The Python/TypeScript/Java Powertools libraries have no Go equivalent — the open feature request is `aws-powertools/powertools-lambda #82`. Do not suggest `aws-lambda-powertools-go` or any similar package name; it does not exist.
+**There is no Powertools for Lambda Go package.** The Python/TypeScript/Java Powertools libraries have no Go equivalent: the open feature request is `aws-powertools/powertools-lambda #82`. Do not suggest `aws-lambda-powertools-go` or any similar package name; it does not exist.
 
 Go developers substitute:
 - **Tracing**: `github.com/aws/aws-xray-sdk-go` (X-Ray SDK, used in emailz)
@@ -2116,7 +2116,7 @@ Go developers substitute:
 - Use global `map[string]interface{}` for DynamoDB (causes type corruption)
 - Ignore context cancellation
 - Create AWS clients inside handler functions
-- Use `panic()` in `init()` — prefer `log.Fatal` so failures surface as clean runtime init errors
+- Use `panic()` in `init()`: prefer `log.Fatal` so failures surface as clean runtime init errors
 - Log sensitive data (API keys, tokens, passwords)
 - Use CGO unless absolutely necessary
 - Deploy x86_64 when ARM64 is available
@@ -2137,7 +2137,7 @@ Go developers substitute:
 
 - **SnapStart**: Java, Python, .NET only. Go is not supported and no roadmap exists. Use Provisioned Concurrency for latency-sensitive Go functions.
 - **Powertools for Lambda**: Available for Python, TypeScript, Java, and .NET. There is no Go implementation (open feature request: aws-powertools/powertools-lambda #82). Go developers use `slog` + `aws-xray-sdk-go` + hand-rolled middleware instead.
-- **Runtime lifecycle**: `provided.al2023` deprecation is June 30, 2029. `provided.al2` deprecates July 31, 2026 — do not use for new functions.
+- **Runtime lifecycle**: `provided.al2023` deprecation is June 30, 2029. `provided.al2` deprecates July 31, 2026. Do not use for new functions.
 - **AWS SDK for Go**: v2 is the current and actively maintained SDK. No v3 is announced or planned.
 - **CDK**: v2 is the current major. AWS has confirmed there will be no CDKv3.
 

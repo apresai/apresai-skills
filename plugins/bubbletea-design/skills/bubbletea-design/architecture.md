@@ -1,4 +1,4 @@
-# Architecture — Bubble Tea v2
+# Architecture: Bubble Tea v2
 
 The Elm pattern, message routing, command pattern, and the few non-obvious patterns (streaming, ticking, modal state) that turn a toy TUI into a production app.
 
@@ -42,7 +42,7 @@ type View struct {
 }
 ```
 
-The runtime reads this struct EVERY render. So you can change `AltScreen`, `MouseMode`, etc. by mutating model state — no commands needed.
+The runtime reads this struct EVERY render. So you can change `AltScreen`, `MouseMode`, etc. by mutating model state. No commands needed.
 
 **Common shape** (set fields once, set Content from your render):
 
@@ -91,7 +91,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 **Key gotchas**:
 - `tea.KeyMsg` and `tea.MouseMsg` are **interfaces** in v2. Always match the concrete types (`KeyPressMsg`, `MouseClickMsg`, etc.).
-- `msg.String()` on `KeyPressMsg` returns the keystroke including modifiers — `"ctrl+c"`, `"shift+enter"`, `"alt+x"`, `"esc"`, `"pgup"`, etc.
+- `msg.String()` on `KeyPressMsg` returns the keystroke including modifiers: `"ctrl+c"`, `"shift+enter"`, `"alt+x"`, `"esc"`, `"pgup"`, etc.
 - Bare letter keys come as the letter: `"a"`, not `"KeyA"`.
 
 ## Commands
@@ -117,12 +117,12 @@ return m, tea.Sequence(loadData(), saveData())
 ```
 
 Common commands shipped with bubbletea:
-- `tea.Quit` — exit the program
-- `tea.Batch(cmd1, cmd2, ...)` — run concurrently
-- `tea.Sequence(cmd1, cmd2, ...)` — run in order (v2 renamed from v1's `Sequentially`)
-- `tea.Tick(d, fn)` — schedule a msg after duration `d`
-- `tea.Println(args...)` — print above the alt-screen (rarely useful)
-- `tea.SetWindowTitle(s)` — *use `v.WindowTitle = s` in View() instead in v2*
+- `tea.Quit`: exit the program
+- `tea.Batch(cmd1, cmd2, ...)`: run concurrently
+- `tea.Sequence(cmd1, cmd2, ...)`: run in order (v2 renamed from v1's `Sequentially`)
+- `tea.Tick(d, fn)`: schedule a msg after duration `d`
+- `tea.Println(args...)`: print above the alt-screen (rarely useful)
+- `tea.SetWindowTitle(s)`: *use `v.WindowTitle = s` in View() instead in v2*
 
 ## Async patterns
 
@@ -183,7 +183,7 @@ func runApp() error {
 }
 ```
 
-**Why this works**: Bubble Tea's event loop is single-threaded. `prog.Send` enqueues a message; `Update` processes it on the main goroutine. Any state mutation in `Update` is automatically serialized — no mutex needed on the model.
+**Why this works**: Bubble Tea's event loop is single-threaded. `prog.Send` enqueues a message; `Update` processes it on the main goroutine. Any state mutation in `Update` is automatically serialized. No mutex needed on the model.
 
 **Why a recursive `tea.Cmd` doesn't work**: SDK iterators like `openai-go`'s `*Stream` aren't re-entrable across multiple Cmd invocations. The goroutine + Send pattern keeps the iterator alive in one place.
 
@@ -237,7 +237,7 @@ case deltaMsg:
     }
 ```
 
-This pattern unlocks "type while waiting" — see `patterns.md` for the full recipe.
+This pattern unlocks "type while waiting"; see `patterns.md` for the full recipe.
 
 ## State serialization (when concurrency bites)
 
@@ -296,10 +296,10 @@ func (m model) View() tea.View {
 ## Init() patterns
 
 Common Init returns:
-- `nil` — nothing to do at startup
-- `m.spinner.Tick` — start a spinner immediately
-- `tea.Batch(textarea.Blink, tea.RequestBackgroundColor)` — multiple at once
-- `tea.RequestBackgroundColor` — get a `tea.BackgroundColorMsg` so you can set up adaptive styles before first render
+- `nil`: nothing to do at startup
+- `m.spinner.Tick`: start a spinner immediately
+- `tea.Batch(textarea.Blink, tea.RequestBackgroundColor)`: multiple at once
+- `tea.RequestBackgroundColor`: get a `tea.BackgroundColorMsg` so you can set up adaptive styles before first render
 
 For adaptive theming, request the bg color in Init:
 
@@ -319,7 +319,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 ## Composition
 
-Bubble Tea has no formal "component" abstraction — components ARE models. Compose by embedding a `Model` field, calling its `Update`, and rendering its `View`:
+Bubble Tea has no formal "component" abstraction. Components ARE models. Compose by embedding a `Model` field, calling its `Update`, and rendering its `View`:
 
 ```go
 type model struct {
@@ -354,10 +354,10 @@ func (m *model) View() tea.View {
 
 Return `tea.Quit` from Update to exit gracefully. The program writes back to the inline screen (alt screen exits automatically), restores the cursor, and returns from `p.Run()`.
 
-If you spawned goroutines, they outlive `tea.Quit`. `prog.Send` after Quit is a no-op (documented behavior), so streaming goroutines don't panic — but they keep running until the underlying iterator exits. For long-running goroutines, also pass a context that gets cancelled on Quit.
+If you spawned goroutines, they outlive `tea.Quit`. `prog.Send` after Quit is a no-op (documented behavior), so streaming goroutines don't panic, but they keep running until the underlying iterator exits. For long-running goroutines, also pass a context that gets cancelled on Quit.
 
 ## See also
 
-- `components.md` — how to wire up textarea/viewport/list/table inside this architecture
-- `patterns.md` — complete code recipes for chat, palette, dashboard, form, etc.
-- `gotchas.md` — the bugs that bite first-time v2 users
+- `components.md`: how to wire up textarea/viewport/list/table inside this architecture
+- `patterns.md`: complete code recipes for chat, palette, dashboard, form, etc.
+- `gotchas.md`: the bugs that bite first-time v2 users

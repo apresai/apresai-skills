@@ -5,7 +5,7 @@ description: Release via Xcode Cloud - bump version, tag, and push to trigger Xc
 
 # Release via Xcode Cloud
 
-Bump version, create annotated tag, and push to trigger Xcode Cloud TestFlight build. No local archive or upload — the build happens entirely on Xcode Cloud with cloud-managed signing.
+Bump version, create annotated tag, and push to trigger Xcode Cloud TestFlight build. No local archive or upload: the build happens entirely on Xcode Cloud with cloud-managed signing.
 
 ## Step 1: Validate Requirements
 
@@ -42,7 +42,7 @@ The most common script is `ci_post_clone.sh`, which runs after Xcode Cloud clone
 
 ```bash
 #!/bin/sh
-# ci_scripts/ci_post_clone.sh — canonical Xcode Cloud setup script
+# ci_scripts/ci_post_clone.sh: canonical Xcode Cloud setup script
 set -e
 brew install xcodegen
 cd "$CI_WORKSPACE"   # Xcode Cloud sets this env var to the repo root
@@ -54,7 +54,7 @@ If no `ci_scripts/` directory is found, ask:
 
 ### 1.4 Verify Tag Trigger Configuration
 
-Xcode Cloud workflows are configured in App Store Connect under the app's Xcode Cloud tab. The tag trigger is set in the workflow's "Start Conditions" section — it cannot be verified locally. Confirm with the user that their Xcode Cloud workflow is configured to trigger on tags matching `v*`.
+Xcode Cloud workflows are configured in App Store Connect under the app's Xcode Cloud tab. The tag trigger is set in the workflow's "Start Conditions" section. It cannot be verified locally. Confirm with the user that their Xcode Cloud workflow is configured to trigger on tags matching `v*`.
 
 To check recently pushed tags:
 ```bash
@@ -85,9 +85,9 @@ make spec-test
 ```
 
 This runs:
-1. `lint-api` — Redocly lint on `api.yaml`
-2. `test-api-spec` — Go route parity test (routes in `main.go` match spec paths)
-3. `generate-types` — Regenerate TypeScript types and verify they're up to date
+1. `lint-api`: Redocly lint on `api.yaml`
+2. `test-api-spec`: Go route parity test (routes in `main.go` match spec paths)
+3. `generate-types`: Regenerate TypeScript types and verify they're up to date
 
 If any check fails, fix the issue before proceeding. Do NOT skip this step.
 
@@ -121,7 +121,7 @@ release: commit-version
     TAG="v$(MAJOR).$(MINOR).$$NEW_BUILD"; \
     git tag -a "$$TAG" -m "Release $$TAG"; \
     git push origin HEAD "$$TAG"; \
-    echo "Tag $$TAG pushed — Xcode Cloud will start the build."
+    echo "Tag $$TAG pushed. Xcode Cloud will start the build."
 ```
 
 This command:
@@ -136,7 +136,7 @@ Xcode Cloud detects the `v*` tag and starts the build remotely. No local archive
 **Version numbering in Xcode Cloud projects**: for-the-win uses `MAJOR.MINOR.BUILD` where `BUILD` is the monotonically incrementing `BUILD_NUMBER`. All four plists (main app, Watch app, Watch widgets, iPhone widgets) are updated atomically in `increment-build`:
 
 ```makefile
-# from for-the-win/ios/Makefile — syncs version across all targets
+# from for-the-win/ios/Makefile: syncs version across all targets
 increment-build:
     @BUILD_NUM=$$(cat BUILD_NUMBER); NEW_BUILD=$$((BUILD_NUM + 1)); \
     echo $$NEW_BUILD > BUILD_NUMBER; \
@@ -172,7 +172,7 @@ Xcode Cloud builds are asynchronous. Monitor progress at:
 https://appstoreconnect.apple.com/apps/{APP_ID}/xcode-cloud
 ```
 
-The build typically takes 10-20 minutes. Once complete, the build appears in TestFlight automatically — no separate upload step.
+The build typically takes 10-20 minutes. Once complete, the build appears in TestFlight automatically. No separate upload step.
 
 **ci_scripts patterns**: The `ci_post_clone.sh` script is the most important. It runs in a clean environment without Homebrew packages pre-installed. Common setup:
 
@@ -194,23 +194,23 @@ xcodegen generate
 ```
 
 Environment variables available in Xcode Cloud scripts:
-- `CI_WORKSPACE` — repository root
-- `CI_BUILD_NUMBER` — Xcode Cloud's build number (if auto-increment is on)
-- `CI_TAG` — the tag that triggered the workflow (for tag-triggered builds)
-- `CI_BRANCH` — the branch (for branch-triggered builds)
+- `CI_WORKSPACE`: repository root
+- `CI_BUILD_NUMBER`: Xcode Cloud's build number (if auto-increment is on)
+- `CI_TAG`: the tag that triggered the workflow (for tag-triggered builds)
+- `CI_BRANCH`: the branch (for branch-triggered builds)
 
 ## Step 7: Report Results
 
 After completion, report:
 - Version released (run `make info` to confirm)
 - Tag name created and pushed
-- Note: Xcode Cloud build is async — takes 10-20 minutes
+- Note: Xcode Cloud build is async (takes 10-20 minutes)
 - Monitor at: `https://appstoreconnect.apple.com/apps/{APP_ID}/xcode-cloud`
 
 ## Notes
 
-- No local xcodebuild, archive, or upload — Xcode Cloud handles everything
-- Cloud-managed code signing — no local provisioning profiles or certificates needed
+- No local xcodebuild, archive, or upload (Xcode Cloud handles everything)
+- Cloud-managed code signing: no local provisioning profiles or certificates needed
 - Xcode Cloud uses the API key configured in App Store Connect (not the local `.env`)
 - TestFlight processing by Apple takes an additional 10-30 minutes after the Xcode Cloud build completes
 - Email notification arrives when build is ready for testing
@@ -227,7 +227,7 @@ If `make release` fails:
 If Xcode Cloud build fails:
 - Monitor at: `https://appstoreconnect.apple.com/apps/{APP_ID}/xcode-cloud`
 - Click the failed build to see logs
-- Check `ci_scripts/ci_post_clone.sh` for setup issues — missing `brew install` calls are the most common cause
+- Check `ci_scripts/ci_post_clone.sh` for setup issues: missing `brew install` calls are the most common cause
 - Verify the Xcode Cloud workflow is configured with a `v*` tag trigger
 - If `xcodegen generate` fails in CI, verify `project.yml` is committed (not gitignored)
 

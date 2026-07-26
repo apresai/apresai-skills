@@ -52,6 +52,6 @@ cd infrastructure && npx cdk deploy
 ## Requirements
 
 - Next.js 15.x (OpenNext v3.10) or Next.js 16.x (OpenNext v4 + Adapter API)
-- Node.js 22+ — Lambda runtime `NODEJS_22_X` (`NODEJS_20_X` reached Lambda EOL 2026-04-30)
+- Node.js 22+: Lambda runtime `NODEJS_22_X` (`NODEJS_20_X` reached Lambda EOL 2026-04-30)
 - AWS CDK v2
 - AWS account with appropriate permissions

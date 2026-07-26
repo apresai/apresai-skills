@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# untracked-guard.test.sh — run: bash untracked-guard.test.sh
+# untracked-guard.test.sh (run: bash untracked-guard.test.sh)
 #
 # WHY THIS EXISTS
 # The untracked guard went through four review rounds and each of the first

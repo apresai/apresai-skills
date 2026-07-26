@@ -1,4 +1,4 @@
-# Components — Bubbles v2 catalog
+# Components: Bubbles v2 catalog
 
 Bubbles ships pre-built components that solve 80% of the TUI surface area. Default to using them; only roll your own when you've outgrown a specific bubble. Every component implements the Model interface (`Update`, `View`) and is meant to be embedded in your parent model.
 
@@ -41,7 +41,7 @@ ta.CharLimit = 0           // 0 = unlimited
 ta.Focus()
 ```
 
-**Key bindings**: `ta.KeyMap` is a struct of `key.Binding` values. Defaults via `textarea.DefaultKeyMap()` (now a function, not a variable). Common rebind — change InsertNewline so bare Enter falls through to your dispatcher:
+**Key bindings**: `ta.KeyMap` is a struct of `key.Binding` values. Defaults via `textarea.DefaultKeyMap()` (now a function, not a variable). Common rebind. Change InsertNewline so bare Enter falls through to your dispatcher:
 
 ```go
 ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"))
@@ -156,7 +156,7 @@ vp.Style = lipgloss.NewStyle().
 
 ## list
 
-A filterable, paginated selection list. The most flexible bubble — you provide `list.Item`s and a `list.ItemDelegate` that controls rendering.
+A filterable, paginated selection list. The most flexible bubble: you provide `list.Item`s and a `list.ItemDelegate` that controls rendering.
 
 ```go
 import "charm.land/bubbles/v2/list"
@@ -187,17 +187,17 @@ l.SetFilteringEnabled(true)
 ```
 
 **Key methods**:
-- `SelectedItem() list.Item` — what's under the cursor
-- `Index() int` — current cursor position
-- `SetItems([]list.Item)` — replace contents
-- `SetSize(w, h)` — resize on `tea.WindowSizeMsg`
+- `SelectedItem() list.Item`: what's under the cursor
+- `Index() int`: current cursor position
+- `SetItems([]list.Item)`: replace contents
+- `SetSize(w, h)`: resize on `tea.WindowSizeMsg`
 - `ResetFilter()`
 
 **Filtering** with `SetFilteringEnabled(true)`: press `/` to start filtering. Esc clears. Items whose `FilterValue()` matches are kept.
 
 **Statusbar**: `SetShowStatusBar(true)` shows "5 items · filtered" at the bottom. Customize via `Styles.StatusBar`.
 
-**For a simpler list** (no fuzzy filter, no statusbar), use a raw delegate with substring matching — see `patterns.md` for the model-picker recipe.
+**For a simpler list** (no fuzzy filter, no statusbar), use a raw delegate with substring matching; see `patterns.md` for the model-picker recipe.
 
 ---
 
@@ -267,7 +267,7 @@ spinner.New(spinner.WithSpinner(spinner.Spinner{
 }))
 ```
 
-**Stop a spinner**: just stop returning Tick from your Update. There's no explicit "stop" call — when the model decides it doesn't need the spinner anymore, drop the `case spinner.TickMsg` handler or stop returning its Cmd.
+**Stop a spinner**: just stop returning Tick from your Update. There's no explicit "stop" call: when the model decides it doesn't need the spinner anymore, drop the `case spinner.TickMsg` handler or stop returning its Cmd.
 
 ---
 
@@ -479,7 +479,7 @@ case timer.TickMsg:
 
 ## cursor
 
-The underlying blinking cursor primitive. Most apps don't use it directly — textinput and textarea embed it. If you build your own input widget, this is what you'd embed.
+The underlying blinking cursor primitive. Most apps don't use it directly; textinput and textarea embed it. If you build your own input widget, this is what you'd embed.
 
 ```go
 import "charm.land/bubbles/v2/cursor"
@@ -493,7 +493,7 @@ c.SetChar("█")  // or use the default block cursor
 
 ## Bonus: huh (forms)
 
-`charm.land/huh/v2` is a separate library (not part of bubbles) for building forms — input groups with validation, multi-step flows, accessible mode for screen readers. It can be used standalone OR embedded in a Bubble Tea model.
+`charm.land/huh/v2` is a separate library (not part of bubbles) for building forms: input groups with validation, multi-step flows, accessible mode for screen readers. It can be used standalone OR embedded in a Bubble Tea model.
 
 ```go
 import "charm.land/huh/v2"
@@ -525,7 +525,7 @@ form := huh.NewForm(
 if err := form.Run(); err != nil {
     log.Fatal(err)
 }
-fmt.Printf("Hello, %s — %s\n", name, role)
+fmt.Printf("Hello, %s (%s)\n", name, role)
 ```
 
 Field types: `Input`, `Text` (multi-line), `Select`, `MultiSelect`, `Confirm`, `Note`, `FilePicker`. Groups support `WithCondition` for branching flows.
@@ -553,5 +553,5 @@ Field types: `Input`, `Text` (multi-line), `Select`, `MultiSelect`, `Confirm`, `
 
 ## See also
 
-- `patterns.md` — full recipes that combine these components (chat REPL with viewport + textarea + footer, etc.)
-- `gotchas.md` — v1→v2 changes per component (constructors, KeyMap-as-function, field-to-method renames)
+- `patterns.md`: full recipes that combine these components (chat REPL with viewport + textarea + footer, etc.)
+- `gotchas.md`: v1→v2 changes per component (constructors, KeyMap-as-function, field-to-method renames)

@@ -8,13 +8,13 @@ description: >-
   to Bedrock-backed Codex, `/codex-br review` for a built-in code review of the
   current git diff, or `/codex-br adversarial-review` for a steerable challenge
   review. Requires a one-time setup (the `br` profile, a Bedrock bearer token in
-  `~/.codex/.env`, and optionally the `codex-br` shell alias) — see the plugin
+  `~/.codex/.env`, and optionally the `codex-br` shell alias). See the plugin
   README. Use only when you want Codex routed through Bedrock; the `codex:*`
   plugin commands cover the default ChatGPT path.
 allowed-tools: Bash
 ---
 
-# codex-br — Codex on Amazon Bedrock
+# codex-br: Codex on Amazon Bedrock
 
 This skill runs the Codex CLI against **Amazon Bedrock** instead of the default
 ChatGPT/OpenAI backend, in a headless, non-interactive form (`codex exec`). It is
@@ -29,7 +29,7 @@ It deliberately **bypasses the `codex-companion.mjs` app-server runtime** used b
 `/codex:rescue` and `/codex:review`. That runtime spawns `codex app-server` with
 no profile or config override (and inherits the host process env), so it can only
 reach the **default** profile (the ChatGPT/OpenAI backend). The only reliable way
-to route through Bedrock is a direct `codex exec --profile br` call — which is what
+to route through Bedrock is a direct `codex exec --profile br` call, which is what
 this skill does.
 
 **One-time setup is required** (the `br` profile, the token in `~/.codex/.env`,
@@ -63,13 +63,13 @@ low-stakes passes, `--effort medium` is materially cheaper and faster.
 Note: `openai.gpt-5.5` on Bedrock rejects `minimal` (and may reject `none`) with
 an instant HTTP 400. Stick to `low | medium | high | xhigh`.
 
-## Step 1 — Preflight (every invocation)
+## Step 1: Preflight (every invocation)
 
 **Never source `~/.codex/.env` into the agent shell.** Sourcing executes the
 credential file as shell code and exports everything in it into the agent's
 environment. It is also unnecessary: the Codex CLI loads `~/.codex/.env` natively,
 even in clean / headless shells (verified 2026-07-07 by running `codex exec` with
-`AWS_BEARER_TOKEN_BEDROCK` explicitly unset — it authenticated). The token never
+`AWS_BEARER_TOKEN_BEDROCK` explicitly unset: it authenticated). The token never
 needs to enter your shell.
 
 Run these non-executing checks (one Bash call; they only read, never source):
@@ -87,9 +87,9 @@ Guard rails:
 - `MISSING: token line` → stop and say the Bedrock token is not pinned in `~/.codex/.env` (set it up per the README).
 - `WARN: not chmod 600` → proceed, but tell the user to run `chmod 600 ~/.codex/.env`.
 - Never print, echo, or grep -o the token value; the checks above only test for the line's presence.
-- If a later `codex` call fails with an auth error despite these checks passing, surface Codex's stderr (Step 3) — do not start sourcing the file to "fix" it.
+- If a later `codex` call fails with an auth error despite these checks passing, surface Codex's stderr (Step 3). Do not start sourcing the file to "fix" it.
 
-## Step 2a — `task` subcommand
+## Step 2a: `task` subcommand
 
 Delegate a task to Bedrock-backed Codex. **Write-capable by default**
 (`--sandbox workspace-write`); pass `--read` for a read-only run (diagnosis /
@@ -124,7 +124,7 @@ codex --profile br -c model_reasoning_effort="xhigh" exec --sandbox workspace-wr
 CODEXBR_PROMPT
 ```
 
-## Step 2b — `review` subcommand (built-in reviewer)
+## Step 2b: `review` subcommand (built-in reviewer)
 
 Code-review the current repository on Bedrock using Codex's built-in reviewer.
 Defaults to the uncommitted working tree (staged + unstaged + untracked):
@@ -138,14 +138,14 @@ codex --profile br -c model_reasoning_effort="xhigh" exec review -o "$OUT" --unc
 - `--commit <sha>` → review one commit: `... exec review --commit <sha>`.
 - `--model <id>` → add `-m <id>`.
 - `--effort <level>` → replace the default `xhigh` in `-c model_reasoning_effort="<level>"`.
-- Any leftover natural-language text → pass as the trailing `[PROMPT]` (custom review instructions). Custom instructions must be review guidance only — never text that asks Codex to modify files; the built-in reviewer path takes no `--sandbox` flag, so its read-only behavior is by convention, not enforcement.
+- Any leftover natural-language text → pass as the trailing `[PROMPT]` (custom review instructions). Custom instructions must be review guidance only, never text that asks Codex to modify files; the built-in reviewer path takes no `--sandbox` flag, so its read-only behavior is by convention, not enforcement.
 - `review` requires a git repository.
 
 This is the Bedrock twin of `/codex:review`: a normal, non-adversarial pass. For
 a review that challenges the design instead of just scanning for defects, use
 `adversarial-review` below.
 
-## Step 2c — `adversarial-review` subcommand (steerable challenge review)
+## Step 2c: `adversarial-review` subcommand (steerable challenge review)
 
 The Bedrock twin of `/codex:adversarial-review`: a **steerable** review that
 questions the chosen implementation, design, tradeoffs, and assumptions rather
@@ -161,7 +161,7 @@ Pick the git command for the target and inline it into the prompt:
 
 Untracked files are part of the change: `git status --short` lists their names
 but not their contents, so a review that stops at the diff can miss entire new
-files. The prompt below instructs Codex to read every `??` path in full — do not
+files. The prompt below instructs Codex to read every `??` path in full. Do not
 remove that instruction when customizing.
 
 Run read-only, feeding the prompt via stdin. Substitute `<GIT COMMAND FOR
@@ -176,7 +176,7 @@ confidence in the change, not to validate it.
 
 First gather the change under review by running: <GIT COMMAND FOR TARGET>
 If that output lists untracked (`??`) files, read each one in full and treat its
-contents as a new-file addition that is part of the change under review — a
+contents as a new-file addition that is part of the change under review: a
 filename alone is not reviewable content.
 Target: <TARGET LABEL, e.g. uncommitted working tree>
 User focus: <FOCUS TEXT OR "none">
@@ -214,12 +214,12 @@ CODEXBR_PROMPT
 - `--model <id>` → add `-m <id>`; `--effort <level>` → replace the default `xhigh`.
 - Requires a git repository. Read-only; it never edits.
 
-## Step 3 — Return the result
+## Step 3: Return the result
 
 Every template above writes Codex's **final message** to a unique temp file via
 `-o "$OUT"` (`-o` is an `exec`-level flag: it goes after `exec`, and a fresh
 `mktemp` path avoids clobbering concurrent runs). Read that file and return its
-contents **verbatim**, like `/codex:rescue` does — no summary, paraphrase, or
+contents **verbatim**, like `/codex:rescue` does: no summary, paraphrase, or
 added commentary before or after it. Do not paste the full streamed event log
 from stdout into the conversation; stdout is for diagnosing failures.
 
@@ -233,7 +233,7 @@ expired token, or a model that rejects `xhigh`) rather than swallowing it.
 - `review` uses Codex's built-in reviewer; `adversarial-review` uses a custom
   read-only challenge prompt. Both are read-only and never edit.
 - This runs Codex **non-interactively** (`exec`); there is no background/job
-  tracking, `/codex:status`, `/codex:result`, or `/codex:cancel` here — those
+  tracking, `/codex:status`, `/codex:result`, or `/codex:cancel` here. Those
   belong to the companion runtime, which is locked to the default backend.
   Foreground only.
 - `openai.gpt-5.5` does not appear in `aws bedrock list-foundation-models` (as of
@@ -241,4 +241,4 @@ expired token, or a model that rejects `xhigh`) rather than swallowing it.
   standard runtime surface). Use the curl check in the README to confirm access,
   not that command.
 - To run it yourself in a terminal, the interactive equivalent is the `codex-br`
-  shell alias (`codex-br "..."`) — see the README.
+  shell alias (`codex-br "..."`). See the README.

@@ -1,4 +1,4 @@
-# codex-br — Run Codex on Amazon Bedrock
+# codex-br: Run Codex on Amazon Bedrock
 
 Run [OpenAI Codex](https://developers.openai.com/codex/cli/) from inside Claude
 Code, but routed through **Amazon Bedrock** (`openai.gpt-5.5`, provider
@@ -42,7 +42,7 @@ is the economical choice for routine passes.
 
 ## One-time setup
 
-The skill itself is stateless — it just runs `codex --profile br exec ...`. The
+The skill itself is stateless: it just runs `codex --profile br exec ...`. The
 setup below is what makes that profile resolve to Bedrock. Do it once.
 
 ### 1. Create the `br` Codex profile
@@ -61,8 +61,8 @@ region = "us-east-2"
 The built-in `amazon-bedrock` provider reads `AWS_BEARER_TOKEN_BEDROCK` (then the
 normal AWS credential chain) and auto-strips the OpenAI-hosted tools
 (`web_search`, `image_generation`) that Bedrock rejects, so it "just works." Your
-default Codex config (no `--profile`) is untouched and stays on ChatGPT/OpenAI —
-this is on-demand, not global.
+default Codex config (no `--profile`) is untouched and stays on ChatGPT/OpenAI.
+This is on-demand, not global.
 
 ### 2. Pin the token in `~/.codex/.env`
 
@@ -79,7 +79,7 @@ mv ~/.codex/.env.tmp ~/.codex/.env
 chmod 600 ~/.codex/.env
 ```
 
-Re-run this after the Bedrock token rotates — it replaces only the
+Re-run this after the Bedrock token rotates: it replaces only the
 `AWS_BEARER_TOKEN_BEDROCK` line and preserves everything else.
 
 ### 3. Add the `codex-br` shell alias (for interactive use)
@@ -144,7 +144,7 @@ ln -s ~/dev/apresai-skills/plugins/codex-br/skills/codex-br \
 ```
 
 The marketplace install is the right default. A symlink serves whatever branch
-the clone has checked out — switch branches (or check out one where this plugin
+the clone has checked out. Switch branches (or check out one where this plugin
 doesn't exist) and the skill silently changes or dangles. Use it only while
 actively developing the skill.
 
@@ -159,7 +159,7 @@ actively developing the skill.
   HTTP 400). Valid values are `low | medium | high | xhigh`. The skill defaults
   to `xhigh`.
 - **A `200` with `output_tokens: 0`** from the mantle endpoint is a transient
-  server-side generation hiccup, not a config fault — retry before escalating.
+  server-side generation hiccup, not a config fault. Retry before escalating.
 - **No background jobs.** This skill runs Codex non-interactively (`codex exec`),
   so there is no `/codex:status` / `/result` / `/cancel`. For that, use the
   ChatGPT-backed `codex:*` plugin. Background/job tracking lives in an app-server

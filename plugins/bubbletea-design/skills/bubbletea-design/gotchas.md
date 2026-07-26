@@ -1,4 +1,4 @@
-# Gotchas — v1→v2 migration & common bugs
+# Gotchas: v1→v2 migration & common bugs
 
 The list of things that bit real projects. Read top-to-bottom before your first v2 build; check the section that matches your symptom otherwise.
 
@@ -24,7 +24,7 @@ import (
 )
 ```
 
-The `charm.land` domain redirects to the canonical module path. The official `github.com/charmbracelet/bubbletea/v2` import path is NOT directly importable — `go get` will fail with "module declares its path as: charm.land/bubbletea/v2 but was required as: github.com/charmbracelet/bubbletea/v2". **Always use `charm.land/...` in v2.**
+The `charm.land` domain redirects to the canonical module path. The official `github.com/charmbracelet/bubbletea/v2` import path is NOT directly importable: `go get` will fail with "module declares its path as: charm.land/bubbletea/v2 but was required as: github.com/charmbracelet/bubbletea/v2". **Always use `charm.land/...` in v2.**
 
 ---
 
@@ -44,7 +44,7 @@ func (m model) View() tea.View {
 }
 ```
 
-The View struct holds your rendered string in `Content` plus terminal-level flags (AltScreen, MouseMode, KeyboardEnhancements, Cursor, WindowTitle, BackgroundColor, etc.). All of those used to be `tea.WithAltScreen()` etc. as Program options — now they live on the View, and you set them every render.
+The View struct holds your rendered string in `Content` plus terminal-level flags (AltScreen, MouseMode, KeyboardEnhancements, Cursor, WindowTitle, BackgroundColor, etc.). All of those used to be `tea.WithAltScreen()` etc. as Program options. Now they live on the View, and you set them every render.
 
 ---
 
@@ -57,8 +57,8 @@ The View struct holds your rendered string in `Content` plus terminal-level flag
 | `tea.WithMouseAllMotion()` | `view.MouseMode = tea.MouseModeAllMotion` |
 | `tea.WithReportFocus()` | `view.ReportFocus = true` |
 | `tea.WithoutBracketedPaste()` | `view.DisableBracketedPasteMode = true` |
-| `tea.WithInputTTY()` | Removed — v2 handles automatically |
-| `tea.WithANSICompressor()` | Removed — new renderer optimizes automatically |
+| `tea.WithInputTTY()` | Removed: v2 handles automatically |
+| `tea.WithANSICompressor()` | Removed: new renderer optimizes automatically |
 | `tea.EnterAltScreen` / `tea.ExitAltScreen` | Toggle `view.AltScreen` |
 | `tea.HideCursor` / `tea.ShowCursor` | Set/unset `view.Cursor` |
 | `tea.SetWindowTitle("X")` | `view.WindowTitle = "X"` |
@@ -110,7 +110,7 @@ case tea.MouseWheelMsg:
 case tea.MouseMotionMsg:
 ```
 
-To get the X/Y you now call `msg.Mouse()` — the message is an interface, the concrete Mouse value is behind that method.
+To get the X/Y you now call `msg.Mouse()`: the message is an interface, the concrete Mouse value is behind that method.
 
 Button constants also renamed:
 
@@ -162,7 +162,7 @@ Same change for `textinput.DefaultKeyMap()` and `paginator.DefaultKeyMap()`. It'
 
 **Symptom**: `cannot select on .Focused (type func() Styles ...)`.
 
-In v1, components like textarea had `m.Styles` as a struct field — directly mutable:
+In v1, components like textarea had `m.Styles` as a struct field, directly mutable:
 
 ```go
 // v1
@@ -227,7 +227,7 @@ return m.spinner.Tick  // method
 
 ## 12. `textarea.Blink` exists; per-component Blink is per-instance
 
-`textarea.Blink` is a package-level `tea.Cmd` for the textarea's cursor — still exported in v2. You return it from `Init`. The same applies to textinput.
+`textarea.Blink` is a package-level `tea.Cmd` for the textarea's cursor, still exported in v2. You return it from `Init`. The same applies to textinput.
 
 ```go
 func (m model) Init() tea.Cmd {
@@ -275,7 +275,7 @@ tea.Sequence(cmd1, cmd2)
 // v1
 lipgloss.AdaptiveColor{Light: "#fff", Dark: "#000"}
 
-// v2 — use compat package OR LightDark helper
+// v2: use compat package OR LightDark helper
 compat.AdaptiveColor{Light: lipgloss.Color("#fff"), Dark: lipgloss.Color("#000")}
 lipgloss.LightDark(isDark)(light, dark)
 ```
@@ -327,7 +327,7 @@ Document the fallback. Terminals that support it: Ghostty, Kitty, WezTerm, foot,
 
 **Cause**: Multiple goroutines (e.g., concurrent chat submits) calling methods on the same `*model` directly, bypassing the Bubble Tea event loop.
 
-**Fix**: Goroutines must only `prog.Send(msg)` — never mutate model state. The event loop serializes all mutations inside `Update`.
+**Fix**: Goroutines must only `prog.Send(msg)`, never mutate model state. The event loop serializes all mutations inside `Update`.
 
 If a goroutine needs to read model state, snapshot it before starting:
 
@@ -352,7 +352,7 @@ The TUI applies the result in Update, which is single-threaded.
 
 **Symptom**: Layout works the first frame but breaks after resize, OR the initial frame is wrong sized.
 
-**Fix**: Always handle `WindowSizeMsg` and recompute every layout-relevant size. Don't hardcode 80x24 in your model — the message fires at startup with the real dimensions.
+**Fix**: Always handle `WindowSizeMsg` and recompute every layout-relevant size. Don't hardcode 80x24 in your model. The message fires at startup with the real dimensions.
 
 ```go
 case tea.WindowSizeMsg:
@@ -439,7 +439,7 @@ style := lipgloss.NewStyle().
 
 **Cause**: The user pressed Ctrl+C immediately. The command was scheduled, but `Quit` took precedence.
 
-**Fix**: This is expected and usually fine. Don't put critical setup in `Init` commands — put it in the model constructor before `tea.NewProgram(m)`.
+**Fix**: This is expected and usually fine. Don't put critical setup in `Init` commands. Put it in the model constructor before `tea.NewProgram(m)`.
 
 ---
 
@@ -447,7 +447,7 @@ style := lipgloss.NewStyle().
 
 **Symptom**: Only one of your Init commands fires.
 
-**Fix**: `tea.Batch(cmd1, cmd2, ...)` runs them concurrently. `tea.Sequence(cmd1, cmd2, ...)` runs them in order. Don't try to return a slice — there's no such API.
+**Fix**: `tea.Batch(cmd1, cmd2, ...)` runs them concurrently. `tea.Sequence(cmd1, cmd2, ...)` runs them in order. Don't try to return a slice. There's no such API.
 
 ```go
 func (m model) Init() tea.Cmd {
@@ -515,7 +515,7 @@ case NavigateMsg:
     return m, nil
 ```
 
-Sub-models return `Navigate(ScreenMain)` to go back — they never call `tea.Quit` directly (unless it's a global quit). This is the pattern used in `~/dev/gimage/internal/tui/tui.go`.
+Sub-models return `Navigate(ScreenMain)` to go back; they never call `tea.Quit` directly (unless it's a global quit). This is the pattern used in `~/dev/gimage/internal/tui/tui.go`.
 
 **Sub-model Update signatures**: note that sub-models return their own concrete type, not `tea.Model`, so the parent can re-store the updated value without a type assertion:
 
@@ -542,7 +542,7 @@ func (m *GenerateFlowModel) blurAllAdvancedInputs() {
     m.seedInput.Blur()
     m.cfgScaleInput.Blur()
     m.countInput.Blur()
-    // picker-only fields need no blur — they have no cursor
+    // picker-only fields need no blur: they have no cursor
 }
 
 func (m *GenerateFlowModel) focusAdvancedInput() {
@@ -571,12 +571,12 @@ case "tab":
 
 ## 31. `tea.WithAltScreen()` as a NewProgram option is v1 syntax
 
-**Symptom**: You port v1 code and write `tea.NewProgram(m, tea.WithAltScreen())` — it compiles but the option is silently ignored in v2, OR it doesn't exist at all.
+**Symptom**: You port v1 code and write `tea.NewProgram(m, tea.WithAltScreen())`: it compiles but the option is silently ignored in v2, OR it doesn't exist at all.
 
 **Fix**: In v2, AltScreen and all terminal-level flags live on the `View` struct returned from `View()`. Remove the option and set it in the view:
 
 ```go
-// v1 — gone in v2
+// v1: gone in v2
 p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 // v2
@@ -615,9 +615,9 @@ Alternatively, use `CLICOLOR_FORCE=0` in CI to disable colors globally, and ensu
 
 ## 33. `key.Text` vs `msg.String()` for printable rune input in modal pickers
 
-**Symptom**: You want to extend a filter string character-by-character as the user types, but `msg.String()` returns `"a"` for some keys and `"ctrl+a"` for others — hard to guard.
+**Symptom**: You want to extend a filter string character-by-character as the user types, but `msg.String()` returns `"a"` for some keys and `"ctrl+a"` for others. Hard to guard.
 
-**Fix**: Use `msg.Key().Text` — it returns the printable text for printable keys and is empty for control keys. No guard needed:
+**Fix**: Use `msg.Key().Text`: it returns the printable text for printable keys and is empty for control keys. No guard needed:
 
 ```go
 if t := msg.Key().Text; t != "" {
@@ -632,5 +632,5 @@ This is the pattern used in the modal picker (Pattern 3 in `patterns.md`). It sa
 
 ## See also
 
-- `architecture.md` — the broader v2 model
-- `components.md` — component-specific v2 changes
+- `architecture.md`: the broader v2 model
+- `components.md`: component-specific v2 changes
