@@ -154,7 +154,7 @@ Two independent things carry versions.
   `deploy` target, which is what makes the tag reliable rather than the
   convention alone.
 - **Each plugin** has its own version, advancing at its own pace. As of
-  this writing they range from 1.0.0 to 2.2.0. A plugin's version lives
+  this writing they range from 1.0.0 to 2.3.1. A plugin's version lives
   in two files that must agree: its own `plugin.json` and its entry in
   `marketplace.json`.
 

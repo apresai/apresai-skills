@@ -11,7 +11,7 @@
     {
       "name": "apple-release",
       "description": "Apple app release automation for TestFlight and App Store Connect. Includes /release, /release-testflight, /release-consistency, /release-xcodecloud, and /app-store-audit (pre-submission risk audit against the full App Store Review Guidelines: project/binary AND App Store Connect metadata). Supports iOS, macOS, watchOS, visionOS.",
-      "version": "1.6.1",
+      "version": "1.6.2",
       "author": {
         "name": "apresai"
       },
@@ -21,7 +21,7 @@
     {
       "name": "go-lambda",
       "description": "Comprehensive Go Lambda development with provided.al2023 runtime, ARM64/Graviton2 architecture, AWS SDK v2, and CDK infrastructure. Covers scaffolding, migration, best practices, and production patterns.",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "author": {
         "name": "apresai"
       },
@@ -31,7 +31,7 @@
     {
       "name": "nextjs-opennext",
       "description": "Deploy Next.js applications to AWS Lambda using OpenNext and CDK. Covers App Router, Server Components, ISR, streaming, middleware, and production deployment patterns.",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "author": {
         "name": "apresai"
       },
@@ -41,7 +41,7 @@
     {
       "name": "bubbletea-design",
       "description": "Build beautiful, idiomatic terminal UIs in Go with Bubble Tea v2, Bubbles v2, and Lip Gloss v2. Architecture patterns, component catalog, styling recipes, async/streaming patterns, v1→v2 migration map, and visual design principles for sexy TUIs.",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "author": {
         "name": "Chad Neal"
       },
@@ -51,7 +51,7 @@
     {
       "name": "image-encoding",
       "description": "Modern web image encoding with AVIF (primary) and WebP (fallback). Covers cwebp/dwebp/avifenc CLIs, the <picture> cascade pattern, browser-support cliffs, and when each format wins.",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "author": {
         "name": "Chad Neal"
       },
@@ -61,7 +61,7 @@
     {
       "name": "chad-review",
       "description": "6-pass autonomous pre-commit code review: drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification, over uncommitted working-tree changes or the last commit if the tree is clean. Runs the project's own deterministic gate before any agent launches, and a repo with no validation entrypoint is itself a finding with a ready-to-paste target. Dependency freshness is a script rather than a prompt: it finds manifests, lockfiles, pinned versions, version-bearing references in files that are not manifests, and undeclared prerequisites, so doc, prompt, and IaC repos get audited instead of marked N/A. It cross-checks what the vulnerability scanner actually read against what it discovered, so an ecosystem nothing scanned is reported as a coverage gap rather than passing for clean, and it scans lockfiles that .gitignore hides from the scanner's own walk. Findings are grouped by the upgrade that closes them, so one bump fixing nine advisories reads as one decision. Diff-shape aware, one reviewer per language block, session-relative sonnet/opus tiering with an explicit model on every launch. NOT read-only: it never edits the change under review and never commits, but it executes your gate, tests, codegen, linters, and vulnerability scanner, all of which write to disk, and it backs up untracked files first because the no-edit rule is prompt-enforced rather than tool-enforced.",
-      "version": "2.3.0",
+      "version": "2.3.1",
       "author": {
         "name": "Chad Neal"
       },
@@ -81,7 +81,7 @@
     {
       "name": "codex-br",
       "description": "Run OpenAI Codex on Amazon Bedrock (model openai.gpt-5.5, provider amazon-bedrock) instead of the default ChatGPT backend, via a `br` Codex profile. Adds /codex-br task (delegate a coding/diagnosis/research task), /codex-br review (built-in reviewer), and /codex-br adversarial-review (steerable challenge review). Defaults to maximum reasoning effort (xhigh).",
-      "version": "1.6.0",
+      "version": "1.6.1",
       "author": {
         "name": "Chad Neal"
       },
@@ -91,7 +91,7 @@
     {
       "name": "xai-voice",
       "description": "Master reference for xAI's three voice APIs: Grok Text-to-Speech (POST /v1/tts), Speech-to-Text (/v1/stt), and the realtime Speech-to-Speech voice agent (wss://api.x.ai/v1/realtime). Live-verified request and response contracts, the full 26-voice catalog (docs still say 5), speech-tag semantics, a production Go client, and the doc-vs-reality discrepancies that ship broken audio.",
-      "version": "1.6.1",
+      "version": "1.6.2",
       "author": {
         "name": "Chad Neal"
       },
