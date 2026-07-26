@@ -87,7 +87,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0, or 1 on a cold cache | Every pass runs INLINE in the parent, FRESHNESS aside; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS takes the cache path; if the cache is cold or stale, its rules force a full run, so launch the one FRESHNESS agent rather than skipping the pass. |
+   | `light` | 0, or 1 if the FRESHNESS census returns work | Every pass runs INLINE in the parent, FRESHNESS aside; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS takes the cache path; a cold or stale cache forces a full run, and the census then decides whether that full run needs an agent at all or finishes inline. |
    | `deps` | 1 | FRESHNESS runs FULLY FRESH as a sub-agent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
@@ -350,15 +350,59 @@ FRESHNESS is a WHOLE-PROJECT audit. It runs on every review regardless of what
 the diff touches, reading the changed-files list only to prioritize and tag, never
 to gate whether the pass runs.
 
-**0. Cache check.** Cache file:
-`~/.claude/chad-review-cache/<sha256 of git remote get-url origin>.json`, keyed by
-origin URL so every worktree shares it and nothing touches the repo. Schema:
-`{ generatedAt, manifests: {<path>: <sha256>}, manifestSet: [sorted paths], table, severityLines, scannerUsed, lastLocalScanClean }`.
-Run manifest discovery and hash each manifest AND its lockfile.
+**0. Census, in the parent, deterministic, about a second.** The unit of work is
+anything this project depends on that can go stale, which is NOT the same as
+anything carrying a manifest filename. A pure manifest allowlist reports a clean
+bill on a repo whose every file names an EOL runtime, because none of them is
+called `package.json`. Three tiers, all pruning `vendor/`, `node_modules/`,
+`.git/`, `target/`, `build/`, `dist/`, `.next/`, `cdk.out/`, `DerivedData/`,
+`Pods/`.
 
-- **FULL RUN** (steps 1 to 5, then write the cache) if ANY of: cache missing or
-  unparseable; manifest set differs from `manifestSet`; any hash differs;
-  `generatedAt` older than 7 days; shape is `deps`; the diff touches a manifest.
+- **Tier A, declared manifests.** `go.mod`/`go.sum`, `package.json` + lockfile,
+  `pubspec.*`, `Package.swift`/`.resolved`, `Cargo.*`,
+  `pyproject.toml`/`requirements*.txt`, `Gemfile.lock`, `composer.json`,
+  `.tool-versions`, `.nvmrc`, `mise.toml`, `Podfile.lock`,
+  `.terraform.lock.hcl`, a Homebrew formula or cask, `Dockerfile` `FROM` pins,
+  `.github/workflows/*.yml` `uses:` pins, git submodule SHAs, devcontainer
+  images, MCP server pins. Extract DIRECT dependencies plus the runtime
+  constraint (`go` directive, `engines.node`, `environment: sdk`,
+  `swift-tools-version`, `requires-python`, `rust-version`); step 3 scans
+  transitives for CVEs. **This list is non-exhaustive on purpose**: a miss falls
+  through to Tier B, never to N/A.
+- **Tier B, pinned external references.** Grep the file set for the shape
+  "external identifier plus a version or a date", keeping the surrounding line:
+  `uses: x@v`, `FROM image:tag`, install URLs carrying a version path segment,
+  runtime enums (`NODEJS_\d+_X`, `provided\.al\d+`, `python3\.\d+`), model IDs
+  (`claude-*`, `amazon\.nova-*`, `openai\.gpt-*`, `gemini-*`), API version
+  headers (`anthropic-version: 2023-06-01`), `swift-tools-version`, tool version
+  claims ("Claude Code v2.1.198"), and date-stamped assertions ("as of
+  2026-07-25", a pricing snapshot). This tier is what makes the pass work on
+  doc, prompt, and IaC repos, whose versions never appear in a manifest.
+- **Tier C, undeclared hard prerequisites.** Which external binaries must exist
+  for the project's OWN entrypoints to run, that nothing declares. Read what the
+  entrypoints execute, not what the repo's strings mention: a file-extension
+  literal inside a classifier is not a dependency. POSIX utilities are not
+  findings; a `jq` that the only test target depends on is.
+
+**Polarity is not the census's job.** `NODEJS_20_X reached Lambda EOL
+2026-04-30` is a correct warning telling readers to avoid it, not an EOL
+finding, and a scanner that flags it is wrong in exactly the way a scanner that
+suppresses it is wrong. The census collects candidates with their context;
+deciding prescriptive versus cautionary versus historical is judgment, and it
+belongs to the agent, or to the parent on the runs where no agent launches.
+
+**1. Cache check, then decide who does the work.** Cache file:
+`~/.claude/chad-review-cache/<sha256 of git remote get-url origin>.json`, keyed
+by origin URL so every worktree shares it and nothing touches the repo. Schema:
+`{ schemaVersion: 2, generatedAt, manifests: {<path>: <sha256>}, manifestSet: [sorted paths], censusEmpty, table, severityLines, scannerUsed, lastLocalScanClean }`.
+
+- **FULL RUN** (steps 2 to 5, then write the cache) if ANY of: cache missing,
+  unparseable, or carrying an unrecognized `schemaVersion`; manifest set differs
+  from `manifestSet`; any hash differs; `generatedAt` older than 7 days; shape is
+  `deps`; the diff touches a manifest. An unrecognized `schemaVersion` is a miss
+  that OVERWRITES: a pre-v2 file is parseable JSON that can never satisfy the
+  comparison above, so without this rule it forces the expensive path forever
+  while looking like a warm cache.
 - **CACHE HIT** otherwise: do NOT launch the sub-agent, do NOT call context7 or
   WebSearch. In the parent, re-run ONLY the local CVE scan, which is cheap and
   preserves same-day detection of new CVEs against unchanged deps. Clean means
@@ -368,12 +412,23 @@ Run manifest discovery and hash each manifest AND its lockfile.
   never delayed; only latest-version and maturity data are cached, and their
   consumers are the 60-to-90-day windows below.
 
-**1. Manifest discovery.** Find every manifest, pruning `vendor/`,
-`node_modules/`, `.git/`, `target/`, `build/`, `dist/`, `.next/`, `cdk.out/`,
-`DerivedData/`, `Pods/`. None recognized means report N/A and stop. Extract
-DIRECT dependencies plus the runtime constraint (`go` directive, `engines.node`,
-`environment: sdk`, `swift-tools-version`, `requires-python`, `rust-version`).
-Skip transitive deps here; step 3 still scans them for CVEs.
+Key the cache on Tier A hashes only. Do NOT key it on the whole census: in a repo
+whose content is prose, every PR touches some Tier B string and nothing would ever
+hit. The census costs about a second in the parent, so re-running it fresh each
+review is cheaper than the misses that would cause.
+
+On a FULL RUN, the census decides who does the remaining work:
+
+| Census result | Action |
+|---|---|
+| Empty across all three tiers | Report N/A **inline** and write the cache with `censusEmpty: true`, so the TTL applies and the next review converges instead of re-forcing a full run forever. Do NOT spawn. |
+| Small, and answerable with no network, scanner, or polarity judgment | Do it inline, write the cache. |
+| Anything needing context7, a vulnerability scanner, WebSearch, or polarity judgment | Spawn ONE agent, briefed WITH the census so it never repeats discovery. |
+
+The N/A wording carries the evidence: `FRESHNESS: N/A - census scanned <N> files
+across <M> ecosystems, zero version-bearing external references`. Never "no
+recognized manifest detected", which reports an allowlist miss as a conclusion
+and is how a repo full of EOL runtime strings earns a clean bill.
 
 **2. Version resolution via context7.** Read each pinned version, then resolve
 latest version, whether a migration guide exists, and how large the breaking
@@ -462,8 +517,9 @@ lines. Safe upgrades are the headline value of this pass; do not bury them:
 
 Tag anything the diff touched with `(diff-touched)`. Zero issues means
 "FRESHNESS: Clean. All direct dependencies current or within a safe lag, no CVE
-and no end-of-life runtime." No manifest means "FRESHNESS: N/A, no recognized
-manifest detected."
+and no end-of-life runtime." An empty census means "FRESHNESS: N/A - census
+scanned <N> files across <M> ecosystems, zero version-bearing external
+references."
 
 > Ecosystem manifest, version, and security sources: `pass-reference.md` §
 > FRESHNESS.
@@ -547,12 +603,16 @@ six-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
 
 **FRESHNESS** is whole-project, MECH tier, `general-purpose`, launched ONCE per
-review rather than per block. On a `light` diff it is the only agent that
-launches, and only when its cache rules force a full run. Brief it with the manifests discovered
-project-wide (or the discovery instructions), the changed-files list used ONLY to
-prioritize and tag `(diff-touched)`, an explicit note that the audit does not
-depend on the diff, context7 as primary with WebSearch only as a recency probe,
-and the report format above.
+review rather than per block, and only when the census in pass 5 step 1 returns
+work an agent is needed for. On a `light` diff it is the only agent that can
+launch. Brief it with **the census itself**, never with the discovery
+instructions: it must not repeat a `find` the parent already ran, and handing it
+the tier lists is what turns the spawn from a question into work. Add the
+changed-files list used ONLY to prioritize and tag `(diff-touched)`, an explicit
+note that the audit does not depend on the diff, context7 as primary with
+WebSearch only as a recency probe, the instruction to judge polarity on Tier B
+candidates rather than treating every version string as a finding, and the report
+format above.
 
 Wait for all Phase 1 results before proceeding.
 
@@ -684,11 +744,14 @@ Agent call. `model` is REQUIRED, from §"Model tiering":
 
 Target: under ~2 minutes for a typical single-language change (5 to 10 files)
 with a warm freshness cache; `light` and `deps` well under a minute, except a
-`light` diff that hits a cold freshness cache and has to run that pass fresh.
+`light` diff whose FRESHNESS census returns real work on a cold cache.
 
 The levers in order of size: the diff-shape matrix skips the fan-out entirely for
-most everyday changes; the freshness cache removes the network-bound version loop;
-and a two-agent fan-out means wall-clock is the slowest agent, not the sum.
+most everyday changes; the deterministic gate catches the mechanical defects
+before an agent is asked to look for them; the census keeps a spawn from
+happening at all when there is nothing to audit; the freshness cache removes the
+network-bound version loop; and a two-agent fan-out means wall-clock is the
+slowest agent, not the sum.
 
 Running long, cut in this order:
 
@@ -833,6 +896,13 @@ question: the fix prompt is already in the report body.
   block plus one FRESHNESS agent. Never spawn an agent to verify or double-check
   another agent's finding; the parent does that in Phase 2. Never spawn a second
   agent for work one can finish.
+- **Never spawn an agent to find out whether there is work.** Sub-agents do
+  bounded work whose shape is already known. If a deterministic command in the
+  parent answers the question, the parent answers it and passes the result down.
+  A launch costs roughly 70k tokens before the agent reads a single line, almost
+  all of it tool schema and brief, so an agent that returns "nothing to do" spent
+  the entire bootstrap to deliver a fact a `find` would have produced for free.
+  This is the rule behind the FRESHNESS census, and it applies to every pass.
 - DRIFT may run type generators, spec validators, and route-parity tests. These
   are non-destructive.
 - If the diff exceeds roughly 50 files or roughly 3000 changed lines, ask whether

@@ -370,6 +370,30 @@ initialization parameters appear. For `unittest`, the `subTest` context manager
 `osv-scanner -r .` is a language-agnostic CVE fallback that reads most lockfiles
 at once and is the cheapest single scan.
 
+**Pick the oracle from what the census found, not from a default.** A package
+registry is the right answer only for the ecosystems that have one, and the
+Tier B and Tier C evidence usually does not.
+
+| Census evidence | Currency oracle |
+|---|---|
+| `go.mod` | `govulncheck`, module proxy latest, Go's two-major support window |
+| `package.json` | `npm`/`pnpm audit`, registry latest, `engines` vs Node EOL |
+| `Package.swift` / `.resolved` | `swift-tools-version` vs current Swift, pin ages |
+| `.github/workflows` `uses:` | action major vs latest, runner image deprecations |
+| Lambda runtime enums | the AWS Lambda runtime support table, endoflife.date |
+| Anthropic model IDs, pricing, API versions | the `claude-api` skill, which is scoped to exactly this |
+| Non-Anthropic model IDs (`openai.gpt-*`, `amazon.nova-*`, `gemini-*`) | the vendor's own deprecation docs. No local reference skill covers these, and `claude-api` explicitly scopes itself out when another provider is in play, so do not imply coverage that does not exist |
+| Framework versions asserted in prose | context7, then the registry |
+| Tier C prerequisites (`jq`, `gh`, a scanner) | presence check plus EOL, not a version race |
+| Nothing in any tier | genuine N/A, reported with the file and ecosystem counts |
+
+**Judge polarity before reporting a Tier B hit.** The same identifier appears in
+prescriptions ("use `NODEJS_22_X`"), warnings ("`NODEJS_20_X` reached Lambda EOL
+2026-04-30"), and history ("we were on `NODEJS_18_X` until the migration"). Only
+the first is a finding. Read the surrounding line the census captured; if it is
+telling readers to AVOID the stale thing, the document is already correct and
+flagging it is a false positive.
+
 **Go (`go.mod`):** skip `vendor/`. Direct deps are `require` entries NOT marked
 `// indirect`; the runtime is the `go 1.xx` directive (Go supports the two latest
 majors). Security: `govulncheck ./...` or `osv-scanner --lockfile=go.mod`.
