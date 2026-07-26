@@ -21,9 +21,11 @@
 #
 # KNOWN LIMIT
 # A line carrying an ODD number of backticks leaves its unclosed span unstripped,
-# so a ` -- ` inside it is reported. That line is malformed markdown already, and
-# the repo has none, so this is left as a loud false positive rather than guessed
-# at: the report names the exact line, which is enough to fix or exempt.
+# so a ` -- ` inside it is reported. Odd-backtick lines are common here (854 of
+# them, mostly a backtick opening a span that closes on the next line); what does
+# not occur is one that ALSO contains ` -- `, which is the only combination that
+# trips this. Left as a loud false positive rather than guessed at: the report
+# names the exact line, which is enough to fix or exempt.
 #
 # USAGE
 #   bash scripts/check-prose.sh            # report violations, exit 1 if any
@@ -32,13 +34,21 @@
 # EXIT: 0 clean, 1 violations found, 2 the check could not run.
 set -uo pipefail
 
-cd "$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(dirname "$0")")" || exit 2
+# Outside a git repo `git ls-files` returns nothing, the scan covers zero files,
+# and the run exits 0 looking clean. That is a silent false clean, the same defect
+# class this repo just fixed in freshness.sh, so there is no fallback: if the
+# scannable set cannot be determined, say so and exit 2.
+root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  printf 'check-prose: not a git repository, or git is unavailable; refusing to report clean\n' >&2
+  exit 2
+}
+cd "$root" || { printf 'check-prose: cannot enter %s\n' "$root" >&2; exit 2; }
 
 list=0
 [[ "${1:-}" == "--list" ]] && list=1
 
 # Files exempt from the em-dash rule, each with the reason it is exempt. This is
-# an allowlist of two entries and it should stay small: every addition is a place
+# an allowlist of three entries and it should stay small: every addition is a place
 # the convention does not apply, and "it was easier" is not a reason.
 #
 # app-store-review-guidelines.md is a VERBATIM saved copy of Apple's published
@@ -85,7 +95,15 @@ while IFS= read -r f; do
     [[ -z "$hit" ]] && continue
     report "$f:$hit"
   done < <(awk '
-    /^[ \t]*(```|~~~)/ { fence = !fence; next }   # CommonMark allows either fence
+    # CommonMark allows ``` or ~~~, and a fence is closed only by the character
+    # that opened it. Toggling on either one meant a ~~~ inside a ``` block closed
+    # it, which both flagged the code after it and hid the prose that followed.
+    /^[ \t]*(```|~~~)/ {
+      d = $0; sub(/^[ \t]*/, "", d); d = substr(d, 1, 1)
+      if (!fence)          { fence = 1; fd = d }
+      else if (d == fd)    { fence = 0 }
+      next
+    }
     fence { next }
     {
       line = $0

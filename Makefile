@@ -20,7 +20,7 @@ help:
 	@echo "  validate-structure - Validate directory structure"
 	@echo "  validate-versions  - Check plugin.json versions match marketplace.json"
 	@echo "  validate-resource-refs - Check every resources/ pointer resolves"
-	@echo "  validate-scripts   - Run plugin resource script test suites"
+	@echo "  validate-scripts   - Run plugin and scripts/ test suites"
 	@echo "  validate-prose     - Check prose for em-dashes and \" -- \" punctuation"
 	@echo ""
 	@echo "Version Management:"

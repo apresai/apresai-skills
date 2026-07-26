@@ -141,6 +141,43 @@ r=$(newrepo); printf 'clean\n' > "$r/a.md"; printf '\x00\x01\x02binary\xff' > "$
 clean "binary files are skipped" "$r"
 rm -rf "$r"
 
+# --- a fence is closed only by the character that opened it ----------------
+# Toggling on either delimiter meant a ~~~ inside a ``` block closed it, which
+# both flagged the code after it (false positive) and hid the prose that followed
+# (false negative). One fixture proves both directions at once.
+r=$(newrepo)
+cat > "$r/a.md" <<'DOC'
+```
+~~~
+a -- b
+```
+Real -- violation out here.
+DOC
+commit "$r"
+out=$(listing "$r")
+if grep -q 'a\.md:5:' <<<"$out"; then ok "prose after a mixed fence is still checked"; else
+  bad "prose after a mixed fence is still checked"; printf '       got: %s\n' "$out"; fi
+if grep -q 'a\.md:3:' <<<"$out"; then
+  bad "code inside a mixed fence must not be flagged"; printf '       got: %s\n' "$out"
+else ok "code inside a mixed fence is not flagged"; fi
+rm -rf "$r"
+
+# --- never report clean when the scannable set is unknown ------------------
+# Outside a git repo `git ls-files` returns nothing, so a naive run scans zero
+# files and exits 0 looking clean. That is the silent-false-clean defect this
+# repo fixed in freshness.sh; exit 2 is the honest answer.
+d=$(mktemp -d)
+printf 'prose with an em-dash \xe2\x80\x94 here\n' > "$d/a.md"
+( cd "$d" && bash "$SCRIPT" >/dev/null 2>&1 ); rc=$?
+if [[ "$rc" == 2 ]]; then ok "outside a git repo it exits 2, never a clean 0"; else
+  bad "outside a git repo it exits 2, never a clean 0 (got $rc)"; fi
+# Capture before matching. Piping would report the pipeline as failed because the
+# script exits 2 by design, which is the same pipefail trap as the --list case.
+err=$( cd "$d" && bash "$SCRIPT" 2>&1 >/dev/null )
+if grep -q 'refusing to report clean' <<<"$err"; then ok "and says why on stderr"; else
+  bad "and says why on stderr"; printf '       got: %s\n' "$err"; fi
+rm -rf "$d"
+
 # --- exit codes are the contract ------------------------------------------
 r=$(newrepo); printf 'x — y\n' > "$r/a.md"; commit "$r"
 [[ "$(run "$r")" == 1 ]] && ok "exit 1 when violations exist" || bad "exit 1 when violations exist"
