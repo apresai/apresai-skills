@@ -116,6 +116,47 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    All findings merge into one report.
 
    If the script is missing, fall back to the picks in §"Execution strategy".
+7. **Run the project's own gate, in the parent, before any agent launches.**
+
+   Deterministic checks are the cheapest defect detector this skill has and the
+   only one that cannot hallucinate. Whatever the gate catches costs no agent at
+   all, and its output narrows what the agents are then asked to look at. It runs
+   on every review including `light` and `deps`; it is not shape-gated.
+
+   Discover it by evidence, first hit wins, and never by assuming `make`:
+
+   - a Makefile target matching `^(validate|check|verify|ci)$`
+   - a `package.json` script named `validate` or `check`, or `lint` plus
+     `typecheck`
+   - a `justfile` recipe or `Taskfile.yml` task of those names
+   - the `run:` steps of `.github/workflows/*.yml`, authoritative even when no
+     local target exists
+   - failing all of those, the language default for what the diff contains
+     (`go build ./... && go vet ./...`, `tsc --noEmit`, `cargo check`,
+     `swift build`)
+
+   Print `Gate: <command> (<green | N failures | none detected>)` in the report
+   header beside `Diff shape:`. Cap it around 60s: past that report
+   `Gate: <command> (over budget, not run)` and carry on rather than blocking a
+   review on someone's full build.
+
+   Failures are findings under the pass that owns them: compile, type, lint, and
+   schema errors under DRIFT, failing tests under TESTS. Quote the tool's own
+   output. Never paraphrase a compiler.
+
+   **No gate at all is itself a finding**, reported once per review, MEDIUM,
+   under TESTS:
+
+   ```
+   TESTS [gate] | <repo root> | no project validation entrypoint; add a validate target
+   ```
+
+   Put a ready-to-paste target in the fix prompt, assembled from
+   `pass-reference.md` § GATE for the ecosystems actually present. Recommend it,
+   never create it: the target belongs to the project and to whoever maintains
+   it, and one this skill writes behind the maintainer's back is one nobody owns.
+   Being a repo-level gap rather than a defect in the diff, it does not move the
+   GO/NO-GO verdict, the same way a pre-existing FRESHNESS CRITICAL does not.
 
 ## 1. DRIFT
 
@@ -240,6 +281,10 @@ eventually), LOW (theoretical but worth noting).
 
 The tests covering this change run green, and tests exist for what changed. A
 green run over zero tests is not a passing review.
+
+**`[gate]`** lives here too, one level up from a missing test: a repo with no
+validation entrypoint at all, per pre-flight step 7. Report it once, MEDIUM, with
+the proposed target in the fix prompt.
 
 **Run (parent).** Identify test files for the modified files (Go `*_test.go` in
 the same package; TS co-located `*.test.*`/`*.spec.*` or `__tests__/`; Python
@@ -684,6 +729,7 @@ findings, and summaries of summaries. Lead with the outcome.
 ```
 ## Chad Review
 Diff shape: <shape>
+Gate: <command> (<green | N failures | none detected>)
 
 ### 1. DRIFT
 [findings or "Clean"]

@@ -447,3 +447,54 @@ RISK, not here.
   reviewer rather than the next reader and become noise once merged
 - A feature flag or compatibility shim where the code could simply change
 - Validation repeated at an internal boundary that a caller already enforced
+
+---
+
+## § GATE
+
+What a project's validation entrypoint should contain, used to build the
+recommendation behind the `no project validation entrypoint` finding. Recommend
+only what the repo's own ecosystems justify: a checklist longer than the project
+is a target nobody runs.
+
+**Universal, whatever the language:**
+- Every JSON and YAML file parses (`jq empty`, `yq`, or the language's parser)
+- No merge-conflict markers survive in tracked files (`<<<<<<<`, `>>>>>>>`)
+- No debugger or focused-test leftovers (`it.only`, `fdescribe`, `dbg!`,
+  `binding.pry`, `breakpoint()`)
+- The formatter agrees in check mode, so formatting never lands as diff noise
+- Paths the build depends on resolve: scripts, assets, and doc links
+
+**Go:** `go build ./...`, `go vet ./...`, `gofmt -l` returning empty, and
+`go mod tidy` leaving `go.mod` and `go.sum` unchanged.
+
+**TypeScript / JavaScript:** `tsc --noEmit`, the project's ESLint config, and
+lockfile reproducibility (`npm ci` succeeds against the committed manifest).
+
+**CDK TypeScript:** `tsc --noEmit` is the correct check for code-only changes.
+Reserve `cdk synth` for PRs that add or move a Lambda or an asset path: synth
+hashes build artifacts that a fresh checkout does not have, so wiring it into a
+gate that must pass everywhere makes the gate fail everywhere.
+
+**Swift:** `swift build`, plus SwiftLint or SwiftFormat in check mode when the
+repo already carries a config.
+
+**Python:** `ruff check` or flake8, `mypy` if the project is typed, and
+`pytest --collect-only` so a broken import fails in a second rather than a suite.
+
+**Rust:** `cargo check --all-targets`, `cargo fmt --check`,
+`cargo clippy -- -D warnings`.
+
+**AWS Lambda, any language:** grep the IaC sources for runtime and architecture
+regressions, which reappear with every new construct and stay invisible until
+deploy:
+`grep -RnE 'NODEJS_(16|18|20)_X|Architecture\.X86_64'`, excluding
+`node_modules`, `cdk.out`, `.next`, `dist`. Any hit fails the gate.
+
+**Content, prompt, and plugin repos (markdown plus manifests):** a repo with no
+compiler still has invariants, and they are checkable. Every manifest is valid
+JSON against its schema; version fields that must agree do agree, verified in
+both directions so neither list can drift unnoticed; every declared directory
+exists and holds the file its convention requires; and any test scripts the repo
+ships actually execute. This is the case most often mistaken for "nothing to
+validate here."
