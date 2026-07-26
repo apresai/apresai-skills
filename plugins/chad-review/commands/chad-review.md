@@ -16,7 +16,7 @@ Each pass answers one distinct question, so no defect is reported twice:
 | 2. BEHAVIOR AND RISK | What changed, and what breaks it | agent + parent |
 | 3. TESTS | Do affected tests pass, and do tests exist | parent + agent |
 | 4. OBSERVABILITY | Debuggable in production without a repro | reviewer agent |
-| 5. FRESHNESS | Deps current, CVE-free, not end-of-life | parent, or its own agent when the census returns work for one |
+| 5. FRESHNESS | Deps current, CVE-free, not end-of-life | parent; one agent only to resolve versions |
 | 6. SIMPLIFY | Is it clean | reviewer agent |
 
 **Model tiering is session-relative.** There is deliberately NO `model:`
@@ -95,8 +95,8 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    files actually use. It tells CDK from Next.js by imports and marker files, and
    finds OpenAPI specs by an `openapi:` key rather than a filename.
 
-   **Mixed-language diffs**: spawn ONE reviewer per block plus ONE whole-project
-   FRESHNESS agent (CDK + Go = 3 agents). **Scope the diff per block**: each
+   **Mixed-language diffs**: spawn ONE reviewer per block, plus the FRESHNESS
+   version-resolution agent only if pass 5 calls for one. **Scope the diff per block**: each
    reviewer sees ONLY that language's hunks. DRIFT's codebase-wide grep is
    scope-independent, and the parent and FRESHNESS agent still see everything.
    All findings merge into one report.
@@ -123,7 +123,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0, or 1 if the FRESHNESS census returns work | Every pass runs INLINE in the parent, FRESHNESS aside; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS takes the cache path; a cold or stale cache forces a full run, and the census then decides whether that full run needs an agent at all or finishes inline. |
+   | `light` | 0, or 1 if there are versions to resolve | Every pass runs INLINE in the parent, FRESHNESS aside; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs its script in the parent regardless of shape, and spawns only if that script found dependencies needing version resolution. |
    | `deps` | 1 | FRESHNESS runs FULLY FRESH as a sub-agent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
@@ -356,187 +356,53 @@ to correlate with the triggering request.
 
 ## 5. FRESHNESS
 
-Every direct dependency, framework, and runtime is current enough to be safe,
-carries no known CVE and no end-of-life runtime, and each staleness call
-separates an overdue or security-driven upgrade from one still too early to take.
+Nothing this project depends on is unsafe, dead, or so far behind that catching
+up becomes its own migration. Whole-project: it runs regardless of what the diff
+touches, and the changed-files list is read only to tag `(diff-touched)`.
 
-FRESHNESS is a WHOLE-PROJECT audit. It runs on every review regardless of what
-the diff touches, reading the changed-files list only to prioritize and tag, never
-to gate whether the pass runs.
+**Run the audit.** Everything mechanical lives in the script: manifests, direct
+dependencies, runtime constraints, version-bearing references in files that are
+not manifests, undeclared prerequisites, and the vulnerability scan.
 
-**0. Census, in the parent, deterministic, about a second.** The unit of work is
-anything this project depends on that can go stale, which is NOT the same as
-anything carrying a manifest filename. A pure manifest allowlist reports a clean
-bill on a repo whose every file names an EOL runtime, because none of them is
-called `package.json`. Three tiers, all pruning `vendor/`, `node_modules/`,
-`.git/`, `target/`, `build/`, `dist/`, `.next/`, `cdk.out/`, `DerivedData/`,
-`Pods/`.
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/freshness.sh"
+```
 
-- **Tier A, declared manifests.** `go.mod`/`go.sum`, `package.json` + lockfile,
-  `pubspec.*`, `Package.swift`/`.resolved`, `Cargo.*`,
-  `pyproject.toml`/`requirements*.txt`, `Gemfile.lock`, `composer.json`,
-  `.tool-versions`, `.nvmrc`, `mise.toml`, `Podfile.lock`,
-  `.terraform.lock.hcl`, a Homebrew formula or cask, `Dockerfile` `FROM` pins,
-  `.github/workflows/*.yml` `uses:` pins, git submodule SHAs, devcontainer
-  images, MCP server pins. Extract DIRECT dependencies plus the runtime
-  constraint (`go` directive, `engines.node`, `environment: sdk`,
-  `swift-tools-version`, `requires-python`, `rust-version`); step 3 scans
-  transitives for CVEs. **This list is non-exhaustive on purpose**: a miss falls
-  through to Tier B, never to N/A.
-- **Tier B, pinned external references.** Grep the file set for the shape
-  "external identifier plus a version or a date", keeping the surrounding line:
-  `uses: x@v`, `FROM image:tag`, install URLs carrying a version path segment,
-  runtime enums (`NODEJS_\d+_X`, `provided\.al\d+`, `python3\.\d+`), model IDs
-  (`claude-*`, `amazon\.nova-*`, `openai\.gpt-*`, `gemini-*`), API version
-  headers (`anthropic-version: 2023-06-01`), `swift-tools-version`, tool version
-  claims ("Claude Code v2.1.198"), and date-stamped assertions ("as of
-  2026-07-25", a pricing snapshot). This tier is what makes the pass work on
-  doc, prompt, and IaC repos, whose versions never appear in a manifest.
-- **Tier C, undeclared hard prerequisites.** Which external binaries must exist
-  for the project's OWN entrypoints to run, that nothing declares. Read what the
-  entrypoints execute, not what the repo's strings mention: a file-extension
-  literal inside a classifier is not a dependency. POSIX utilities are not
-  findings; a `jq` that the only test target depends on is.
+Three ways its output can be misread, and no others:
 
-**Polarity is not the census's job.** `NODEJS_20_X reached Lambda EOL
-2026-04-30` is a correct warning telling readers to avoid it, not an EOL
-finding, and a scanner that flags it is wrong in exactly the way a scanner that
-suppresses it is wrong. The census collects candidates with their context;
-deciding prescriptive versus cautionary versus historical is judgment, and it
-belongs to the agent, or to the parent on the runs where no agent launches.
+- **`REF` records need polarity judgment, which is why each carries its line.**
+  "`NODEJS_20_X` reached Lambda EOL 2026-04-30" is a correct warning. Flagging it
+  is a false positive; so is suppressing the prescription sitting next to it.
+- **`SCAN none` is not clean.** It means no scanner is installed. Report the gap.
+- **N/A needs a `SUMMARY` with zero manifests, zero refs, and zero prereqs**, and
+  it is reported with those counts: `N/A - scanned <N> files, no version-bearing
+  references`. "No manifest found" is an allowlist miss, not a conclusion.
 
-**1. Cache check, then decide who does the work.** Cache file:
-`~/.claude/chad-review-cache/<sha256 of git remote get-url origin>.json`, keyed
-by origin URL so every worktree shares it and nothing touches the repo. Schema:
-`{ schemaVersion: 2, generatedAt, manifests: {<path>: <sha256>}, manifestSet: [sorted paths], censusEmpty, table, severityLines, scannerUsed, lastLocalScanClean }`.
+**Resolve versions** for `DEP` records only: context7 `resolve-library-id`, then
+`query-docs` for latest version and breaking surface. Cap around 12 lookups,
+runtimes and core frameworks first, and name the ones you skipped.
 
-- **FULL RUN** (steps 2 to 5, then write the cache) if ANY of: cache missing,
-  unparseable, or carrying an unrecognized `schemaVersion`; manifest set differs
-  from `manifestSet`; any hash differs; `generatedAt` older than 7 days; shape is
-  `deps`; the diff touches a manifest. An unrecognized `schemaVersion` is a miss
-  that OVERWRITES: a pre-v2 file is parseable JSON that can never satisfy the
-  comparison above, so without this rule it forces the expensive path forever
-  while looking like a warm cache.
-- **CACHE HIT** otherwise: do NOT launch the sub-agent, do NOT call context7 or
-  WebSearch. In the parent, re-run ONLY the local CVE scan, which is cheap and
-  preserves same-day detection of new CVEs against unchanged deps. Clean means
-  report the cached table headed "FRESHNESS (cached <date>, manifests unchanged;
-  local CVE scan re-run this review: clean)". Anything new invalidates the cache
-  and forces a full run. The 7-day TTL is safe because the security signal is
-  never delayed; only latest-version and maturity data are cached, and their
-  consumers are the 60-to-90-day windows below.
+**Then the judgment this pass exists to make.** For anything behind:
 
-Key the cache on Tier A hashes only. Do NOT key it on the whole census: in a repo
-whose content is prose, every PR touches some Tier B string and nothing would ever
-hit. The census costs about a second in the parent, so re-running it fresh each
-review is cheaper than the misses that would cause.
+- **CRITICAL, overriding everything below**: a known CVE, an end-of-life runtime,
+  or an unsupported framework major.
+- **UPGRADE NOW**: the target is mature (~90+ days, several patches), or the gap
+  is minor or patch with no breaking surface, or the current major is losing
+  support. This is the default for anything behind. It is do-now, never a
+  backlog entry, and you offer to perform it.
+- **HOLD**: only a major that shipped under ~60 to 90 days ago with a real
+  breaking surface and few patches. Give a revisit signal ("after x.2", "+90d").
+  Under semver a pre-1.0 `0.y` bump is breaking, so treat it as a major.
 
-On a FULL RUN, the census decides who does the remaining work:
+**Report** one row per flagged dependency (name, current, latest, why, the call),
+then one line each as
+`FRESHNESS [security|eol|upgrade-now|hold] | <dep> | <=15 words`. Clean means
+"all direct dependencies current or within a safe lag, no CVE, no end-of-life
+runtime."
 
-| Census result | Action |
-|---|---|
-| Empty across all three tiers | Report N/A **inline** and write the cache with `censusEmpty: true`, so the TTL applies and the next review converges instead of re-forcing a full run forever. Do NOT spawn. |
-| Small, and answerable with no network, scanner, or polarity judgment | Do it inline, write the cache. |
-| Anything needing context7, a vulnerability scanner, WebSearch, or polarity judgment | Spawn ONE agent, briefed WITH the census so it never repeats discovery. |
-
-The N/A wording carries the evidence: `FRESHNESS: N/A - census scanned <N> files
-across <M> ecosystems, zero version-bearing external references`. Never "no
-recognized manifest detected", which reports an allowlist miss as a conclusion
-and is how a repo full of EOL runtime strings earns a clean bill.
-
-**2. Version resolution via context7.** Read each pinned version, then resolve
-latest version, whether a migration guide exists, and how large the breaking
-surface is (`resolve-library-id`, then `query-docs` on "latest version, migration
-guide, breaking changes"). context7 is weak on release DATES: where recency or
-patch count matters and it does not surface them, fall back to a lightweight
-WebSearch ("<lib> <version> release date") purely to gauge recency. Soft-cap
-lookups at about 12 to 15, prioritizing runtimes, core frameworks,
-security-relevant deps, and diff-touched deps; list the rest as "not individually
-version-checked this run".
-
-**3. Security and EOL.** Run the ecosystem scanner (govulncheck, npm/pnpm audit,
-pip-audit, cargo audit, `dart pub outdated --mode=security`) or the
-language-agnostic `osv-scanner -r .`. If none is installed, say "security scan
-unavailable: install osv-scanner/govulncheck" rather than reporting clean.
-Cross-reference the runtime against end-of-life data (endoflife.date for Node,
-Python, Go; the framework's own window for majors).
-
-**4. Upgrade-timing judgment**, then **5. Report**.
-
-### Upgrade-timing heuristic
-
-**HOLD (too early, non-blocking)** when ALL hold: the gap is a MAJOR bump; the
-latest major shipped recently (roughly under 60 to 90 days); context7 shows a
-substantial breaking surface (many breaking changes or required codemods); and
-the new major has few patches so far (still x.0.0 or x.0.1, fewer than about 3).
-
-**UPGRADE** when ANY hold: the current version has a known CVE, or the runtime or
-framework major is end-of-life or out of support (CRITICAL, overrides any HOLD);
-the latest is MATURE (shipped over ~90 days ago, at x.2 or x.3 with several
-patches); the gap is only MINOR or PATCH with no breaking surface; or the current
-major is itself losing support soon.
-
-**Pre-1.0 caution:** under semver a 0.y to 0.(y+1) bump is breaking, so treat it
-as major-equivalent. A brand-new 0.x minor with no follow-up patches is a HOLD.
-
-### Severity and disposition
-
-Severity reflects RISK; the **disposition** is the more important output. An
-outdated framework is a finding to ACTION, not debt to launder into a backlog
-nobody reads. Every safe upgrade deferred compounds into a riskier big-bang
-migration later, which is the whole reason this pass exists.
-
-- **CRITICAL**: known CVE, or an end-of-life or unsupported runtime or framework
-  major. Overrides any HOLD.
-- **HIGH**: a core framework or runtime one or more majors behind AND in support
-  sunset, even without a CVE.
-- **MEDIUM**: a core framework or important direct dependency meaningfully behind
-  (a major, several minors, or years stale) where the target is mature and no
-  breaking HOLD applies. The bread-and-butter finding, and it is **do-now**.
-- **LOW**: a single patch behind on a non-core dependency. A *stack* of "only a
-  minor behind" deps is not trivial in aggregate; surface the batch.
-
-One disposition per flagged dependency:
-
-- **UPGRADE NOW (safe)**: the DEFAULT for any HIGH or MEDIUM whose target is
-  mature and not under a HOLD. Do NOT backlog it. Recommend doing it in this
-  change or an immediate fast-follow, and **offer to perform it** (bump, build,
-  run the affected suite). Catching yourself backlogging a mature, safe framework
-  upgrade means re-classifying it as UPGRADE NOW.
-- **SCHEDULE**: a CRITICAL or EOL the diff did not touch and that cannot be done
-  safely inside this commit. A dated follow-up, never a silent backlog.
-- **HOLD**: a brand-new breaking major, with a revisit signal ("after x.2",
-  "+90d"). The only disposition that means wait.
-- **BACKLOG**: LOW trivial lag only.
-
-### Report format
-
-One row per dependency that is behind or flagged; summarize current-and-clean
-deps as a closing count.
-
-| Dependency | Current | Latest | Behind | Maturity / Released | Security | Recommendation |
-|---|---|---|---|---|---|---|
-| next | 14.2.30 | 15.0.1 | 1 major | ~3 wks ago, 1 patch, large App Router migration | clean | HOLD (revisit after 15.2 or +90d) |
-| react | 18.3.1 | 19.1.0 | 1 major | mature: ~9 mo, at 19.1.x, modest migration | clean | UPGRADE NOW (safe), MEDIUM |
-| golang.org/x/net | v0.21.0 | v0.38.0 | several minors | n/a | CVE reachable per govulncheck | UPGRADE NOW, CRITICAL (overrides hold) |
-| node (runtime) | 18.x | 22.x LTS | runtime | n/a | EOL 2025-04-30 | UPGRADE NOW, CRITICAL (EOL) |
-
-Then list every CRITICAL, HIGH, and **UPGRADE NOW (safe)** finding as severity
-lines. Safe upgrades are the headline value of this pass; do not bury them:
-
-- `FRESHNESS [security] | golang.org/x/net v0.21.0 | CVE reachable per govulncheck, upgrade to v0.38.0`
-- `FRESHNESS [eol] | node 18 | end-of-life 2025-04-30, upgrade to 22 LTS`
-- `FRESHNESS [upgrade-now] | mark3labs/mcp-go | 9 pre-1.0 minors behind, target mature and clean, bump now`
-- `FRESHNESS [hold] | next 15.0.1 | shipped ~3 weeks ago, large migration surface, hold at 14.2.x`
-
-Tag anything the diff touched with `(diff-touched)`. Zero issues means
-"FRESHNESS: Clean. All direct dependencies current or within a safe lag, no CVE
-and no end-of-life runtime." An empty census means "FRESHNESS: N/A - census
-scanned <N> files across <M> ecosystems, zero version-bearing external
-references."
-
-> Ecosystem manifest, version, and security sources: `pass-reference.md` §
-> FRESHNESS.
+A CVE or EOL on something the diff touched is NO-GO. Pre-existing and untouched
+is CONDITIONAL: this change is safe, the project is not. Everything else is
+advisory.
 
 ## 6. SIMPLIFY
 
@@ -603,9 +469,9 @@ that gates a release. It is the largest available speed lever and costs no code.
 
 ### Phase 1: fan out
 
-Per language block, launch **one reviewer**, plus **one** whole-project FRESHNESS
-agent for the review overall, all in ONE message (single-language = **2** Agent
-tool uses; CDK + Go = **3**).
+Launch **one reviewer per language block**, in ONE message. Add the FRESHNESS
+version-resolution agent to that same message only when pass 5 asked for one, so
+a single-language diff is 1 or 2 Agent tool uses and CDK plus Go is 2 or 3.
 
 **Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), 4, and 6, at the
 JUDGE tier. `subagent_type` comes from the routing script
@@ -616,17 +482,11 @@ and emits each pass as its own labeled section, which is what keeps the
 six-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
 
-**FRESHNESS** is whole-project, MECH tier, `general-purpose`, launched ONCE per
-review rather than per block, and only when the census in pass 5 step 0 returns
-work that step 1's table routes to an agent. On a `light` diff it is the only agent that can
-launch. Brief it with **the census itself**, never with the discovery
-instructions: it must not repeat a `find` the parent already ran, and handing it
-the tier lists is what turns the spawn from a question into work. Add the
-changed-files list used ONLY to prioritize and tag `(diff-touched)`, an explicit
-note that the audit does not depend on the diff, context7 as primary with
-WebSearch only as a recency probe, the instruction to judge polarity on Tier B
-candidates rather than treating every version string as a finding, and the report
-format above.
+**FRESHNESS** runs in the parent: `freshness.sh` does the whole audit in under a
+second. It spawns ONE agent, MECH tier, in exactly one case: the script emitted
+`DEP` records that still need version resolution. Hand that agent the `DEP` lines
+and nothing else, since discovery is already done, and let it return the resolved
+versions and breaking surfaces. No `DEP` records means no agent.
 
 Wait for all Phase 1 results before proceeding.
 
@@ -688,28 +548,25 @@ output contract, the prompt skeleton, and the Agent call shape) lives in
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/fanout.md`.
 
 Read it when you are about to launch an agent, and only then: `standard` shape,
-or `light`/`deps` where the FRESHNESS census returned work needing one. A `light`
+or `light`/`deps` where FRESHNESS found versions to resolve. A `light`
 review that spawns nothing never needs it, and `light` is the common case.
 
 ## Performance budget
 
-Target: under ~2 minutes for a typical single-language change (5 to 10 files)
-with a warm freshness cache; `light` and `deps` well under a minute, except a
-`light` diff whose FRESHNESS census returns real work on a cold cache.
+Target: under ~2 minutes for a typical single-language change (5 to 10 files),
+`light` and `deps` well under a minute.
 
 The levers in order of size: the diff-shape matrix skips the fan-out entirely for
-most everyday changes; the deterministic gate catches the mechanical defects
-before an agent is asked to look for them; the census keeps a spawn from
-happening at all when there is nothing to audit; the freshness cache removes the
-network-bound version loop; and a two-agent fan-out means wall-clock is the
-slowest agent, not the sum.
+most everyday changes; the scripts (`freshness.sh`, `chad-review-route.sh`) do in
+milliseconds what an agent would take a bootstrap to do; the deterministic gate
+catches mechanical defects before an agent is asked to look for them; and a
+two-agent fan-out means wall-clock is the slowest agent, not the sum.
 
 Running long, cut in this order:
 
-1. **FRESHNESS**: the cache is the primary lever. On a forced full run, cap the
-   context7 loop first, or resolve only runtimes and core frameworks. NEVER skip
-   the local security and EOL scan: a CVE or EOL runtime is CRITICAL and the scan
-   is cheap.
+1. **FRESHNESS**: cap the context7 version loop, or resolve only runtimes and
+   core frameworks. NEVER skip `freshness.sh` itself: a CVE or EOL runtime is
+   CRITICAL and the script costs under a second.
 2. **DRIFT `[types]` and `[spec/lint]`**: the most expensive sub-checks, since
    they compile or shell out. With no handler changes, mark the spec sub-checks
    N/A immediately without running generators.
@@ -853,7 +710,7 @@ question: the fix prompt is already in the report body.
   A launch costs roughly 70k tokens before the agent reads a single line, almost
   all of it tool schema and brief, so an agent that returns "nothing to do" spent
   the entire bootstrap to deliver a fact a `find` would have produced for free.
-  This is the rule behind the FRESHNESS census, and it applies to every pass.
+  It is why FRESHNESS, routing, and the gate are scripts rather than paragraphs.
 - DRIFT may run type generators, spec validators, and route-parity tests. These
   are non-destructive.
 - If the diff exceeds roughly 50 files or roughly 3000 changed lines, ask whether

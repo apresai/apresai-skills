@@ -1,13 +1,10 @@
 # chad-review pass reference (per-language / per-ecosystem detail)
 
-Companion to `commands/chad-review.md`, loaded on demand so the parent
-conversation never pays for languages the diff does not touch. When building a
-Phase 1 sub-agent prompt, paste ONLY the sections matching the passes that agent
-owns and the language families the routing script detected. The TESTS run half
-and the BEHAVIOR AND RISK attack half execute in the parent (Phase 2): Read those
-sections at execution time.
-
-One section per pass, same names and numbers as the command file:
+Companion to `commands/chad-review.md`, loaded on demand so nobody pays for
+languages the diff does not touch. A Phase 1 sub-agent is given this file's PATH
+and the section names it owns, and reads them itself; the parent does not paste
+them. The TESTS run half and the BEHAVIOR AND RISK attack half execute in the
+parent, which reads those sections at execution time.
 
 | Section | Covers |
 |---|---|
@@ -15,8 +12,9 @@ One section per pass, same names and numbers as the command file:
 | § BEHAVIOR AND RISK | Language-specific gotchas for the attack probes |
 | § TESTS | Per-language test scoping, and what "covered" looks like |
 | § OBSERVABILITY | Logging, error-wrapping, and metric idioms |
-| § FRESHNESS | Ecosystem manifest, version, and security sources |
+| § FRESHNESS | Which oracle answers which evidence, and polarity judgment |
 | § SIMPLIFY | Per-language simplification signals |
+| § GATE | What a project's validation entrypoint should contain |
 
 Full path when installed:
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md`
@@ -367,64 +365,22 @@ initialization parameters appear. For `unittest`, the `subTest` context manager
 
 ## § FRESHNESS
 
-`osv-scanner -r .` is a language-agnostic CVE fallback that reads most lockfiles
-at once and is the cheapest single scan.
+Discovery, extraction, and scanning are in `resources/freshness.sh`; run it rather
+than reimplementing them here. What stays judgment:
 
-**Pick the oracle from what the census found, not from a default.** A package
-registry is the right answer only for the ecosystems that have one, and the
-Tier B and Tier C evidence usually does not.
+**Pick the oracle from the evidence, not from a default.** `DEP` records from a
+manifest resolve against their registry or context7. `REF` records usually do
+not: a Lambda runtime enum resolves against the AWS runtime support table, an
+Anthropic model ID against the `claude-api` skill, a non-Anthropic model ID
+(`openai.gpt-*`, `amazon.nova-*`, `gemini-*`) against that vendor's own
+deprecation docs, since no local skill covers those and `claude-api` scopes
+itself out when another provider is in play. A `PREREQ` is an availability
+question, not a version race.
 
-| Census evidence | Currency oracle |
-|---|---|
-| `go.mod` | `govulncheck`, module proxy latest, Go's two-major support window |
-| `package.json` | `npm`/`pnpm audit`, registry latest, `engines` vs Node EOL |
-| `Package.swift` / `.resolved` | `swift-tools-version` vs current Swift, pin ages |
-| `.github/workflows` `uses:` | action major vs latest, runner image deprecations |
-| Lambda runtime enums | the AWS Lambda runtime support table, endoflife.date |
-| Anthropic model IDs, pricing, API versions | the `claude-api` skill, which is scoped to exactly this |
-| Non-Anthropic model IDs (`openai.gpt-*`, `amazon.nova-*`, `gemini-*`) | the vendor's own deprecation docs. No local reference skill covers these, and `claude-api` explicitly scopes itself out when another provider is in play, so do not imply coverage that does not exist |
-| Framework versions asserted in prose | context7, then the registry |
-| Tier C prerequisites (`jq`, `gh`, a scanner) | presence check plus EOL, not a version race |
-| Nothing in any tier | genuine N/A, reported with the file and ecosystem counts |
-
-**Judge polarity before reporting a Tier B hit.** The same identifier appears in
+**Judge polarity before reporting a `REF`.** The same identifier appears in
 prescriptions ("use `NODEJS_22_X`"), warnings ("`NODEJS_20_X` reached Lambda EOL
-2026-04-30"), and history ("we were on `NODEJS_18_X` until the migration"). Only
-the first is a finding. Read the surrounding line the census captured; if it is
-telling readers to AVOID the stale thing, the document is already correct and
-flagging it is a false positive.
-
-**Go (`go.mod`):** skip `vendor/`. Direct deps are `require` entries NOT marked
-`// indirect`; the runtime is the `go 1.xx` directive (Go supports the two latest
-majors). Security: `govulncheck ./...` or `osv-scanner --lockfile=go.mod`.
-Runtime EOL: endoflife.date/go.
-
-**Node / TypeScript (`package.json`):** skip `node_modules/`, `.next/`. Current
-versions from `dependencies` / `devDependencies` plus the lockfile; runtime from
-`engines.node` or `.nvmrc`. Resolve `next`, `react`, and the framework deps the
-routing script surfaced. Security: `npm audit` / `pnpm audit` or
-`osv-scanner -r .`. Node EOL: endoflife.date/nodejs. Next.js patches the current
-and previous major.
-
-**Flutter / Dart (`pubspec.yaml`):** skip `.dart_tool/`, `build/`. Current from
-`dependencies` plus `pubspec.lock`; SDK from `environment:`. Security:
-`dart pub outdated --mode=security` or `osv-scanner --lockfile=pubspec.lock`.
-
-**Swift / SPM (`Package.swift`, `Package.resolved`):** skip `.build/`.
-`Package.resolved` carries the exact pinned, git-tag-based versions; toolchain
-from `swift-tools-version`. Security: no first-party scanner, so use
-`osv-scanner --lockfile=Package.resolved` plus Dependabot advisories.
-
-**Python (`pyproject.toml`, `requirements.txt`):** skip `.venv/`. Current from
-`[project.dependencies]` / `[tool.poetry.dependencies]` plus `poetry.lock` /
-`uv.lock`; runtime from `requires-python`. Security: `pip-audit` or
-`osv-scanner -r .`. Python EOL: endoflife.date/python.
-
-**Rust (`Cargo.toml`):** skip `target/`. Current from `[dependencies]` plus
-`Cargo.lock`; MSRV from `rust-version`. Security: `cargo audit` or
-`osv-scanner --lockfile=Cargo.lock`.
-
----
+2026-04-30"), and history. Only the first is a finding. The script emits the
+surrounding line so this is decidable without opening the file.
 
 ## § SIMPLIFY
 
