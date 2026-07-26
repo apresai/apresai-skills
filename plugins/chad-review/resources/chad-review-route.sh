@@ -185,7 +185,7 @@ echo
 # emit_block <lang> <reviewer_specialist> <spec_hint> <ctx>
 # ONE REVIEWER PER LANGUAGE. Passes 1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS
 # (coverage only), 4 OBSERVABILITY, and 6 SIMPLIFY all ride a single per-language
-# specialist at the JUDGE tier, reading the diff once. <spec_hint> is the DRIFT
+# specialist at the REVIEW tier, reading the diff once. <spec_hint> is the DRIFT
 # codegen/spec-lint command hint, surfaced on the reviewer row.
 # Pass reviewer="-" for a block that gets no reviewer of its own (prose). It then
 # prints neither a tier nor the Phase 2 reviewer line, both of which would
@@ -201,7 +201,7 @@ emit_block() {
   fi
   cat <<EOF
   Reviewer (DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY)
-                                       -> $reviewer   [JUDGE tier]
+                                       -> $reviewer   [REVIEW tier, sonnet]
       DRIFT codegen / spec-lint hint     : $spec_hint
 EOF
   [[ "$lang" == CDK* ]] && echo "      (+ IaC observability: log retention / X-Ray / alarms folded into the brief)"
