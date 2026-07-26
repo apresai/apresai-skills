@@ -52,6 +52,15 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    the review reported success. Any of those paths can do it, so back them up on
    every working-tree review, including the `light` shape.
 
+   **Only when step 1 actually listed a `??` entry.** With no untracked files
+   there is nothing for the guard to protect, and a file that appears later is a
+   new artifact rather than a finding, which is how Phase 2 step 5 already treats
+   it. Skipping is not a shortcut around the safety property: it is declining to
+   back up the empty set, on the evidence `git status --porcelain` just produced.
+   Say so in the header (`Untracked guard: not needed, 0 untracked files`) and
+   skip the matching verify in Phase 2 step 5. On a clean-tree last-commit review
+   this is always the case.
+
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/untracked-guard.sh" backup
    ```
@@ -71,7 +80,34 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 4. The diff feeds passes 1, 2, 3 (coverage), 4, and 6. The changed files list
    drives test selection. Pass 5 is whole-project: it audits dependencies
    regardless of the diff, reading the file list only to prioritize and tag.
-5. **Classify the diff shape.** Ambiguity always falls to `standard`.
+5. **Route by language family:**
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/chad-review-route.sh"
+   # last-commit mode: ... chad-review-route.sh --last-commit
+   ```
+
+   It emits one routing block per detected language (Go, CDK TypeScript,
+   Next.js/React, generic TS/JS, iOS Swift, OpenAPI/docs, plus a catch-all so no
+   file is silently dropped), each naming a reviewer `subagent_type`, a codegen
+   and spec-lint hint derived from the project's own Makefile targets, and
+   Context7 hints derived from the imports and `package.json` deps the changed
+   files actually use. It tells CDK from Next.js by imports and marker files, and
+   finds OpenAPI specs by an `openapi:` key rather than a filename.
+
+   **Mixed-language diffs**: spawn ONE reviewer per block plus ONE whole-project
+   FRESHNESS agent (CDK + Go = 3 agents). **Scope the diff per block**: each
+   reviewer sees ONLY that language's hunks. DRIFT's codebase-wide grep is
+   scope-independent, and the parent and FRESHNESS agent still see everything.
+   All findings merge into one report.
+
+   If the script is missing, fall back to the picks in §"Execution strategy".
+6. **Classify the diff shape.** Ambiguity always falls to `standard`.
+
+   Routing runs first on purpose: step 5 already walked and classified this exact
+   file list, so read its `Files detected:` block instead of re-walking it. The
+   one thing it does not give you is the changed-line count, and that came from
+   the `--stat` in step 2.
 
    - `light`: **docs-only** (`*.md`, `*.txt`, `docs/**`, LICENSE, images),
      **config-only** (`.github/**`, `.gitignore`, `.editorconfig`, linter
@@ -94,28 +130,6 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    Print `Diff shape: <shape>`. When it is not `standard`, add "rerun with
    `/chad-review --full` to force the complete fan-out". `--full` skips
    classification and treats the diff as `standard`.
-6. **Route by language family:**
-
-   ```bash
-   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/chad-review-route.sh"
-   # last-commit mode: ... chad-review-route.sh --last-commit
-   ```
-
-   It emits one routing block per detected language (Go, CDK TypeScript,
-   Next.js/React, generic TS/JS, iOS Swift, OpenAPI/docs, plus a catch-all so no
-   file is silently dropped), each naming a reviewer `subagent_type`, a codegen
-   and spec-lint hint derived from the project's own Makefile targets, and
-   Context7 hints derived from the imports and `package.json` deps the changed
-   files actually use. It tells CDK from Next.js by imports and marker files, and
-   finds OpenAPI specs by an `openapi:` key rather than a filename.
-
-   **Mixed-language diffs**: spawn ONE reviewer per block plus ONE whole-project
-   FRESHNESS agent (CDK + Go = 3 agents). **Scope the diff per block**: each
-   reviewer sees ONLY that language's hunks. DRIFT's codebase-wide grep is
-   scope-independent, and the parent and FRESHNESS agent still see everything.
-   All findings merge into one report.
-
-   If the script is missing, fall back to the picks in §"Execution strategy".
 7. **Run the project's own gate, in the parent, before any agent launches.**
 
    Deterministic checks are the cheapest defect detector this skill has and the
@@ -640,7 +654,9 @@ One pass, holding every finding at once:
    **cannot** drop it: failing to confirm is not evidence of absence, and only
    step 3's rule removes a finding. An unconfirmed CRITICAL stays in the report,
    marked `[unconfirmed]`, and still counts toward the verdict.
-5. **Confirm the working tree survived.**
+5. **Confirm the working tree survived.** Skip this only when pre-flight step 2
+   skipped the backup because there were no untracked files; there is nothing to
+   verify, and the header already says so.
 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/untracked-guard.sh" verify --restore
