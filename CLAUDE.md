@@ -102,7 +102,7 @@ symbols, and user intents that should activate it.
 ```json
 {
   "name": "xai-voice",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "One paragraph. This is what users see when browsing.",
   "author": { "name": "Chad Neal", "email": "chad.neal@gmail.com" }
 }
@@ -120,7 +120,7 @@ is invisible to users, even if its directory is perfect. Add an entry:
 {
   "name": "xai-voice",
   "description": "Shown in the marketplace listing.",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "author": { "name": "Chad Neal" },
   "source": "./plugins/xai-voice",
   "category": "ai-tooling"
