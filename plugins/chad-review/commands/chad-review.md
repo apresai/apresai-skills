@@ -505,7 +505,7 @@ version-resolution agent to that same message only when pass 5 asked for one, so
 a single-language diff is 1 or 2 Agent tool uses and CDK plus Go is 2 or 3.
 
 **Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), 4, and 6, at the
-JUDGE tier. `subagent_type` comes from the routing script
+REVIEW tier (sonnet). `subagent_type` comes from the routing script
 (`feature-dev:code-reviewer` for Go, `cloud-architect` for CDK,
 `frontend-developer` for Next.js, `typescript-pro` for generic TS,
 `code-reviewer` for Swift, `general-purpose` otherwise). It reads the diff ONCE

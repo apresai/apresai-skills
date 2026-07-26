@@ -1,9 +1,9 @@
 # chad-review: writing sub-agent prompts
 
 Read this ONLY when you are about to launch an agent: `standard` shape, or
-`light`/`deps` where the FRESHNESS census returned work needing one. On a
-`light` review that spawns nothing, none of this applies, which is why it lives
-here rather than in the always-loaded skill body.
+`light`/`deps` where `freshness.sh` emitted `DEP` records needing version
+resolution. On a `light` review that spawns nothing, none of this applies, which
+is why it lives here rather than in the always-loaded skill body.
 
 Model tiering, the agent budget, and the Phase 1 / Phase 2 split stay in
 `commands/chad-review.md` §"Execution strategy"; this file is only the prompt
@@ -18,20 +18,20 @@ Self-contained, always:
 - One sentence of goal, naming the passes the agent owns.
 - The diff. Sub-agents cannot see your conversation.
 - The rubric's PATH and section names, never its text. Sub-agents cannot see
-  your conversation, but they can read files.
+  your conversation, but they can read files. Pasting the sections instead would
+  charge the same rubric three times: the parent's context to read it, the
+  parent's output tokens to copy it, and the agent's input to receive it, all to
+  hand over a file the agent can open itself. Naming the sections is mandatory,
+  and so is the agent actually reading them, which is why the skeleton phrases it
+  as a requirement rather than a suggestion.
 
   **Resolve the path before you paste it.** A sub-agent prompt is a string, not
   a shell: a literal `${CLAUDE_PLUGIN_ROOT:-...}` arrives unexpanded and the
-  agent's Read fails on a path containing `${`, which is a silent failure since
-  the agent then reviews without the rubric it was told was mandatory. Expand it
-  in the parent first, for example with
+  agent's Read fails on a path containing `${`. That fails silently, since the
+  agent then reviews without the rubric it was told was mandatory. Expand it in
+  the parent first, for example with
   `echo "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md"`,
-  and paste the absolute path the shell prints. Pasting the sections spends the parent's context on the read,
-  the parent's output tokens on the copy, and the agent's input on receiving it,
-  all to hand over a file the agent can open itself. Naming the sections is
-  mandatory and so is the agent reading them: skipping the rubric silently
-  degrades quality, which is why the instruction is phrased as a requirement in
-  the skeleton below.
+  and paste the absolute path the shell prints.
 - The project's spec files, validation commands, test harness, and doc locations
   as detected in pre-flight. Absent ones stated as absent, so the agent reports
   that sub-check N/A.
@@ -100,7 +100,7 @@ Agent call. `model` is REQUIRED, from §"Model tiering":
 {
   "description": "Reviewer: DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY",
   "subagent_type": "feature-dev:code-reviewer",
-  "model": "<JUDGE tier for this session>",
+  "model": "<REVIEW tier for this session, normally sonnet>",
   "prompt": "<self-contained prompt as above>"
 }
 ```

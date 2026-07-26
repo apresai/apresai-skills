@@ -84,15 +84,30 @@ emit_deps() {
   local f="$1" eco="$2" line
   case "$eco" in
     go)
+      # A require block contains blank lines and `// comment` lines as well as
+      # requirements. The first version of this awk printed both as DEP rows
+      # ("// a" and a bare space), because it filtered only on `// indirect`.
+      # Requiring a second field that starts with `v` is what makes a line a
+      # requirement rather than decoration.
       while IFS= read -r line; do
-        printf 'DEP\t%s\t%s\t%s\n' "$f" "$(awk '{print $1}' <<<"$line")" "$(awk '{print $2}' <<<"$line")"
+        printf 'DEP\t%s\t%s\t%s\n' "$f" "${line%% *}" "${line#* }"
         n_dep=$((n_dep+1))
-      done < <(awk '/^require \(/{r=1;next} /^\)/{r=0} r&&!/\/\/ indirect/{print $1" "$2}
-                    /^require [^(]/{print $2" "$3}' "$f" 2>/dev/null)
+      done < <(awk '/^require \(/{r=1;next} /^\)/{r=0}
+                    r && $1 !~ /^(\/\/|$)/ && NF>=2 && $2 ~ /^v/ && !/\/\/ indirect/ {print $1" "$2}
+                    /^require [^(]/ && $3 ~ /^v/ {print $2" "$3}' "$f" 2>/dev/null)
       line=$(awk '/^go [0-9]/{print $2; exit}' "$f" 2>/dev/null)
       [[ -n "$line" ]] && printf 'RUNTIME\t%s\tgo\t%s\n' "$f" "$line"
       ;;
     node)
+      # A pinned Node version lives in .nvmrc as the whole file, and in
+      # package.json under engines.node. Handling only the latter meant an
+      # .nvmrc produced a MANIFEST record and no RUNTIME, so the pin this file
+      # exists to express was invisible to the audit.
+      if [[ "$f" == *.nvmrc ]]; then
+        line=$(head -1 "$f" 2>/dev/null | tr -d ' \tv')
+        [[ -n "$line" ]] && printf 'RUNTIME\t%s\tnode\t%s\n' "$f" "$line"
+        return 0
+      fi
       [[ "$f" == *package.json ]] || return 0
       while IFS=$'\t' read -r k v; do
         printf 'DEP\t%s\t%s\t%s\n' "$f" "$k" "$v"; n_dep=$((n_dep+1))
@@ -100,6 +115,14 @@ emit_deps() {
                       | to_entries[] | "\(.key)\t\(.value)"' "$f" 2>/dev/null)
       line=$(jq -r '.engines.node // empty' "$f" 2>/dev/null)
       [[ -n "$line" ]] && printf 'RUNTIME\t%s\tnode\t%s\n' "$f" "$line"
+      ;;
+    asdf|mise)
+      # `.tool-versions` and mise.toml pin runtimes for several ecosystems at
+      # once, one per line. Emit each as a RUNTIME rather than dropping the file.
+      while read -r tool ver _; do
+        [[ -z "$tool" || "$tool" == \#* ]] && continue
+        printf 'RUNTIME\t%s\t%s\t%s\n' "$f" "$tool" "${ver//\"/}"
+      done < <(grep -vE '^\s*(#|\[|$)' "$f" 2>/dev/null | tr -d "'" | sed 's/=/ /')
       ;;
   esac
   return 0

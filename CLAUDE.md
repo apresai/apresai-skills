@@ -173,7 +173,7 @@ make bump-patch        # marketplace version only (also bump-minor, bump-major)
 make clean             # remove stray .pyc / __pycache__ / .DS_Store
 ```
 
-`make validate` is the check to run before opening a PR. It runs five checks, the last of which executes any `plugins/*/resources/*.test.sh` suite. It verifies that
+`make validate` is the check to run before opening a PR. It runs six checks, the last of which executes any `plugins/*/resources/*.test.sh` suite, and the one before it confirms that every `resources/...` path a plugin's markdown points at resolves in some plugin. It verifies that
 `marketplace.json` is valid JSON with `name`, `owner`, and a `plugins`
 array; that every `plugin.json` is valid JSON with a `name` and, if it
 declares `commands`, that those paths start with `./`; that every
