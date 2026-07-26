@@ -4,7 +4,7 @@
 # WHY THIS EXISTS
 # chad-review's 6-pass STRUCTURE is language-agnostic, but the reviewer that runs
 # five of those passes is not: one specialist per language block reads that
-# language's hunks once, at the JUDGE tier. Go wants `feature-dev:code-reviewer`;
+# language's hunks once, at the REVIEW tier (sonnet). Go wants `feature-dev:code-reviewer`;
 # CDK TypeScript wants `cloud-architect` (which also covers IaC observability);
 # Next.js React wants `frontend-developer`; generic TS wants `typescript-pro`;
 # iOS Swift has no native specialist so we fall back to `code-reviewer`, enriched
@@ -185,7 +185,7 @@ echo
 # emit_block <lang> <reviewer_specialist> <spec_hint> <ctx>
 # ONE REVIEWER PER LANGUAGE. Passes 1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS
 # (coverage only), 4 OBSERVABILITY, and 6 SIMPLIFY all ride a single per-language
-# specialist at the JUDGE tier, reading the diff once. <spec_hint> is the DRIFT
+# specialist at the REVIEW tier, reading the diff once. <spec_hint> is the DRIFT
 # codegen/spec-lint command hint, surfaced on the reviewer row.
 # Pass reviewer="-" for a block that gets no reviewer of its own (prose). It then
 # prints neither a tier nor the Phase 2 reviewer line, both of which would
@@ -201,7 +201,7 @@ emit_block() {
   fi
   cat <<EOF
   Reviewer (DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY)
-                                       -> $reviewer   [JUDGE tier]
+                                       -> $reviewer   [REVIEW tier, sonnet]
       DRIFT codegen / spec-lint hint     : $spec_hint
 EOF
   [[ "$lang" == CDK* ]] && echo "      (+ IaC observability: log retention / X-Ray / alarms folded into the brief)"
@@ -421,12 +421,12 @@ fi
 
 echo "==========================================="
 echo "Notes:"
-echo "  - Model tiering is SESSION-RELATIVE (chad-review \"Model tiering\"): MECH is"
-echo "    always sonnet; JUDGE is opus except on a sonnet session, which stays"
-echo "    sonnet everywhere. Never haiku, never spawn fable. The reviewer rides"
-echo "    JUDGE; FRESHNESS rides MECH."
-echo "  - FRESHNESS -> general-purpose [MECH], whole-project: launch it ONCE per"
-echo "    review, not per language block, and not from the routing above."
+echo "  - Model tiering (chad-review \"Model tiering\"), three tiers: the reviewers"
+echo "    below ride REVIEW=sonnet; confidence scoring and version lookup ride"
+echo "    LOOKUP=haiku; JUDGE=opus covers only the parent's attack probes and"
+echo "    CRITICAL re-verification. Never spawn fable."
+echo "  - FRESHNESS runs freshness.sh in the parent; it launches an agent only to"
+echo "    resolve versions for DEP records, at LOOKUP tier, and not from the routing above."
 echo "  - Phase 2 is the parent: run the affected tests, run the attack probes,"
 echo "    filter every finding once, re-verify CRITICALs, confirm the untracked"
 echo "    files survived, then write the verdict."
@@ -434,5 +434,5 @@ echo "  - Context7 hints are framework names. The agent resolves each to a libra
 echo "    ID and fetches docs at audit start, then reasons against current"
 echo "    semantics rather than pre-training knowledge that may be stale."
 echo "  - Mixed-language diffs: one reviewer per block above, each scoped to ONLY"
-echo "    that block's hunks, plus one whole-project FRESHNESS agent. The parent"
-echo "    merges every finding into a single Final Report."
+echo "    that block's hunks. The parent merges every finding into one report,"
+echo "    after a single batched scorer drops everything under confidence 80."

@@ -2,7 +2,7 @@
 # untracked-guard.sh backup|verify [--restore]
 #
 # WHY THIS IS A SCRIPT AND NOT A SNIPPET IN THE SKILL
-# chad-review's read-only guarantee is prompt wording, not tool restriction: the
+# chad-review's no-edit rule is prompt wording, not tool restriction: the
 # reviewer agents hold Bash, Edit, and Write, and the review runs the project's
 # own test and codegen commands. Any of those can take untracked files with them
 # (`git stash -u`, `git clean`, `git checkout`). On 2026-06-14 exactly that

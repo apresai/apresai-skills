@@ -1,13 +1,10 @@
 # chad-review pass reference (per-language / per-ecosystem detail)
 
-Companion to `commands/chad-review.md`, loaded on demand so the parent
-conversation never pays for languages the diff does not touch. When building a
-Phase 1 sub-agent prompt, paste ONLY the sections matching the passes that agent
-owns and the language families the routing script detected. The TESTS run half
-and the BEHAVIOR AND RISK attack half execute in the parent (Phase 2): Read those
-sections at execution time.
-
-One section per pass, same names and numbers as the command file:
+Companion to `commands/chad-review.md`, loaded on demand so nobody pays for
+languages the diff does not touch. A Phase 1 sub-agent is given this file's PATH
+and the section names it owns, and reads them itself; the parent does not paste
+them. The TESTS run half and the BEHAVIOR AND RISK attack half execute in the
+parent, which reads those sections at execution time.
 
 | Section | Covers |
 |---|---|
@@ -15,8 +12,9 @@ One section per pass, same names and numbers as the command file:
 | § BEHAVIOR AND RISK | Language-specific gotchas for the attack probes |
 | § TESTS | Per-language test scoping, and what "covered" looks like |
 | § OBSERVABILITY | Logging, error-wrapping, and metric idioms |
-| § FRESHNESS | Ecosystem manifest, version, and security sources |
+| § FRESHNESS | Which oracle answers which evidence, and polarity judgment |
 | § SIMPLIFY | Per-language simplification signals |
+| § GATE | What a project's validation entrypoint should contain |
 
 Full path when installed:
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pass-reference.md`
@@ -367,40 +365,22 @@ initialization parameters appear. For `unittest`, the `subTest` context manager
 
 ## § FRESHNESS
 
-`osv-scanner -r .` is a language-agnostic CVE fallback that reads most lockfiles
-at once and is the cheapest single scan.
+Discovery, extraction, and scanning are in `resources/freshness.sh`; run it rather
+than reimplementing them here. What stays judgment:
 
-**Go (`go.mod`):** skip `vendor/`. Direct deps are `require` entries NOT marked
-`// indirect`; the runtime is the `go 1.xx` directive (Go supports the two latest
-majors). Security: `govulncheck ./...` or `osv-scanner --lockfile=go.mod`.
-Runtime EOL: endoflife.date/go.
+**Pick the oracle from the evidence, not from a default.** `DEP` records from a
+manifest resolve against their registry or context7. `REF` records usually do
+not: a Lambda runtime enum resolves against the AWS runtime support table, an
+Anthropic model ID against the `claude-api` skill, a non-Anthropic model ID
+(`openai.gpt-*`, `amazon.nova-*`, `gemini-*`) against that vendor's own
+deprecation docs, since no local skill covers those and `claude-api` scopes
+itself out when another provider is in play. A `PREREQ` is an availability
+question, not a version race.
 
-**Node / TypeScript (`package.json`):** skip `node_modules/`, `.next/`. Current
-versions from `dependencies` / `devDependencies` plus the lockfile; runtime from
-`engines.node` or `.nvmrc`. Resolve `next`, `react`, and the framework deps the
-routing script surfaced. Security: `npm audit` / `pnpm audit` or
-`osv-scanner -r .`. Node EOL: endoflife.date/nodejs. Next.js patches the current
-and previous major.
-
-**Flutter / Dart (`pubspec.yaml`):** skip `.dart_tool/`, `build/`. Current from
-`dependencies` plus `pubspec.lock`; SDK from `environment:`. Security:
-`dart pub outdated --mode=security` or `osv-scanner --lockfile=pubspec.lock`.
-
-**Swift / SPM (`Package.swift`, `Package.resolved`):** skip `.build/`.
-`Package.resolved` carries the exact pinned, git-tag-based versions; toolchain
-from `swift-tools-version`. Security: no first-party scanner, so use
-`osv-scanner --lockfile=Package.resolved` plus Dependabot advisories.
-
-**Python (`pyproject.toml`, `requirements.txt`):** skip `.venv/`. Current from
-`[project.dependencies]` / `[tool.poetry.dependencies]` plus `poetry.lock` /
-`uv.lock`; runtime from `requires-python`. Security: `pip-audit` or
-`osv-scanner -r .`. Python EOL: endoflife.date/python.
-
-**Rust (`Cargo.toml`):** skip `target/`. Current from `[dependencies]` plus
-`Cargo.lock`; MSRV from `rust-version`. Security: `cargo audit` or
-`osv-scanner --lockfile=Cargo.lock`.
-
----
+**Judge polarity before reporting a `REF`.** The same identifier appears in
+prescriptions ("use `NODEJS_22_X`"), warnings ("`NODEJS_20_X` reached Lambda EOL
+2026-04-30"), and history. Only the first is a finding. The script emits the
+surrounding line so this is decidable without opening the file.
 
 ## § SIMPLIFY
 
@@ -447,3 +427,54 @@ RISK, not here.
   reviewer rather than the next reader and become noise once merged
 - A feature flag or compatibility shim where the code could simply change
 - Validation repeated at an internal boundary that a caller already enforced
+
+---
+
+## § GATE
+
+What a project's validation entrypoint should contain, used to build the
+recommendation behind the `no project validation entrypoint` finding. Recommend
+only what the repo's own ecosystems justify: a checklist longer than the project
+is a target nobody runs.
+
+**Universal, whatever the language:**
+- Every JSON and YAML file parses (`jq empty`, `yq`, or the language's parser)
+- No merge-conflict markers survive in tracked files (`<<<<<<<`, `>>>>>>>`)
+- No debugger or focused-test leftovers (`it.only`, `fdescribe`, `dbg!`,
+  `binding.pry`, `breakpoint()`)
+- The formatter agrees in check mode, so formatting never lands as diff noise
+- Paths the build depends on resolve: scripts, assets, and doc links
+
+**Go:** `go build ./...`, `go vet ./...`, `gofmt -l` returning empty, and
+`go mod tidy` leaving `go.mod` and `go.sum` unchanged.
+
+**TypeScript / JavaScript:** `tsc --noEmit`, the project's ESLint config, and
+lockfile reproducibility (`npm ci` succeeds against the committed manifest).
+
+**CDK TypeScript:** `tsc --noEmit` is the correct check for code-only changes.
+Reserve `cdk synth` for PRs that add or move a Lambda or an asset path: synth
+hashes build artifacts that a fresh checkout does not have, so wiring it into a
+gate that must pass everywhere makes the gate fail everywhere.
+
+**Swift:** `swift build`, plus SwiftLint or SwiftFormat in check mode when the
+repo already carries a config.
+
+**Python:** `ruff check` or flake8, `mypy` if the project is typed, and
+`pytest --collect-only` so a broken import fails in a second rather than a suite.
+
+**Rust:** `cargo check --all-targets`, `cargo fmt --check`,
+`cargo clippy -- -D warnings`.
+
+**AWS Lambda, any language:** grep the IaC sources for runtime and architecture
+regressions, which reappear with every new construct and stay invisible until
+deploy:
+`grep -RnE 'NODEJS_(16|18|20)_X|Architecture\.X86_64'`, excluding
+`node_modules`, `cdk.out`, `.next`, `dist`. Any hit fails the gate.
+
+**Content, prompt, and plugin repos (markdown plus manifests):** a repo with no
+compiler still has invariants, and they are checkable. Every manifest is valid
+JSON against its schema; version fields that must agree do agree, verified in
+both directions so neither list can drift unnoticed; every declared directory
+exists and holds the file its convention requires; and any test scripts the repo
+ships actually execute. This is the case most often mistaken for "nothing to
+validate here."
