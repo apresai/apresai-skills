@@ -90,7 +90,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
 3. **Announce the target and tier** in one line, mapping your session model per
    §"Model tiering":
-   `Chad Review: working tree (2 staged, 3 unstaged, 1 untracked), opus session, MECH=sonnet JUDGE=opus`
+   `Chad Review: working tree (2 staged, 3 unstaged, 1 untracked), opus session, LOOKUP=haiku REVIEW=sonnet JUDGE=opus`
    If the session model is undeterminable, use the `unknown` row and say so.
 4. The diff feeds passes 1, 2, 3 (coverage), 4, and 6. The changed files list
    drives test selection. Pass 5 is whole-project: it audits dependencies
@@ -455,27 +455,39 @@ apply. The Fix Prompt hands these to `/tidy`.
 since Claude Code v2.1.198 a launch with no explicit `model` silently inherits
 the parent session tier.
 
-- **MECH**: FRESHNESS and the parent's orchestration. **Always `sonnet`.**
-- **JUDGE**: the reviewer agent (it owns behavioral review), the parent's attack
-  probes, and CRITICAL re-verification. **`opus`, except a `sonnet` session stays
-  `sonnet`.**
+Three tiers, and the expensive one is deliberately the smallest.
 
-| Session model | Parent | MECH | JUDGE |
-|---|---|---|---|
-| opus | opus | sonnet | opus |
-| sonnet | sonnet | sonnet | sonnet |
-| fable | fable | sonnet | opus |
-| unknown / haiku / other | = session | sonnet | opus |
+| Tier | Steps | Model |
+|---|---|---|
+| **LOOKUP** | confidence scoring, version resolution for `DEP` records | `haiku` |
+| **REVIEW** | the per-language reviewer that reads the diff and raises findings | `sonnet` |
+| **JUDGE** | the parent's attack probes, and re-verification of any CRITICAL | `opus`, or the session model when that is cheaper |
 
-A sonnet session stays sonnet everywhere, so a deliberately cheap session is
-never force-upgraded. A fable session keeps only the orchestration shell on fable
-and runs the review on opus.
+| Session model | Parent | LOOKUP | REVIEW | JUDGE |
+|---|---|---|---|---|
+| opus | opus | haiku | sonnet | opus |
+| sonnet | sonnet | haiku | sonnet | sonnet |
+| fable | fable | haiku | sonnet | opus |
+| unknown / haiku / other | = session | haiku | sonnet | opus |
 
-**Never haiku**: sonnet is the review floor. **Never spawn fable**: at roughly
-double the Opus rate it buys no review advantage here. Use it only when asked for
-by name. `opus` and `sonnet` are aliases resolved at spawn time; never hardcode a
-dated model ID. Pricing snapshot 2026-07-25: Opus 5 $5/$25 per MTok, Sonnet 5
-$3/$15, Fable 5 $10/$50.
+A sonnet session stays at sonnet for JUDGE, so a deliberately cheap session is
+never force-upgraded. A fable session keeps only the orchestration shell on fable.
+
+**Haiku is correct for LOOKUP and wrong everywhere else.** The line is whether
+the step decides something about the code. Scoring a finding someone else already
+wrote against a rubric pasted verbatim, and reading a version out of a registry,
+are not decisions. Raising the finding is.
+
+**The reviewer is `sonnet`, not `opus`.** It is the largest agent in the run, and
+Anthropic's `/code-review` runs five sonnet reviewers for the same job with no
+opus anywhere. Opus stays on the two steps where being wrong costs the most and
+the volume is smallest. If a change is high-stakes enough to want opus reviewing
+it, ask for that explicitly on that run.
+
+**Never spawn fable**: at roughly double the Opus rate it buys no review
+advantage here. `opus`, `sonnet`, and `haiku` are aliases resolved at spawn time;
+never hardcode a dated model ID. Pricing snapshot 2026-07-25: Opus 5 $5/$25 per
+MTok, Sonnet 5 $3/$15, Fable 5 $10/$50.
 
 ### Effort
 
@@ -502,7 +514,7 @@ six-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
 
 **FRESHNESS** runs in the parent: `freshness.sh` does the whole audit in under a
-second. It spawns ONE agent, MECH tier, in exactly one case: the script emitted
+second. It spawns ONE agent, LOOKUP tier, in exactly one case: the script emitted
 `DEP` records that still need version resolution. Hand that agent the `DEP` lines
 and nothing else, since discovery is already done, and let it return the resolved
 versions and breaking surfaces. No `DEP` records means no agent.
@@ -519,15 +531,30 @@ One pass, holding every finding at once:
    to confirm edge cases. This is JUDGE-tier work: inline when the parent is
    already there (opus and sonnet sessions), otherwise delegate this step alone
    to one JUDGE sub-agent.
-3. **Filter once.** Sub-agents report unfiltered, so the parent is the only
-   filter. Drop or downgrade ONLY on a `file:line` that disproves the finding,
-   never on plausibility. Classic false-positive causes: a grep hit inside a
-   comment, string literal, test fixture, or generated file; a "missing test"
+3. **Score, then keep only what clears 80.** Hand every raised finding, in ONE
+   batch, to a single LOOKUP-tier agent that did not write them. An author is a
+   poor judge of its own findings, and one batched scorer costs almost nothing.
+   Give it the diff, the project's own guidelines, and the 0-to-100 scale from
+   the output contract verbatim. Where a finding cites a project rule, it must
+   confirm the rule actually says that.
+
+   **Keep a finding only at 80 or above. The burden of proof is on keeping it,
+   not on dropping it.** The old rule was the reverse, and it was the reason
+   these rubrics grew: disproving a vague finding is hard, so nearly everything
+   survived, so every severity band needed prose to justify what arrived.
+
+   Common sub-80 causes, for the scorer's benefit: a grep hit inside a comment,
+   string literal, test fixture, or generated file; a "missing test" already
    covered by a differently named or integration test; a "stale doc" statement
-   that still holds; a behavior change intended per an adjacent comment or the
-   commit message. Emit one `Filtered: N raised, M dropped` line. A dropped
-   CRITICAL stays visible as `[dropped: <=10-word evidence]`.
-4. **Re-verify CRITICALs.** Any CRITICAL, and anything marked `CONF lo`, gets a
+   that still holds; a behavior change that an adjacent comment or the commit
+   message shows was intended; anything a linter, typechecker, or the gate would
+   have caught; a pre-existing issue on a line this diff did not touch.
+
+   Emit one `Filtered: N raised, M dropped below 80` line. Dropping must stay
+   visible, because a silent filter is just backlogging with better manners. A
+   dropped CRITICAL stays listed as `[dropped: <score>, <=10-word reason]`.
+4. **Re-verify CRITICALs.** Any CRITICAL that cleared 80, and anything that
+   cleared it by a narrow margin, gets a
    second look against the code before it enters the verdict. This step can
    confirm a finding, or sharpen its file:line, or downgrade its severity. It
    **cannot** drop it: failing to confirm is not evidence of absence, and only
@@ -647,8 +674,8 @@ Filtered: N raised, M dropped
 
 Carry each finding's wording verbatim. Steps 3 and 4 may lower a severity or
 sharpen a `file:line`, and those edits carry through; nothing else is rewritten.
-**Drop the `CONF` tag**: it is a routing signal for your filter, not something
-the reader needs. A CRITICAL that step 4 could not confirm keeps its severity and
+**Drop the confidence score**: it is a routing signal for the filter, not
+something the reader needs once a finding has survived it. A CRITICAL that step 4 could not confirm keeps its severity and
 gains `[unconfirmed]`. Also **strip any process narration** an agent emitted
 despite the contract. Findings in the deliverable, never the process.
 
@@ -725,11 +752,13 @@ question: the fix prompt is already in the report body.
   down: an absent convention says `N/A - convention not detected` rather than
   vanishing.
 - ALWAYS pass an explicit `model` on every Agent launch, per §"Model tiering".
-  Never haiku, never fable.
+  Haiku is correct for LOOKUP and wrong above it; never fable.
 - **The prescribed agents are the entire budget**: one reviewer per language
-  block plus one FRESHNESS agent. Never spawn an agent to verify or double-check
-  another agent's finding; the parent does that in Phase 2. Never spawn a second
-  agent for work one can finish.
+  block, the FRESHNESS version-resolution agent when pass 5 calls for one, and
+  the single batched confidence scorer in Phase 2 step 3. That scorer is the one
+  sanctioned exception to "no agent checks another agent": it is LOOKUP tier, it
+  handles every finding in one call, and independence from the author is the
+  whole point of it. Never spawn a second agent for work one can finish.
 - **Never spawn an agent to find out whether there is work.** Sub-agents do
   bounded work whose shape is already known. If a deterministic command in the
   parent answers the question, the parent answers it and passes the result down.

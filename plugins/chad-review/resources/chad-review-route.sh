@@ -4,7 +4,7 @@
 # WHY THIS EXISTS
 # chad-review's 6-pass STRUCTURE is language-agnostic, but the reviewer that runs
 # five of those passes is not: one specialist per language block reads that
-# language's hunks once, at the JUDGE tier. Go wants `feature-dev:code-reviewer`;
+# language's hunks once, at the REVIEW tier (sonnet). Go wants `feature-dev:code-reviewer`;
 # CDK TypeScript wants `cloud-architect` (which also covers IaC observability);
 # Next.js React wants `frontend-developer`; generic TS wants `typescript-pro`;
 # iOS Swift has no native specialist so we fall back to `code-reviewer`, enriched
@@ -421,12 +421,12 @@ fi
 
 echo "==========================================="
 echo "Notes:"
-echo "  - Model tiering is SESSION-RELATIVE (chad-review \"Model tiering\"): MECH is"
-echo "    always sonnet; JUDGE is opus except on a sonnet session, which stays"
-echo "    sonnet everywhere. Never haiku, never spawn fable. The reviewer rides"
-echo "    JUDGE; FRESHNESS rides MECH."
-echo "  - FRESHNESS -> general-purpose [MECH], whole-project: launch it ONCE per"
-echo "    review, not per language block, and not from the routing above."
+echo "  - Model tiering (chad-review \"Model tiering\"), three tiers: the reviewers"
+echo "    below ride REVIEW=sonnet; confidence scoring and version lookup ride"
+echo "    LOOKUP=haiku; JUDGE=opus covers only the parent's attack probes and"
+echo "    CRITICAL re-verification. Never spawn fable."
+echo "  - FRESHNESS runs freshness.sh in the parent; it launches an agent only to"
+echo "    resolve versions for DEP records, at LOOKUP tier, and not from the routing above."
 echo "  - Phase 2 is the parent: run the affected tests, run the attack probes,"
 echo "    filter every finding once, re-verify CRITICALs, confirm the untracked"
 echo "    files survived, then write the verdict."
@@ -434,5 +434,5 @@ echo "  - Context7 hints are framework names. The agent resolves each to a libra
 echo "    ID and fetches docs at audit start, then reasons against current"
 echo "    semantics rather than pre-training knowledge that may be stale."
 echo "  - Mixed-language diffs: one reviewer per block above, each scoped to ONLY"
-echo "    that block's hunks, plus one whole-project FRESHNESS agent. The parent"
-echo "    merges every finding into a single Final Report."
+echo "    that block's hunks. The parent merges every finding into one report,"
+echo "    after a single batched scorer drops everything under confidence 80."

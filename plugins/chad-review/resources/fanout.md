@@ -36,11 +36,21 @@ Self-contained, always:
 Output. Strict, no exceptions:
 - Zero preamble, zero restated diff, zero methodology narration.
 - One line per finding:
-  SEVERITY | CONF hi|med|lo | file:line | <=15-word finding
-- Report EVERY issue you find, including ones you are uncertain about or
-  consider low severity. Do NOT filter for importance or confidence. A later
-  pass does that once, with every finding in view. Coverage is your job;
-  ranking is not. Use CONF to say how sure you are.
+  SEVERITY | <confidence 0-100> | file:line | <=15-word finding
+- Report every issue you find, including low-severity ones. Do NOT filter for
+  importance: that is a later pass's job, once, with everything in view.
+  Coverage is your job, ranking is not.
+- Score confidence honestly, on this scale, and do not inflate it. A separate
+  agent re-scores every finding independently, and anything under 80 is dropped
+  rather than deferred, so a padded score costs you the finding:
+  - 0: false positive under light scrutiny, or a pre-existing issue.
+  - 25: might be real, could not verify it. Stylistic and not called out in
+    the project's own guidelines.
+  - 50: verified real, but a nitpick or rare in practice, and unimportant next
+    to the rest of the diff.
+  - 75: double-checked, very likely hit in practice, the existing approach is
+    insufficient, or the project's guidelines name it directly.
+  - 100: confirmed, will happen frequently, evidence directly supports it.
 - Emit one "## <PASS NAME>" heading per pass you own, findings underneath,
   in the order the passes are numbered.
 - A pass with no findings outputs exactly: Clean
