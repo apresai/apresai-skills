@@ -1,4 +1,4 @@
-.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
+.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts validate-prose check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
 
 # Release targets rely on prerequisites running in the listed order
 # (check-clean and check-branch must both run before anything writes a
@@ -21,6 +21,7 @@ help:
 	@echo "  validate-versions  - Check plugin.json versions match marketplace.json"
 	@echo "  validate-resource-refs - Check every resources/ pointer resolves"
 	@echo "  validate-scripts   - Run plugin resource script test suites"
+	@echo "  validate-prose     - Check prose for em-dashes and \" -- \" punctuation"
 	@echo ""
 	@echo "Version Management:"
 	@echo "  version            - Show current version"
@@ -72,13 +73,15 @@ validate-resource-refs:
 	if [ "$$fail" = "1" ]; then exit 1; fi; \
 	echo "  ✅ All resource pointers resolve"
 
-# Run the shell test suites that ship alongside plugin resources. Content repo,
-# so this is the only executable code here that CAN be tested; the untracked
-# guard went through four review rounds of shell bugs before it had a suite.
+# Run the shell test suites that ship alongside plugin resources, and the
+# repo-level ones under scripts/. Content repo, so these are the only executable
+# code here that CAN be tested; the untracked guard went through four review
+# rounds of shell bugs before it had a suite, and check-prose.sh gates every PR
+# in the repo, so a false positive there blocks everything.
 validate-scripts:
-	@echo "==> Running plugin script tests..."
+	@echo "==> Running script tests..."
 	@found=0; out=$$(mktemp); \
-	for t in plugins/*/resources/*.test.sh; do \
+	for t in plugins/*/resources/*.test.sh scripts/*.test.sh; do \
 		[ -e "$$t" ] || continue; \
 		found=1; \
 		echo "  $$t"; \
@@ -281,7 +284,20 @@ validate-versions:
 	echo "✅ All plugin versions match their marketplace entries"
 
 # Run all validations
-validate: validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts
+# The repo has said "prose avoids em-dashes and emoji" since early on. When that
+# was finally measured it held 393 em-dashes across 26 files, including the README
+# and the marketplace description that renders in the plugin browser. A convention
+# nothing checks is a preference. This makes it a gate.
+validate-prose:
+	@echo "==> Validating prose convention..."
+	@if bash scripts/check-prose.sh; then \
+		echo "  ✅ No em-dashes or \" -- \" punctuation in prose"; \
+	else \
+		bash scripts/check-prose.sh --list | sed 's/^/  ❌ /'; \
+		exit 1; \
+	fi
+
+validate: validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts validate-prose
 	@echo ""
 	@echo "================================"
 	@echo "✅ All validations passed!"
