@@ -57,7 +57,14 @@ else
   for p in ${OSV_STUB_SCANNED:-}; do
     echo "Scanned $PWD/$p file and found 1 package"
   done
-  [[ -n "${OSV_STUB_TABLE:-}" && -f "${OSV_STUB_TABLE:-}" ]] && cat "$OSV_STUB_TABLE"
+  # A verdict line, always. The real tool prints one whenever its query returned,
+  # and the script now requires it before crediting coverage, because a Scanned
+  # line proves only that a file was read.
+  if [[ -n "${OSV_STUB_TABLE:-}" && -f "${OSV_STUB_TABLE:-}" ]]; then
+    cat "$OSV_STUB_TABLE"
+  else
+    echo "No issues found"
+  fi
 fi
 exit 0
 STUB
@@ -244,6 +251,86 @@ check "advisories collapse to one upgrade"  "FIX	package-lock.json	next	16.2.10	
 check "highest fixed version wins"          "FIX	package-lock.json	brace-expansion	5.0.6	5.0.8	2	7.7" "$out"
 check "installed versions stay separate"    "FIX	package-lock.json	brace-expansion	1.1.16	5.0.8	1	7.5" "$out"
 absent "table borders are not findings"     "SCAN	osv-scanner	+---"     "$out"
+rm -rf "$r"
+
+# --- a walk is not a query: coverage needs a verdict ----------------------
+# osv-scanner walks the filesystem first and queries the vulnerability database
+# once, afterwards. With the network down it still prints a `Scanned <path>` line
+# for every file, then dies with no verdict. Crediting coverage off those lines
+# reproduces this pass's original bug one level deeper: an ecosystem reported
+# covered when nothing checked it. Only `Total N` or `No issues found` counts.
+r=$(newrepo)
+mkdir -p "$r/.stub"
+cat > "$r/.stub/osv-scanner" <<'STUB'
+#!/usr/bin/env bash
+echo "Scanned $PWD/package-lock.json file and found 42 packages"
+echo "End status: 1 dirs visited"
+echo 'error when retrieving vulns: max retries exceeded: attempt 4: request failed: Post "https://api.osv.dev/v1/querybatch"'
+exit 127
+STUB
+chmod +x "$r/.stub/osv-scanner"
+printf '{"name":"t","lockfileVersion":3,"packages":{}}\n' > "$r/package-lock.json"
+out=$( cd "$r" && PATH="$r/.stub:$PATH" bash "$SCRIPT" 2>&1 )
+absent "a failed query is never coverage"  "SCANNED	package-lock.json" "$out"
+absent "and never reports covered"         "COVERAGE	node	covered"    "$out"
+check  "it reports a GAP instead"          "COVERAGE	node	GAP"        "$out"
+check  "naming the failed query"           "vulnerability query returned no verdict" "$out"
+check  "and says so in NOTE"               "NOTE	scan-incomplete"        "$out"
+check  "SUMMARY reflects zero coverage"    "scanned_ecosystems=0 coverage_gaps=1"    "$out"
+rm -rf "$r"
+
+# --- zero packages extracted is zero packages checked ---------------------
+# osv-scanner reads a v1-schema Package.resolved as `found 0 packages` while the
+# identical pin in v3 schema yields three advisories up to CVSS 8.7. A file the
+# extractor did not understand must not count as coverage, and the cause reported
+# must be the extractor, not a failed query.
+# The verdict IS present here, and one file extracts fine while the other yields
+# zero. That isolates the zero-package rule from the verdict gate: if the two were
+# tested together, disabling the count check would still pass because the verdict
+# gate alone would have stopped the run.
+r=$(newrepo)
+mkdir -p "$r/.stub"
+cat > "$r/.stub/osv-scanner" <<'STUB'
+#!/usr/bin/env bash
+echo "Scanned $PWD/Package.resolved file and found 0 packages"
+echo "Scanned $PWD/go.mod file and found 4 packages"
+echo "No issues found"
+exit 0
+STUB
+chmod +x "$r/.stub/osv-scanner"
+printf '{"version":1,"object":{"pins":[{"package":"swift-nio","state":{"version":"2.95.0"}}]}}\n' > "$r/Package.resolved"
+printf 'module x\n\ngo 1.26\n' > "$r/go.mod"
+out=$( cd "$r" && PATH="$r/.stub:$PATH" bash "$SCRIPT" 2>&1 )
+absent "0 packages is not a SCANNED record"   "SCANNED	Package.resolved" "$out"
+check  "but a real extraction still counts"   "SCANNED	go.mod"           "$out"
+check  "the unextracted ecosystem is a GAP"   "COVERAGE	swift	GAP"     "$out"
+check  "blamed on the extractor, not a query" "no scanner extractor supports" "$out"
+check  "the extracted one stays covered"      "COVERAGE	go	covered"     "$out"
+check  "v1 pins still parse into DEP"         "swift-nio	2.95.0"          "$out"
+rm -rf "$r"
+
+# --- alias continuation rows are not advisories ---------------------------
+# An advisory with aliases renders one data row plus a continuation row per alias,
+# carrying the alias URL and empty cells. Counting them inflates the count past
+# the tool's own Total and emits a FIX row with no package and no version.
+r=$(newrepo); mkstub "$r"
+printf '{"name":"t","lockfileVersion":3,"packages":{}}\n' > "$r/package-lock.json"
+cat > "$r/table.txt" <<'TBL'
+| https://osv.dev/GHSA-29mw-wpgm-hmr9 | 5.3  | npm       | lodash  | 4.17.11 | 4.17.21       | package-lock.json |
+| https://osv.dev/GHSA-r5fr-rjxr-66jc |      |           |         |         |               | package-lock.json |
+| https://osv.dev/GHSA-jf85-cpcp-j695 | 9.1  | npm       | lodash  | 4.17.11 | 4.17.12       | package-lock.json |
+Total 1 package affected by 2 known vulnerabilities (1 Critical, 1 Medium, 0 Low, 0 Unknown) from 1 ecosystem.
+TBL
+out=$(runstub "$r" "package-lock.json" "$r/table.txt")
+check  "alias rows do not inflate the count" "FIX	package-lock.json	lodash	4.17.11	4.17.21	2	9.1" "$out"
+# The garbage row an alias produces keeps the SOURCE cell (it is the last column
+# and stays populated) and empties package and version, so the shape to forbid is
+# `FIX <source> <empty> <empty>`, not a run of leading tabs. Asserting the wrong
+# shape here passed whether or not the alias filter existed.
+absent "and produce no package-less FIX row" "FIX	package-lock.json			"  "$out"
+check  "exactly one FIX row survives"        "FIX	package-lock.json	lodash" "$out"
+if [[ $(grep -c '^FIX' <<<"$out") -eq 1 ]]; then ok "no second FIX row from the alias"
+else bad "no second FIX row from the alias"; grep '^FIX' <<<"$out" | sed 's/^/         /'; fi
 rm -rf "$r"
 
 # --- the REF cap announces what it dropped --------------------------------

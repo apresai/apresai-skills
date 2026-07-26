@@ -99,7 +99,7 @@ PRUNE=( -name node_modules -o -name .git -o -name vendor -o -name target
 
 REF_CAP=200
 
-n_manifest=0; n_dep=0; n_ref=0; n_prereq=0; n_gap=0
+n_manifest=0; n_dep=0; n_ref=0; n_prereq=0; n_gap=0; scan_incomplete=0
 ecosystems=""; scanned_ecos=""
 discovered=""     # path \t ecosystem \t role, one per line
 ignored=""        # newline-delimited paths git ignores
@@ -337,11 +337,30 @@ emit_prereqs() {
 # Pull the coverage evidence out of a scanner's own progress output. In table mode
 # osv-scanner writes progress and results both to stdout, so this reads the same
 # capture the findings come from.
+# A `Scanned <path> file and found N packages` line proves osv-scanner EXTRACTED
+# that file. It does not prove anything was checked against the vulnerability
+# database. osv-scanner walks the filesystem first and issues one batched query
+# afterwards, so with the network down it still prints every Scanned line, then
+# dies with `error when retrieving vulns: ... Post .../v1/querybatch` and exit 127
+# and no verdict at all. Crediting coverage off the walk would reproduce, one
+# level deeper, the exact failure this file exists to prevent: an ecosystem
+# reported covered when nothing looked at it.
+#
+# A verdict line is the only proof the query returned. `Total N packages affected`
+# or `No issues found`, nothing else.
+query_completed() { printf '%s' "$1" | grep -qE '^(Total [0-9]|No issues found)'; }
+
 record_scanned() {
-  local tool="$1" out="$2" line p r eco
+  local tool="$1" out="$2" line p r eco count
   while IFS= read -r line; do
     case "$line" in "Scanned "*" file and found "*) ;; *) continue ;; esac
     p=${line#Scanned }; p=${p%% file and found *}
+    count=${line##* file and found }; count=${count%% *}
+    # `found 0 packages` means the extractor did not understand the file, and it
+    # is not hypothetical: osv-scanner reads a v1-schema Package.resolved as zero
+    # packages while the identical pin in v3 schema yields three advisories up to
+    # CVSS 8.7. Zero packages extracted is zero packages checked, either way.
+    [[ "$count" == 0 ]] && continue
     r=$(rel_path "$p")
     # osv-scanner walks .git and reports git-lfs bookkeeping files as scanned
     # sources. They are not dependencies and must not count as coverage.
@@ -352,6 +371,34 @@ record_scanned() {
     eco=$(awk -F'\t' -v want="$r" '$1==want{print $2; exit}' <<<"$discovered")
     [[ -n "$eco" ]] && note_seco "$eco"
   done <<< "$out"
+  return 0
+}
+
+# Fold one invocation's output in, but only if its query actually returned.
+absorb_scan() {
+  local tool="$1" out="$2" label="$3" why
+  if ! query_completed "$out"; then
+    # Two very different reasons produce no verdict, and reporting the wrong one
+    # sends the reader to the wrong fix. `No package sources found` means nothing
+    # was extractable, so there was nothing to query and the per-ecosystem cause
+    # below is the accurate one. An error retrieving vulns means files WERE
+    # extracted and then not checked, which is the dangerous case and the only
+    # one that should override the per-ecosystem reasoning.
+    if printf '%s' "$out" | grep -q 'No package sources found'; then
+      printf 'NOTE\tscan-empty\t%s extracted nothing it could query\n' "$label"
+      return 0
+    fi
+    scan_incomplete=1
+    why=$(printf '%s' "$out" \
+          | grep -ioE 'error when retrieving vulns[^"]*|could not determine extractor suitable to this file' \
+          | head -1 | cut -c1-90 | tr -s ' ')
+    printf 'NOTE\tscan-incomplete\t%s produced no verdict (%s); its files were extracted but never checked\n' \
+      "$label" "${why:-no error text}"
+    return 0
+  fi
+  record_scanned "$tool" "$out"
+  emit_scan_lines "$tool" "$out"
+  emit_fixes "$out"
   return 0
 }
 
@@ -383,6 +430,12 @@ emit_fixes() {
   awk -F'|' '
     /^\|/ && $2 ~ /osv\.dev/ {
       for (i = 2; i <= 8; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
+      # An advisory with aliases renders one data row plus a continuation row per
+      # alias, carrying only the alias URL and empty cells for everything else.
+      # Counting those inflates the advisory count past the tools own Total and
+      # emits a FIX row with no package and no version. A lodash lockfile prints
+      # 7 rows against "5 known vulnerabilities".
+      if ($4 == "" || $5 == "" || $6 == "") next
       pkg = $5; sub(/ *\(dev\)$/, "", pkg)
       key = $8 SUBSEP pkg SUBSEP $6
       n[key]++
@@ -416,18 +469,11 @@ run_osv_pass2() {
   done <<< "$list"
   [[ "$args_shown" == 0 ]] && return 0
   out=$(osv-scanner "${args[@]}" 2>&1)
-  # 127 here is NOT "command not found": osv-scanner uses it for an unextractable
-  # -L path, and one such path aborts the whole invocation. lscan_ok should make
-  # that unreachable, so if it happens the allowlist is wrong and the honest
-  # output is a gap, not a silent partial result.
-  if [[ $? -eq 127 ]] || printf '%s' "$out" | grep -q "could not determine extractor"; then
-    printf 'NOTE\tpass2-aborted\t%s\n' \
-      "$(printf '%s' "$out" | grep 'could not determine extractor' | head -1 | tr -s ' \t' ' ')"
-    return 0
-  fi
-  record_scanned osv-scanner "$out"
-  emit_scan_lines osv-scanner "$out"
-  emit_fixes "$out"
+  # osv-scanner exits 127 both for an unextractable -L path and for a failed
+  # vulnerability query, so the exit code cannot tell those apart and is not the
+  # signal to use. absorb_scan gates on a verdict line instead, which covers
+  # both: neither case produced one.
+  absorb_scan osv-scanner "$out" "pass 2 (-L, $args_shown lockfile(s))"
   return 0
 }
 
@@ -436,11 +482,11 @@ emit_scan() {
   if command -v osv-scanner >/dev/null 2>&1; then
     tool=osv-scanner
     out=$(osv-scanner -r . 2>&1)
-    record_scanned "$tool" "$out"
-    emit_scan_lines "$tool" "$out"
-    emit_fixes "$out"
+    absorb_scan "$tool" "$out" "pass 1 (-r .)"
     # Pass 2: everything discovery found and pass 1 did not read. Empty on a repo
-    # that hides nothing, which is the common case and costs nothing.
+    # that hides nothing, which is the common case and costs nothing. A pass 1
+    # whose query failed leaves `scanned` empty, so every lockfile lands here and
+    # gets a real second attempt rather than being written off.
     while IFS= read -r p; do
       [[ -z "$p" ]] && continue
       in_set "$p" "$scanned" && continue
@@ -477,6 +523,8 @@ emit_coverage() {
     n_gap=$((n_gap+1))
     if ! command -v osv-scanner >/dev/null 2>&1; then
       why="no osv-scanner installed; the fallback scanner covers one ecosystem only"
+    elif [[ "$scan_incomplete" == 1 ]]; then
+      why="scanner ran but its vulnerability query returned no verdict; nothing was checked"
     else
       n_lock=$(awk -F'\t' -v e="$eco" '$2==e && $3=="lock"' <<<"$discovered" | wc -l | tr -d ' ')
       if [[ "$n_lock" == 0 ]]; then
