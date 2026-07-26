@@ -382,6 +382,37 @@ prescriptions ("use `NODEJS_22_X`"), warnings ("`NODEJS_20_X` reached Lambda EOL
 2026-04-30"), and history. Only the first is a finding. The script emits the
 surrounding line so this is decidable without opening the file.
 
+**A `COVERAGE GAP` is a finding about the review, not about the code.** It says an
+ecosystem this project depends on was never examined, so "no CVEs" does not apply
+to it. Report it under FRESHNESS with the cause the script gives, and treat it as
+CONDITIONAL: the diff is safe to commit, the project's dependency picture has a
+hole. The three causes want different recommendations.
+
+- `no scanner extractor supports this ecosystem` is permanent and not the
+  project's fault. CocoaPods is the current example. Say the graph is unaudited
+  and move on; do not recommend a tool that does not exist.
+- `no lockfile found for this ecosystem` is a real project gap. A manifest
+  declares ranges and pins nothing, so there is nothing to check. Recommend
+  committing the lockfile.
+- `no osv-scanner installed` is environmental. Recommend installing it and say
+  the pass ran blind, rather than reporting the fallback's single-ecosystem
+  result as though it were the scan.
+
+**Never read osv-scanner's `from N ecosystems` as coverage.** It counts the
+ecosystems that had findings, not the ones that were scanned. A repo where Go, npm
+and SwiftPM were all scanned and only npm was vulnerable reports "from 1
+ecosystem", which reads exactly like a single-ecosystem scan. `SCANNED` and
+`COVERAGE` are the coverage records; that line is a findings summary. Misreading
+it is what hid a CVSS 8.7 advisory on regist.
+
+**`FIX` records are the fix list; `SCAN` records are the evidence.** Prefer `FIX`
+when writing the report: it is already grouped by the upgrade that closes the
+advisories, so 21 findings read as roughly 10 decisions. Quote `SCAN` only when a
+specific advisory needs naming. A `FIX` row carrying nine advisories is one
+UPGRADE NOW line, not nine.
+
+---
+
 ## § SIMPLIFY
 
 Quality signals only. Anything that changes behavior belongs to BEHAVIOR AND

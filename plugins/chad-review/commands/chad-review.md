@@ -387,7 +387,7 @@ not manifests, undeclared prerequisites, and the vulnerability scan.
 bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/freshness.sh"
 ```
 
-Three ways its output can be misread, and no others:
+Five ways its output can be misread, and no others:
 
 - **`REF` records need polarity judgment, which is why each carries its line.**
   "`NODEJS_20_X` reached Lambda EOL 2026-04-30" is a correct warning. Flagging it
@@ -396,6 +396,18 @@ Three ways its output can be misread, and no others:
 - **N/A needs a `SUMMARY` with zero manifests, zero refs, and zero prereqs**, and
   it is reported with those counts: `N/A - scanned <N> files, no version-bearing
   references`. "No manifest found" is an allowlist miss, not a conclusion.
+- **osv-scanner's `from N ecosystems` is a findings count, not a coverage
+  count.** It counts ecosystems that had vulnerabilities. Coverage lives in
+  `SCANNED` and `COVERAGE`. Reading that line as coverage is what hid a CVSS 8.7
+  SwiftPM advisory on a real repo while the review read as complete.
+- **`ecosystems=` and `scanned_ecosystems=` differing is the headline, not a
+  detail.** Any `COVERAGE ... GAP` means part of this project's dependency graph
+  was never examined, so "no CVEs" does not cover it. Report every GAP with the
+  cause the script states.
+
+Prefer `FIX` records over raw `SCAN` lines when writing the report. They are
+already grouped by the upgrade that closes them, so one row can carry nine
+advisories and becomes one UPGRADE NOW line rather than nine.
 
 **Resolve versions** for `DEP` records only: context7 `resolve-library-id`, then
 `query-docs` for latest version and breaking surface. Cap around 12 lookups,
@@ -414,10 +426,15 @@ runtimes and core frameworks first, and name the ones you skipped.
   Under semver a pre-1.0 `0.y` bump is breaking, so treat it as a major.
 
 **Report** one row per flagged dependency (name, current, latest, why, the call),
-then one line each as
-`FRESHNESS [security|eol|upgrade-now|hold] | <dep> | <=15 words`. Clean means
-"all direct dependencies current or within a safe lag, no CVE, no end-of-life
-runtime."
+built from `FIX` records rather than raw `SCAN` lines so one upgrade closing nine
+advisories is one row. Then one line each as
+`FRESHNESS [security|eol|upgrade-now|hold|coverage] | <dep or ecosystem> | <=15 words`.
+
+Clean means "all direct dependencies current or within a safe lag, no CVE, no
+end-of-life runtime, **and every discovered ecosystem actually scanned**". The
+last clause is not decoration: without it the honest output for a repo whose
+Swift graph was never opened is indistinguishable from a clean one, which is the
+failure this pass shipped with.
 
 A CVE or EOL on something the diff touched is NO-GO. Pre-existing and untouched
 is CONDITIONAL: this change is safe, the project is not. Everything else is
@@ -513,8 +530,10 @@ and emits each pass as its own labeled section, which is what keeps the
 six-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
 
-**FRESHNESS** runs in the parent: `freshness.sh` does the whole audit in under a
-second. It spawns ONE agent, LOOKUP tier, in exactly one case: the script emitted
+**FRESHNESS** runs in the parent: `freshness.sh` does the whole audit in a few
+seconds, and in one on a small repo. Measured at 6s on a 4,900-file repo with
+three ecosystems, most of it the two scanner round trips. It spawns ONE agent,
+LOOKUP tier, in exactly one case: the script emitted
 `DEP` records that still need version resolution. Hand that agent the `DEP` lines
 and nothing else, since discovery is already done, and let it return the resolved
 versions and breaking surfaces. No `DEP` records means no agent.
@@ -604,7 +623,7 @@ Target: under ~2 minutes for a typical single-language change (5 to 10 files),
 
 The levers in order of size: the diff-shape matrix skips the fan-out entirely for
 most everyday changes; the scripts (`freshness.sh`, `chad-review-route.sh`) do in
-milliseconds what an agent would take a bootstrap to do; the deterministic gate
+seconds what an agent would take a bootstrap to do; the deterministic gate
 catches mechanical defects before an agent is asked to look for them; and a
 two-agent fan-out means wall-clock is the slowest agent, not the sum.
 
@@ -612,7 +631,7 @@ Running long, cut in this order:
 
 1. **FRESHNESS**: cap the context7 version loop, or resolve only runtimes and
    core frameworks. NEVER skip `freshness.sh` itself: a CVE or EOL runtime is
-   CRITICAL and the script costs under a second.
+   CRITICAL and the script costs a few seconds.
 2. **DRIFT `[types]` and `[spec/lint]`**: the most expensive sub-checks, since
    they compile or shell out. With no handler changes, mark the spec sub-checks
    N/A immediately without running generators.
@@ -687,6 +706,12 @@ unrelated commit:
 - **CRITICAL that is pre-existing and untouched: CONDITIONAL**, with a prominent
   callout. This change is safe to commit; the project carries a CRITICAL issue to
   schedule now.
+- **Any `COVERAGE ... GAP`: CONDITIONAL**, never a silent GO. An unscanned
+  ecosystem is not a clean one, and the failure this guards against is a review
+  that reads as complete over a dependency graph it never opened. It does not
+  hard-block, because the usual cause is environmental rather than a defect in
+  the diff. State the ecosystem and the cause in the verdict line itself, not
+  only in the FRESHNESS body.
 - **HIGH (sunsetting major): CONDITIONAL** if urgent, otherwise advisory.
 - **MEDIUM UPGRADE NOW findings: never silently backlogged.** A GO stays a GO,
   but the report surfaces them prominently, the Fix Prompt lists them with a
