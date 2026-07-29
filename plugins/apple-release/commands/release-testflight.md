@@ -56,12 +56,19 @@ Use the detected `$UP` / `$INFO` in every step below. (Standardizing every repo 
 ### 1.1 App Store Connect API key
 
 **Convention:** ASC keys live in `~/dev/certs/api-keys/AuthKey_<KEY_ID>.p8` (symlinked in
-`~/private_keys/`). Each project's `.env` (gitignored) defines `ASC_KEY_ID` + `ASC_ISSUER_ID`; the
-Makefile constructs `ASC_KEY_PATH`. Never hardcode key IDs.
+`~/private_keys/`). Where the key ID is DECLARED varies by project, so read it, do not assume `.env`:
+some define it there, others (regist) set it directly in the Makefile. Both are fine; a key ID is not
+a secret, and the `.p8` it names never leaves `~/dev/certs`.
 
 ```bash
-grep -E "^ASC_KEY_ID|^ASC_ISSUER_ID" .env 2>/dev/null
+# .env first, then the Makefile. An empty result from the first is not an answer.
+KEY_ID=$(grep -hE "^ASC_KEY_ID" .env 2>/dev/null | cut -d= -f2 | tr -d ' "')
+[ -z "$KEY_ID" ] && KEY_ID=$(grep -hE "^ASC_KEY_ID[[:space:]]*:?=" Makefile 2>/dev/null | head -1 | sed 's/.*[:=]=*//' | tr -d ' "')
+echo "ASC_KEY_ID=${KEY_ID:-NOT FOUND}"
 ```
+
+Checking only `.env` in a project that hardcodes it yields an empty `KEY_ID` and the useless report
+"Key file NOT found for " with nothing after the "for".
 
 - `ASC_KEY_ID` **must be `WT7YRT8J32`** (cloud-signing-enabled, App Manager role). `62T8FXA8J7` is
   query-only and **cannot upload**.
@@ -93,6 +100,13 @@ one profile per bundle ID (e.g. a Share extension → `"<App> Share App Store"`)
 has a SHA-1-pinned cert (`CODE_SIGN_CERT_SHA1` in `.env`, e.g. eleven9s), that is valid: it
 disambiguates among multiple keychain identities. If the project exposes `make check-signing`
 (or `make -C ios check-signing`), run it to preflight certs + profiles before archiving.
+
+**A MIXED model is also valid, and is not a finding.** regist archives with
+`CODE_SIGN_STYLE: Automatic` (in `ios/project.yml`) and exports with `signingStyle: manual` plus a
+named profile. Only the EXPORT signs the artifact that ships, so the export half is what has to be
+pinned; the archive half only has to produce something signable. Do not "fix" this by forcing the
+archive to manual: that trades a working configuration for a second set of provisioning requirements
+at archive time, for no change to the shipped binary.
 
 ### 1.3 Xcode version
 
@@ -150,12 +164,30 @@ re-archiving.
 
 ## Step 4: Verify upload
 
+**First establish WHICH transport this project uses, because the success string differs and
+`EXPORT SUCCEEDED` does not prove an upload happened.**
+
 ```bash
-grep -E "EXPORT SUCCEEDED|Upload succeeded" /tmp/upload_output.txt
-grep -E "ERROR|errors returned by the App Store" /tmp/upload_output.txt
+grep -l "iTMSTransporter" scripts/*.sh Makefile 2>/dev/null   # Signiant path
+grep -o "destination</key>[[:space:]]*<string>[a-z]*" ios/ExportOptions*.plist ExportOptions*.plist 2>/dev/null
 ```
 
-Treat the build as uploaded only if `EXPORT SUCCEEDED` is present and no `ERROR` lines appear.
+- **`destination=upload`** (exportArchive uploads directly): `EXPORT SUCCEEDED` covers export AND
+  upload, so the original check holds.
+- **`destination=export` + `iTMSTransporter`** (regist, since its Aspera hangs): `EXPORT SUCCEEDED`
+  means only that an IPA was written to disk. The upload is a SEPARATE process afterwards, and
+  treating the export string as proof would report success on a failed upload. Verify the transporter
+  itself, and trust the script's exit code, which is what actually observes it:
+
+```bash
+grep -E "EXPORT SUCCEEDED" /tmp/upload_output.txt                       # the export half
+grep -E "Uploaded .* to TestFlight|Package Summary|1 package\(s\)" /tmp/upload_output.txt   # the upload half
+grep -E "ERROR|errors returned by the App Store|exit 124" /tmp/upload_output.txt
+```
+
+Either way the build is uploaded only if the upload-half evidence is present and no `ERROR` lines
+appear. A 20-minute timeout (`exit 124`) is the known Aspera/Signiant hang class, not a slow network:
+investigate before retrying.
 
 **Xcode 26 altool silent-failure:** `altool` may exit 0 while the upload silently failed (fastlane
 issue #29743, a tracked altool bug report, *not* a Fastlane dependency). Do not trust the exit code
@@ -171,7 +203,7 @@ TestFlight within a few minutes.
 
 ## Notes
 
-- Apple processes TestFlight builds 10–30 min after upload; email arrives when ready.
+- Apple processes TestFlight builds 10 to 30 min after upload; email arrives when ready.
 - Internal testers install immediately; external testers need a (usually fast) review.
 
 ## Common failure modes
@@ -282,5 +314,20 @@ upload: archive
 
 ## App Store submission
 
-This skill stops at TestFlight. For full submission (review), use `/release` (the `reviewSubmissions`
-three-step API flow with polling + "What's New").
+This skill stops at TestFlight.
+
+For the full submission, `/release` documents the `reviewSubmissions` three-step API flow with
+polling and "What's New". Note it drives that flow in **Python + PyJWT**, which some environments
+forbid for tooling; where that applies, prefer a project-local implementation. regist has one under
+way in Go (`tools/asc-release`, on the shared `tools/ascclient`): today `make asc-status` reports
+release readiness read-only, which is worth running BEFORE any submission because it answers the
+questions that actually block one:
+
+- which build is ATTACHED to the version, which is not necessarily the newest one uploaded
+- whether `whatsNew` exists for every locale, whose absence is the most common submission failure
+- whether a review submission is already in flight, which blocks creating another
+- the subscription and subscription-group version ids, since a submission that omits the
+  subscription item is what caused this app's 2.1(b) rejection
+
+**Submitting an app with an active subscription requires BOTH items in one review submission**: the
+`appStoreVersion` AND the subscription. Submitting the app version alone reproduces that rejection.
