@@ -11,7 +11,7 @@
     {
       "name": "apple-release",
       "description": "Apple app release automation for TestFlight and App Store Connect. Includes /release, /release-testflight, /release-consistency, /release-xcodecloud, and /app-store-audit (pre-submission risk audit against the full App Store Review Guidelines: project/binary AND App Store Connect metadata). Supports iOS, macOS, watchOS, visionOS.",
-      "version": "1.6.3",
+      "version": "1.6.4",
       "author": {
         "name": "apresai"
       },
@@ -60,8 +60,8 @@
     },
     {
       "name": "chad-review",
-      "description": "6-pass autonomous pre-commit code review: drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification, over uncommitted working-tree changes or the last commit if the tree is clean. Runs the project's own deterministic gate before any agent launches, and a repo with no validation entrypoint is itself a finding with a ready-to-paste target. Dependency freshness is a script rather than a prompt: it finds manifests, lockfiles, pinned versions, version-bearing references in files that are not manifests, and undeclared prerequisites, so doc, prompt, and IaC repos get audited instead of marked N/A. It cross-checks what the vulnerability scanner actually read against what it discovered, so an ecosystem nothing scanned is reported as a coverage gap rather than passing for clean, and it scans lockfiles that .gitignore hides from the scanner's own walk. Findings are grouped by the upgrade that closes them, so one bump fixing nine advisories reads as one decision. Diff-shape aware, one reviewer per language block, session-relative sonnet/opus tiering with an explicit model on every launch. NOT read-only: it never edits the change under review and never commits, but it executes your gate, tests, codegen, linters, and vulnerability scanner, all of which write to disk, and it backs up untracked files first because the no-edit rule is prompt-enforced rather than tool-enforced.",
-      "version": "2.3.1",
+      "description": "6-pass autonomous pre-commit code review: drift, behavior-and-risk, tests, observability, dependency-freshness, and simplification, over uncommitted working-tree changes or the last commit if the tree is clean. Runs the project's own deterministic gate before any agent launches, and a repo with no validation entrypoint is itself a finding with a ready-to-paste target. Dependency freshness is a script rather than a prompt: it finds manifests, lockfiles, pinned versions, version-bearing references in files that are not manifests, and undeclared prerequisites, so doc, prompt, and IaC repos get audited instead of marked N/A. It cross-checks what the vulnerability scanner actually read against what it discovered, so an ecosystem nothing scanned is reported as a coverage gap rather than passing for clean, and it scans lockfiles that .gitignore hides from the scanner's own walk. Findings are grouped by the upgrade that closes them, so one bump fixing nine advisories reads as one decision. Diff-shape aware, one reviewer per language block, session-relative sonnet/opus tiering with an explicit model on every launch. NOT read-only: it never edits the change under review and never commits, but it executes your gate, tests, codegen, linters, and vulnerability scanner, all of which write to disk, and it backs up untracked files first because the no-edit rule is prompt-enforced rather than tool-enforced. Documentation drift is deterministic too: docs-drift.sh scans the complete contents of changed docs for lifecycle contradictions (a historical banner over a still-Active status line, or an index that classifies a doc one way while the doc says the other) and for stale operational values checked against authoritative sources (BUILD_NUMBER/VERSION files, manifests, pbxproj), preserving clearly labeled historical snapshots; contract-mirror.sh finds handwritten twins of definitions the generated contract now covers, plus the stale predates-style comments that keep them alive; and status-bearing docs get their own reviewer instead of riding the no-reviewer prose path, while trivial typo diffs stay light. Every completed review also emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, and any substantive diff change, failed verdict, missing receipt, or generic non-chad-review review fails closed.",
+      "version": "2.4.0",
       "author": {
         "name": "Chad Neal"
       },
@@ -71,7 +71,7 @@
     {
       "name": "tidy",
       "description": "Applies quality-only cleanups to the code you just changed: missed reuse, dead code, wrong altitude, needless abstraction, defensive noise, and compatibility scaffolding. Scope-fenced to the current diff, never changes behavior, never commits, and proves it by re-running the project's own tests. Pins an explicit model on every sub-agent instead of inheriting the session tier. Runs BEFORE /chad-review, so the gate reviews the tidied diff.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": {
         "name": "Chad Neal"
       },
