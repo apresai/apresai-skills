@@ -1,6 +1,6 @@
 {
   "name": "tidy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Applies quality-only cleanups to the code you just changed: missed reuse, dead code, wrong altitude, needless abstraction, defensive noise, and compatibility scaffolding. Scope-fenced to the current diff, never changes behavior, never commits, and runs the project's tests to prove it. Pins an explicit model on every sub-agent instead of inheriting the session tier. Designed to run BEFORE /chad-review, so the gate reviews the tidied diff and is not re-armed by later edits.",
   "author": {
     "name": "Chad Neal",

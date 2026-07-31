@@ -82,6 +82,8 @@ Project context (detected during pre-flight):
 - Type-generation command / spec lint command: <or "not present">
 - Route-parity test: <command or "not present">
 - Data-model doc: <path or "not present">
+- docs-drift records: <paste the CONTRA/STALE/MARKER/INDEXED rows, or "none">
+  (status-bearing docs reviewer only; read each flagged doc IN FULL)
 
 Pass rubrics. Read these BEFORE you start; they are required, not background:
   file: <RESOLVED absolute path, see below>

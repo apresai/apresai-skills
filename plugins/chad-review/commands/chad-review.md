@@ -1,6 +1,6 @@
 ---
 name: chad-review
-description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis.
+description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
 ---
 
 # Chad Review: 6-Pass Code Review
@@ -110,6 +110,16 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    files actually use. It tells CDK from Next.js by imports and marker files, and
    finds OpenAPI specs by an `openapi:` key rather than a filename.
 
+   Markdown routes three ways, exec winning first: executable prompt content
+   (its own `general-purpose` reviewer), **status-bearing docs** (a changed doc
+   whose FULL contents carry lifecycle or operational-value markers, or whose
+   change is substantial: its own `general-purpose` reviewer at REVIEW tier,
+   reading complete files plus the `docs-drift.sh` records), and trivial prose
+   (no reviewer; the parent covers it). Whenever any markdown changed, routing
+   also emits a `DOCS-DRIFT-TASK` line: that is the parent's own executable
+   DRIFT step (see `[docs/status]` and `[docs/live-value]`), run the way
+   `freshness.sh` is run, not routing commentary.
+
    **Mixed-language diffs**: spawn ONE reviewer per block, plus the FRESHNESS
    version-resolution agent only if pass 5 calls for one. **Scope the diff per block**: each
    reviewer sees ONLY that language's hunks. DRIFT's codebase-wide grep is
@@ -131,6 +141,10 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
      **Forced to `standard` regardless**: `CLAUDE.md`, any `*/SKILL.md`,
      anything under `.claude/`, a `prompts/` dir, or a plugin's `commands/`,
      `agents/`, or `skills/` dir. Here those are executable behavior, not prose.
+     **Docs-only qualifies as `light` ONLY when routing emitted no
+     `Docs / status-bearing` block.** A status-bearing doc forces `standard`,
+     which naturally fans out to just that one sonnet reviewer plus the parent;
+     a typo fix in ordinary prose stays light-inline.
    - `deps`: only manifests and lockfiles (`go.mod`/`go.sum`, `package.json` +
      lockfile, `pubspec.*`, `Package.swift`/`Package.resolved`, `Cargo.*`,
      `pyproject.toml`/`requirements*.txt`).
@@ -220,8 +234,29 @@ Report: `DRIFT [spec/query] | api.yaml | param "fresh" read in HandleLeaderboard
 
 **`[types]` Generated artifact freshness.** Detect type generation via the
 reference patterns, run it, then `git diff` the generated paths
-(`*.generated.{ts,go,swift,kt}`, `*_gen.*`, `generated/`, `**/types/api.*`).
-Changes after regeneration mean the committed types are stale.
+(`*.generated.{ts,go,swift,kt}`, `*.gen.go`, `*.gen.ts`, `*_gen.*`,
+`generated/`, `**/types/api.*`). Changes after regeneration mean the committed
+types are stale.
+
+**`[types/mirror]` Reverse generated-contract reconciliation.** The check
+above proves the generated artifact is fresh; it is structurally blind to the
+opposite rot, a HANDWRITTEN twin of a definition the generator now covers,
+kept alive by a comment claiming the generated file "predates" it. Run the
+deterministic scanner (seconds, whole-project by design: the stale mirror is
+by definition outside the diff):
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/contract-mirror.sh"
+```
+
+A `MIRROR` record (a handwritten declaration whose name a generated contract
+also defines) is **HIGH**, and **CRITICAL** when the diff touched either side
+of the pair. A `STALECOMMENT` record (predates / not-regenerated /
+hand-written-here language near a mirror) corroborates and is HIGH on its own
+when it names regeneration debt. `SUMMARY gen_files=0` reports as
+`N/A - convention not detected`. Never re-implement this scan with ad-hoc
+greps; record grammar and judgment guidance: `pass-reference.md`
+§ `[types/mirror]`.
 
 **`[routes]` Route parity.** Find a route-parity test (`TestRoutesMatchSpec`,
 `test_routes_match_spec`, `routes.test.ts`, or a filename containing "parity" or
@@ -253,6 +288,33 @@ one is a finding.
   TSDoc, Swift `///`, docstring).
 - **MEDIUM** `[docs]`: a removed symbol still referenced in docs.
 - **LOW**: docs that could be clearer but are not wrong.
+
+**`[docs/status]` `[docs/live-value]` Documentation self-consistency.** The
+check above looks outward from the code change; these two look INTO the
+changed docs themselves, whole files, not just changed lines. This is an
+executable task, not a judgment call: run the `DOCS-DRIFT-TASK` command from
+the routing output (equivalently, `resources/docs-drift.sh`, plus
+`--last-commit` in that mode), the same way `freshness.sh` is run.
+
+- **HIGH** `[docs/status]`: a `CONTRA status-conflict` record. The doc carries
+  a historical banner AND still calls itself active or the working plan; it
+  lies about its own lifecycle. A `CONTRA index-conflict` is the same defect
+  split across files: an index classifies the doc one way, the doc says the
+  other.
+- **HIGH** `[docs/live-value]`: a `STALE` record in live instructions. A
+  version floor ("build 117/118 or later", "131+") below the authoritative
+  value; the record quotes the authority value and its source file, so quote
+  both. Clearly labeled historical sections, dated evidence lines, and
+  wholly-historical files are preserved, never flagged: the script suppresses
+  them deterministically, and a snapshot that says build 117 WAS current is
+  history, not drift.
+- `MARKER` and `INDEXED` rows are evidence needing judgment, the FRESHNESS
+  `REF`-polarity discipline: read them, do not auto-report them. `OKDOC`
+  present means scanned-clean; `OKDOC` absent means NOT scanned, and the two
+  are never conflated.
+
+Record grammar, marker classes, authority precedence, and the four
+suppressions: `pass-reference.md` § `[docs/status]` `[docs/live-value]`.
 
 > Grep patterns, language-server escalation, codegen detection, API-surface
 > patterns, and doc-comment conventions: `pass-reference.md` § DRIFT.
@@ -530,6 +592,11 @@ and emits each pass as its own labeled section, which is what keeps the
 six-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
 
+The **status-bearing docs reviewer** is one of these blocks when routing
+emitted it: `general-purpose`, REVIEW tier, and its prompt carries the
+`docs-drift.sh` records plus an instruction to read the flagged docs in FULL,
+since the contradiction is rarely inside the diff hunks.
+
 **FRESHNESS** runs in the parent: `freshness.sh` does the whole audit in a few
 seconds, and in one on a small repo. Measured at 6s on a 4,900-file repo with
 three ecosystems, most of it the two scanner round trips. It spawns ONE agent,
@@ -605,6 +672,30 @@ One pass, holding every finding at once:
    findings, and the script ignores them. Never issue a verdict on a tree you
    have not confirmed still holds the files you reviewed.
 6. **Write the verdict.**
+7. **Emit the receipt.** Every completed review emits one, whatever the
+   verdict: a NO-GO receipt records that the review happened and forces the
+   fix-then-re-review loop, and `verify` fails it at the gate.
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/receipt.sh" emit \
+     --verdict <GO|NO-GO|CONDITIONAL> --counts critical=N,high=N,medium=N,low=N
+   ```
+
+   It prints the receipt path; put that path on the report's `Receipt:` line.
+   If a PR for this branch already exists (`gh pr view --json number`
+   succeeds), add `--pr <n>` so it publishes to the PR immediately; otherwise
+   state in the report: after `gh pr create`, run `receipt.sh publish`, and
+   before `gh pr merge`, run `receipt.sh verify --pr <n>`.
+
+   The receipt binds the verdict to the exact content reviewed: head SHA plus
+   a stable diff fingerprint (`git patch-id --stable` over the merge-base
+   diff, untracked files folded in). At the merge gate the exact reviewed
+   head passes, a clean rebase with an unchanged diff converges on the
+   fingerprint, and any substantive diff change fails closed. After fix
+   commits, the convergence rule reviews only the fix delta, but the receipt
+   is always re-emitted at FULL scope for the new head and fingerprint;
+   `verify` trusts the newest ruling for the current content, so a stale GO
+   can never outlive the diff it reviewed.
 
 ### Writing sub-agent prompts
 
@@ -622,10 +713,12 @@ Target: under ~2 minutes for a typical single-language change (5 to 10 files),
 `light` and `deps` well under a minute.
 
 The levers in order of size: the diff-shape matrix skips the fan-out entirely for
-most everyday changes; the scripts (`freshness.sh`, `chad-review-route.sh`) do in
-seconds what an agent would take a bootstrap to do; the deterministic gate
-catches mechanical defects before an agent is asked to look for them; and a
-two-agent fan-out means wall-clock is the slowest agent, not the sum.
+most everyday changes; the scripts (`freshness.sh`, `chad-review-route.sh`,
+`docs-drift.sh`, `contract-mirror.sh`, `receipt.sh`) do in seconds what an agent
+would take a bootstrap to do, so like `freshness.sh` they are never skipped for
+budget; the deterministic gate catches mechanical defects before an agent is
+asked to look for them; and a two-agent fan-out means wall-clock is the slowest
+agent, not the sum.
 
 Running long, cut in this order:
 
@@ -655,7 +748,8 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 chad-review is for before the commit; pr-review-toolkit is for after the PR is
 open. `/tidy` runs before chad-review, never after: applying edits after the gate
 mutates the reviewed diff and re-arms it. The cycle is build, test, `/tidy`,
-`/chad-review`, PR.
+`/chad-review`, PR, then `receipt.sh verify --pr <n>` immediately before the
+merge: the merge gate checks the receipt, not the session's memory of a review.
 
 ## Final report
 
@@ -689,6 +783,8 @@ Filtered: N raised, M dropped
 
 ### Verdict: [GO / NO-GO / CONDITIONAL]
 [1-2 sentences: commit as-is, fix something first, or stop and rethink]
+
+Receipt: <path, or "published to PR #N">
 ```
 
 Carry each finding's wording verbatim. Steps 3 and 4 may lower a severity or
@@ -778,8 +874,9 @@ question: the fix prompt is already in the report body.
   vanishing.
 - ALWAYS pass an explicit `model` on every Agent launch, per §"Model tiering".
   Haiku is correct for LOOKUP and wrong above it; never fable.
-- **The prescribed agents are the entire budget**: one reviewer per language
-  block, the FRESHNESS version-resolution agent when pass 5 calls for one, and
+- **The prescribed agents are the entire budget**: one reviewer per routing
+  block (language blocks and the status-bearing docs block alike), the
+  FRESHNESS version-resolution agent when pass 5 calls for one, and
   the single batched confidence scorer in Phase 2 step 3. That scorer is the one
   sanctioned exception to "no agent checks another agent": it is LOOKUP tier, it
   handles every finding in one call, and independence from the author is the

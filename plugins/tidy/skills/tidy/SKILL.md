@@ -15,9 +15,13 @@ build -> test -> /tidy (applies) -> /chad-review (gates, read-only) -> PR -> mer
 ```
 
 **Run before the review, never after.** `/chad-review` is a merge gate, and its
-verdict only holds while the diff against main is unchanged. Applying edits after
-the gate puts unreviewed code on the path to main and re-arms the gate. The
-re-review is delta-only, but it is still a second gate on work already cleared.
+verdict only holds while the diff against main is unchanged (chad-review 2.4.0
+records that binding as a receipt: verdict plus a stable diff fingerprint, and
+`receipt.sh verify` enforces it mechanically at merge time, so an edit after the
+gate does not just re-arm it in principle, it fails the receipt check).
+Applying edits after the gate puts unreviewed code on the path to main and
+re-arms the gate. The re-review is delta-only, but it is still a second gate on
+work already cleared.
 
 ## Scope fence
 

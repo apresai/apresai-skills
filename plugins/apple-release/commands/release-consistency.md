@@ -104,7 +104,8 @@ checklist below.
 
 ### 5. Verify + ship
 Build-verify the **exported** artifact is `KZ4VK235YL`-signed (when a build is in scope). Run
-`/chad-review`; fix CRITICAL/HIGH before merge, file MEDIUM/LOW to backlog. Squash-merge.
+`/chad-review`; fix ALL findings at every severity in the same PR (MEDIUM/LOW are never
+backlogged), then `receipt.sh verify --pr <n>` must pass before the squash-merge.
 
 ## Doc-drift checklist (certs, signing, Fastlane removal)
 
@@ -135,7 +136,8 @@ and/or docs were fixed** (🟡/🔴, with PR links).
 ## Guardrails
 
 - Verify read-only first; change only what preflight justifies.
-- One PR per repo via worktree branch → push → `gh pr create` → `/chad-review` → squash-merge.
+- One PR per repo via worktree branch → push → `gh pr create` → `/chad-review` →
+  `receipt.sh verify --pr <n>` → squash-merge.
   Never commit to `main` directly; never `--no-verify`.
 - **Do NOT pin by UUID. Do NOT re-introduce Fastlane. Do NOT upload** unless explicitly instructed.
 - Don't churn conforming profile names or drop an app's SHA-1 pin before the keychain single-instance
