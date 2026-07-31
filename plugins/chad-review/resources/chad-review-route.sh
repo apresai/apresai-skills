@@ -116,6 +116,59 @@ first_dir() {
 }
 
 # ---------------------------------------------------------------------------
+# Status-bearing markdown. Prose docs used to route uniformly to "no reviewer
+# of its own", which is how a doc carrying a historical banner AND a
+# "Status: Active" line, and a checklist recommending "build 117/118 or later"
+# against an authoritative build of 152, both sailed through review. A changed
+# doc whose FULL contents carry lifecycle or operational-value markers, or
+# whose change is substantial, now gets its own reviewer; trivial prose typos
+# keep the light inline path.
+# ---------------------------------------------------------------------------
+SUBSTANTIAL_MD_LINES=25
+
+# One case-insensitive ERE over the whole on-disk file. Classes, in order:
+# status lines, historical banners, live-plan self-descriptions, task
+# checkboxes, and operational version floors ("build 117 or later", "131+",
+# "at least version 1.2"). `[0-9][+]` uses a character class because a
+# backslash-escaped plus is ambiguous across BSD and GNU grep -E.
+STATUS_MD_RE='status:? *(\*\*)? *(active|current|in progress)|historical (execution )?record|execution complete|superseded by|archived|working master plan|single live (backlog|plan|doc)|^[[:space:]]*- \[[ x]\]|(build|version)s? [0-9]+[^0-9]*(or later|or newer|or higher)|[0-9][+]([^0-9]|$)|at least (build|version)'
+
+# changed_md_lines <file> : added+deleted line count for one file, for the
+# "substantial" arm. Tries the working-tree diff, then the staged diff (a
+# staged-then-reverted file shows only there), then wc -l for untracked files.
+# Binary numstat prints `-` fields, which awk arithmetic treats as 0.
+# MUST always return 0 (the first_make_target lesson above).
+changed_md_lines() {
+  local f="$1" n=0
+  if [[ "$mode" == "last-commit" ]]; then
+    n=$(git -C "$repo_root" show --numstat --pretty=format: HEAD -- "$f" 2>/dev/null | awk '{a+=$1+$2} END {print a+0}' || true)
+  else
+    n=$(git -C "$repo_root" diff HEAD --numstat -- "$f" 2>/dev/null | awk '{a+=$1+$2} END {print a+0}' || true)
+    if [[ "${n:-0}" -eq 0 ]]; then
+      n=$(git -C "$repo_root" diff --cached --numstat -- "$f" 2>/dev/null | awk '{a+=$1+$2} END {print a+0}' || true)
+    fi
+    if [[ "${n:-0}" -eq 0 && -f "$repo_root/$f" ]]; then
+      local untracked
+      untracked=$(git -C "$repo_root" ls-files --others --exclude-standard -- "$f" 2>/dev/null || true)
+      [[ -n "$untracked" ]] && n=$(wc -l < "$repo_root/$f" 2>/dev/null | tr -d ' ' || true)
+    fi
+  fi
+  echo "${n:-0}"
+  return 0
+}
+
+# is_status_md <repo-relative-path> : marker arm ORs with the substantial-size
+# arm. A DELETED file has no on-disk content to sniff and its numstat is all
+# deletions, so it falls to prose outright, the same accepted limit `sniff`
+# has; the parent's DRIFT [docs] still covers deletions.
+is_status_md() {
+  local f="$1"
+  [[ -f "$repo_root/$f" ]] || return 1
+  grep -qiE "$STATUS_MD_RE" "$repo_root/$f" 2>/dev/null && return 0
+  [[ "$(changed_md_lines "$f")" -ge "$SUBSTANTIAL_MD_LINES" ]]
+}
+
+# ---------------------------------------------------------------------------
 # Classify changed files. TypeScript/JS is split into CDK / web / generic by
 # imports first, then by marker-file ancestry, so directory names don't matter.
 # ---------------------------------------------------------------------------
@@ -215,8 +268,8 @@ EOF
 # reviewing agent runs the language-appropriate sub-target itself.
 gen_target=$(first_make_target '^gen$'); [[ -z "$gen_target" ]] && gen_target=$(first_make_target '^gen')
 lint_target=$(first_make_target 'openapi-lint|^lint$|validate')
-go_spec_cmd="regenerate types${gen_target:+ via $gen_target}${lint_target:+ + $lint_target} + diff generated *.gen.go"
-web_spec_cmd="regen API types${gen_target:+ via $gen_target} + diff generated types; tsc --noEmit"
+go_spec_cmd="regenerate types${gen_target:+ via $gen_target}${lint_target:+ + $lint_target} + diff generated *.gen.go + contract-mirror.sh reverse check"
+web_spec_cmd="regen API types${gen_target:+ via $gen_target} + diff generated types; tsc --noEmit + contract-mirror.sh reverse check"
 swift_spec_cmd="regen client${gen_target:+ via $gen_target} + diff Generated/ vs the OpenAPI spec"
 cdk_spec_cmd="cdk synth + cdk diff after build; or tsc --noEmit"
 
@@ -378,10 +431,18 @@ is_exec_md() {
 
 # One pass: is_exec_md can shell out to `git cat-file` for deleted files, so
 # calling it twice per file doubled that cost on a large plugin deletion.
-exec_md=""; prose_md=""
+# Exec wins first; then status-bearing markdown (never yaml specs, which stay
+# with prose/spec); trivial prose keeps the no-reviewer path.
+exec_md=""; status_md=""; prose_md=""
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
-  if is_exec_md "$f"; then exec_md+="$f"$'\n'; else prose_md+="$f"$'\n'; fi
+  if is_exec_md "$f"; then
+    exec_md+="$f"$'\n'
+  elif [[ "$f" == *.md || "$f" == *.mdx ]] && is_status_md "$f"; then
+    status_md+="$f"$'\n'
+  else
+    prose_md+="$f"$'\n'
+  fi
 done <<< "$md_files$yaml_specs"
 
 # Emitted regardless of whether code files are also present. Gating this on a
@@ -395,6 +456,17 @@ if [[ -n "$exec_md" ]]; then
     ""
 fi
 
+# Status-bearing docs get their own reviewer at REVIEW tier: the whole file is
+# its evidence (a stale "Status: Active" line is rarely inside the diff hunks),
+# so the reviewer reads complete files plus the docs-drift.sh records, not just
+# the changed lines. Emitted even alongside code blocks in a mixed diff.
+if [[ -n "$status_md" ]]; then
+  emit_block "Docs / status-bearing ($(cnt "$status_md") file(s), $(first_dir "$status_md" || echo .))" \
+    "general-purpose" \
+    "run docs-drift.sh: CONTRA and STALE rows are findings, MARKER and INDEXED rows are evidence" \
+    ""
+fi
+
 # Genuine prose and specs, whatever else is in the diff. Emitted even alongside
 # code or executable content so no changed file is left unmentioned: a README
 # next to a CLAUDE.md, or an OpenAPI spec next to Go, used to vanish from the
@@ -405,6 +477,17 @@ if [[ -n "$prose_md" ]]; then
     "-" \
     "${lint_target:+$lint_target + }grep for stale prose refs; DRIFT [docs] is the real work" \
     ""
+fi
+
+# The explicit, executable documentation task. Whenever the diff touches any
+# markdown (docs-only or mixed), the parent runs this command during DRIFT the
+# way it runs freshness.sh, instead of relying on routing commentary to imply
+# it. Greppable as ^DOCS-DRIFT-TASK.
+if [[ -n "$md_files" ]]; then
+  route_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  docs_task_cmd="bash \"$route_script_dir/docs-drift.sh\""
+  [[ "$mode" == "last-commit" ]] && docs_task_cmd+=" --last-commit"
+  printf 'DOCS-DRIFT-TASK\t%s doc file(s)\t%s\n\n' "$(cnt "$md_files")" "$docs_task_cmd"
 fi
 
 # --- Unclassified: never drop silently ---------------------------------------
@@ -427,6 +510,10 @@ echo "    LOOKUP=haiku; JUDGE=opus covers only the parent's attack probes and"
 echo "    CRITICAL re-verification. Never spawn fable."
 echo "  - FRESHNESS runs freshness.sh in the parent; it launches an agent only to"
 echo "    resolve versions for DEP records, at LOOKUP tier, and not from the routing above."
+echo "  - Status-bearing docs ride their own general-purpose reviewer at REVIEW tier,"
+echo "    reading COMPLETE files plus docs-drift.sh records. The DOCS-DRIFT-TASK line"
+echo "    above is the parent's own DRIFT step whenever markdown changed; run it, do"
+echo "    not just note it. Trivial prose keeps the no-reviewer light path."
 echo "  - Phase 2 is the parent: run the affected tests, run the attack probes,"
 echo "    filter every finding once, re-verify CRITICALs, confirm the untracked"
 echo "    files survived, then write the verdict."
