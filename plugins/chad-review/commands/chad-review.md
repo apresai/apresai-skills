@@ -1,6 +1,6 @@
 ---
 name: chad-review
-description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis. Dependency freshness updates dependencies rather than recommending updates: the ecosystem's own in-range command (npm update, go get -u), kept only when the project's gate re-runs green, reverted otherwise, left uncommitted for a separate deps: commit. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
+description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis. Dependency freshness updates dependencies rather than recommending updates: the ecosystem's own in-range command (npm update, go get -u), kept only when the project's gate re-runs green, reverted otherwise (per package in multi-package repos), left uncommitted for a separate deps: commit. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
 ---
 
 # Chad Review: 6-Pass Code Review
@@ -838,9 +838,10 @@ unrelated commit:
   hard-block, because the usual cause is environmental rather than a defect in
   the diff. State the ecosystem and the cause in the verdict line itself, not
   only in the FRESHNESS body.
-- **A reverted update batch (the gate went red): HIGH**, carrying the failing
-  output. Whatever pins this project to a stale in-range version is real work
-  for the session that picks up the finding.
+- **A reverted package's update (its gate went red): HIGH**, naming the
+  package and carrying the failing output. Whatever pins that package to a
+  stale in-range version is real work for the session that picks up the
+  finding.
 - **Applied updates: informational.** They appear in the report and the `deps:`
   commit instruction, never in the verdict. Majors held back are one
   informational line, not backlog; a CVE blocked on a major is a NEEDS-DECISION
