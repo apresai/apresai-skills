@@ -15,6 +15,7 @@ help:
 	@echo ""
 	@echo "Validation:"
 	@echo "  validate           - Run all validation checks for marketplace compliance"
+	@echo "  validate-mirrors   - AGENTS.md is a byte-identical mirror of CLAUDE.md"
 	@echo "  validate-marketplace - Validate marketplace.json schema"
 	@echo "  validate-plugins   - Validate all plugin.json manifests"
 	@echo "  validate-structure - Validate directory structure"
@@ -299,10 +300,10 @@ validate-prose:
 
 validate-mirrors:
 	@echo "==> Validating AGENTS.md mirror..."
-	@if cmp -s CLAUDE.md AGENTS.md; then \
-		echo "  ✅ AGENTS.md is a byte-identical mirror of CLAUDE.md"; \
+	@if out=$$(bash scripts/check-mirrors.sh); then \
+		echo "  ✅ $${out#OK: }"; \
 	else \
-		echo "  ❌ AGENTS.md differs from CLAUDE.md (edit CLAUDE.md, then: cp CLAUDE.md AGENTS.md)"; \
+		echo "  ❌ $$out"; \
 		exit 1; \
 	fi
 

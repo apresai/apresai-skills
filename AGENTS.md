@@ -39,7 +39,7 @@ apresai-skills/
 │   ├── tidy/
 │   └── xai-voice/
 ├── AGENTS.md                # byte-identical mirror of CLAUDE.md (Codex reads this)
-├── CLAUDE.md                # this file; the editable original
+├── CLAUDE.md                # the editable original of this guidance
 ├── LICENSE
 ├── Makefile                 # validate / version / release
 └── README.md                # user-facing plugin table, kept current
@@ -138,9 +138,10 @@ stay in sync. `make validate-versions` enforces this, and runs as part of
 2. Add `commands/<name>.md`, or `skills/<name>/SKILL.md`, or both.
 3. Register the plugin in `.claude-plugin/marketplace.json`.
 4. Add a row to the plugin table in `README.md`.
-5. Update this file: the repository-structure tree above and the
-   `commands/` versus `skills/` split table. Three separate reviews have
-   caught this file going stale because the checklist stopped at
+5. Update `CLAUDE.md`: the repository-structure tree above and the
+   `commands/` versus `skills/` split table, then refresh the mirror
+   (`cp CLAUDE.md AGENTS.md`). Three separate reviews have
+   caught this guidance going stale because the checklist stopped at
    `README.md`. The version numbers that used to need chasing here are
    gone: the JSON snippets carry an illustrative `1.2.3` and the prose
    points at `marketplace.json` instead of restating it.
@@ -169,7 +170,7 @@ that earned the bump.
 ## Makefile
 
 ```bash
-make validate          # runs all seven validate-* checks
+make validate          # runs all eight validate-* checks
 make validate-versions # plugin.json versions match their marketplace.json entries
 make validate-resource-refs # every resources/ pointer a plugin's markdown names resolves
 make validate-prose    # no em-dashes, no " -- " used as sentence punctuation
