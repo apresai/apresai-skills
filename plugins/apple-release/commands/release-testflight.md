@@ -151,8 +151,13 @@ accidental churn:
 ## Step 3: Build and upload
 
 ```bash
-$UP 2>&1 | tee /tmp/upload_output.txt   # e.g. make upload / make ios-upload / make mobile
+set -o pipefail; $UP 2>&1 | tee /tmp/upload_output.txt   # e.g. make upload / make ios-upload / make mobile
 ```
+
+`pipefail` is load-bearing: without it the pipeline's exit code is `tee`'s
+(always 0), and a failed upload reports success to whoever launched it.
+Reproduced live 2026-08-12: an ASC 504 mid-upload exited the make with
+Error 2, and the un-guarded pipe reported exit 0.
 
 **The Makefile owns the mechanics**: increment + `xcodegen generate` + `xcodebuild archive` +
 `xcodebuild -exportArchive` (signing per the project's ExportOptions) + ASC upload. It also owns the

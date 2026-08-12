@@ -111,8 +111,11 @@ If `make deploy` is not available, try `make deploy-infra`. Wait for deployment 
 ## Step 5: Build & Upload to TestFlight
 
 ```bash
-make upload 2>&1 | tee /tmp/upload_output.txt
+set -o pipefail; make upload 2>&1 | tee /tmp/upload_output.txt
 ```
+
+(`pipefail` is load-bearing: without it the exit code is `tee`'s, always 0,
+and a failed upload reads as success.)
 
 This command:
 1. Increments build number (writes to `BUILD_NUMBER` file)
