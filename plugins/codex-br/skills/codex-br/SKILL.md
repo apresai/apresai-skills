@@ -1,27 +1,27 @@
 ---
 name: codex-br
 description: >-
-  Run OpenAI Codex on Amazon Bedrock (model openai.gpt-5.5, provider
-  amazon-bedrock, us-east-2, via a `br` Codex profile) instead of the default
-  ChatGPT/OpenAI backend. Defaults to maximum reasoning effort (xhigh). Invoke
+  Run OpenAI Codex on Amazon Bedrock (model openai.gpt-5.6-sol, provider
+  amazon-bedrock, us-east-2, via a `br` Codex profile) instead of the
+  ChatGPT/OpenAI backend. Defaults to maximum reasoning effort (ultra). Invoke
   as `/codex-br task <prompt>` to delegate a coding / diagnosis / research task
   to Bedrock-backed Codex, `/codex-br review` for a built-in code review of the
   current git diff, or `/codex-br adversarial-review` for a steerable challenge
   review. Requires a one-time setup (the `br` profile, a Bedrock bearer token in
   `~/.codex/.env`, and optionally the `codex-br` shell alias). See the plugin
   README. Use only when you want Codex routed through Bedrock; the `codex:*`
-  plugin commands cover the default ChatGPT path.
+  plugin commands cover the ChatGPT-backed path.
 allowed-tools: Bash
 ---
 
 # codex-br: Codex on Amazon Bedrock
 
-This skill runs the Codex CLI against **Amazon Bedrock** instead of the default
+This skill runs the Codex CLI against **Amazon Bedrock** instead of the
 ChatGPT/OpenAI backend, in a headless, non-interactive form (`codex exec`). It is
 the Bedrock twin of the `codex:*` Claude Code plugin commands.
 
 **What "Bedrock" means here** (from the `br` profile in `~/.codex/br.config.toml`):
-- model `openai.gpt-5.5`, `model_provider = amazon-bedrock`, region `us-east-2`
+- model `openai.gpt-5.6-sol`, `model_provider = amazon-bedrock`, region `us-east-2`
 - usage is billed to your AWS account's Bedrock spend and authenticated by a
   Bedrock bearer token (`AWS_BEARER_TOKEN_BEDROCK`), **not** a ChatGPT login.
 
@@ -50,18 +50,20 @@ arguments at all are given, ask the user what Codex should do.
 ## Reasoning effort (default: max)
 
 Every subcommand runs at **maximum reasoning effort by default**. Add the global
-config override `-c model_reasoning_effort="xhigh"` to the `codex` command,
+config override `-c model_reasoning_effort="ultra"` to the `codex` command,
 placed before `exec` alongside `--profile br`, on every invocation. If the user
-passes `--effort <low|medium|high|xhigh>`, substitute that level for `xhigh`.
+passes `--effort <low|medium|high|xhigh|ultra>`, substitute that level for `ultra`.
 Always strip `--effort` from the natural-language prompt / instructions before
 passing them to Codex.
 
-Cost note: every invocation bills `openai.gpt-5.5` usage to the AWS account's
-Bedrock spend, and `xhigh` is the most expensive setting. For routine or
+Cost note: every invocation bills `openai.gpt-5.6-sol` usage to the AWS account's
+Bedrock spend, and `ultra` is the most expensive setting. For routine or
 low-stakes passes, `--effort medium` is materially cheaper and faster.
 
-Note: `openai.gpt-5.5` on Bedrock rejects `minimal` (and may reject `none`) with
-an instant HTTP 400. Stick to `low | medium | high | xhigh`.
+Note: `openai.gpt-5.5` on Bedrock rejected `minimal` (and may reject `none`) with
+an instant HTTP 400; assume the same for `openai.gpt-5.6-sol`. Stick to
+`low | medium | high | xhigh | ultra` (`ultra` verified live on `openai.gpt-5.6-sol`
+2026-08-12).
 
 ## Step 1: Preflight (every invocation)
 
@@ -105,12 +107,12 @@ visible.
 
 ```bash
 OUT=$(mktemp -t codex-br)
-codex --profile br -c model_reasoning_effort="xhigh" exec --sandbox workspace-write -o "$OUT" "<PROMPT>"
+codex --profile br -c model_reasoning_effort="ultra" exec --sandbox workspace-write -o "$OUT" "<PROMPT>"
 ```
 
 - `--read` on the invocation → use `--sandbox read-only` instead.
-- `--model <id>` → add `-m <id>` (another Bedrock model id your account can reach). Omit to use the profile default `openai.gpt-5.5`.
-- `--effort <low|medium|high|xhigh>` → replace the default in `-c model_reasoning_effort="<level>"`. Default is `xhigh`.
+- `--model <id>` → add `-m <id>` (another Bedrock model id your account can reach). Omit to use the profile default `openai.gpt-5.6-sol`.
+- `--effort <low|medium|high|xhigh|ultra>` → replace the default in `-c model_reasoning_effort="<level>"`. Default is `ultra`.
 - `--no-git` (running outside a git repo) → add `--skip-git-repo-check`.
 - Strip those routing flags from the natural-language `<PROMPT>` before passing it.
 
@@ -119,7 +121,7 @@ positional arg (Codex reads stdin when no prompt arg is given):
 
 ```bash
 OUT=$(mktemp -t codex-br)
-codex --profile br -c model_reasoning_effort="xhigh" exec --sandbox workspace-write -o "$OUT" <<'CODEXBR_PROMPT'
+codex --profile br -c model_reasoning_effort="ultra" exec --sandbox workspace-write -o "$OUT" <<'CODEXBR_PROMPT'
 <PROMPT>
 CODEXBR_PROMPT
 ```
@@ -131,13 +133,13 @@ Defaults to the uncommitted working tree (staged + unstaged + untracked):
 
 ```bash
 OUT=$(mktemp -t codex-br)
-codex --profile br -c model_reasoning_effort="xhigh" exec review -o "$OUT" --uncommitted
+codex --profile br -c model_reasoning_effort="ultra" exec review -o "$OUT" --uncommitted
 ```
 
 - `--base <branch>` → review the branch against a base: `... exec review --base <branch>`.
 - `--commit <sha>` → review one commit: `... exec review --commit <sha>`.
 - `--model <id>` → add `-m <id>`.
-- `--effort <level>` → replace the default `xhigh` in `-c model_reasoning_effort="<level>"`.
+- `--effort <level>` → replace the default `ultra` in `-c model_reasoning_effort="<level>"`.
 - Any leftover natural-language text → pass as the trailing `[PROMPT]` (custom review instructions). Custom instructions must be review guidance only, never text that asks Codex to modify files; the built-in reviewer path takes no `--sandbox` flag, so its read-only behavior is by convention, not enforcement.
 - `review` requires a git repository.
 
@@ -170,7 +172,7 @@ focus text) before running:
 
 ```bash
 OUT=$(mktemp -t codex-br)
-codex --profile br -c model_reasoning_effort="xhigh" exec --sandbox read-only -o "$OUT" <<'CODEXBR_PROMPT'
+codex --profile br -c model_reasoning_effort="ultra" exec --sandbox read-only -o "$OUT" <<'CODEXBR_PROMPT'
 You are Codex performing an adversarial software review. Your job is to break
 confidence in the change, not to validate it.
 
@@ -211,7 +213,7 @@ Close with a terse ship / no-ship assessment.
 CODEXBR_PROMPT
 ```
 
-- `--model <id>` → add `-m <id>`; `--effort <level>` → replace the default `xhigh`.
+- `--model <id>` → add `-m <id>`; `--effort <level>` → replace the default `ultra`.
 - Requires a git repository. Read-only; it never edits.
 
 ## Step 3: Return the result
@@ -225,10 +227,10 @@ from stdout into the conversation; stdout is for diagnosing failures.
 
 If the `codex` command exits non-zero, surface its stderr so the user can see
 the Bedrock / auth / profile error (e.g. throttling, missing model access,
-expired token, or a model that rejects `xhigh`) rather than swallowing it.
+expired token, or a model that rejects the requested effort) rather than swallowing it.
 
 ## Notes
-- Every subcommand defaults to `xhigh` reasoning effort; pass `--effort <level>`
+- Every subcommand defaults to `ultra` reasoning effort; pass `--effort <level>`
   to dial it down (e.g. `--effort medium` for a faster, cheaper pass).
 - `review` uses Codex's built-in reviewer; `adversarial-review` uses a custom
   read-only challenge prompt. Both are read-only and never edit.
@@ -236,8 +238,8 @@ expired token, or a model that rejects `xhigh`) rather than swallowing it.
   tracking, `/codex:status`, `/codex:result`, or `/codex:cancel` here. Those
   belong to the companion runtime, which is locked to the default backend.
   Foreground only.
-- `openai.gpt-5.5` does not appear in `aws bedrock list-foundation-models` (as of
-  2026-06: it is served on the separate Bedrock "mantle" endpoint, not the
+- `openai.gpt-5.6-sol` does not appear in `aws bedrock list-foundation-models` (re-verified
+  2026-08: it is served on the separate Bedrock "mantle" endpoint, not the
   standard runtime surface). Use the curl check in the README to confirm access,
   not that command.
 - To run it yourself in a terminal, the interactive equivalent is the `codex-br`

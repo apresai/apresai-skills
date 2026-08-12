@@ -1,8 +1,8 @@
 # codex-br: Run Codex on Amazon Bedrock
 
 Run [OpenAI Codex](https://developers.openai.com/codex/cli/) from inside Claude
-Code, but routed through **Amazon Bedrock** (`openai.gpt-5.5`, provider
-`amazon-bedrock`) instead of the default ChatGPT/OpenAI backend.
+Code, but routed through **Amazon Bedrock** (`openai.gpt-5.6-sol`, provider
+`amazon-bedrock`) instead of the ChatGPT/OpenAI backend.
 
 `br` = **Bedrock**. The skill is the Bedrock twin of OpenAI's
 [`codex` plugin](https://github.com/openai/codex-plugin-cc) (`/codex:review`,
@@ -21,18 +21,18 @@ When installed, the skill exposes three subcommands:
 | `/codex-br review` | Built-in Codex reviewer over the current git diff (uncommitted by default; `--base <branch>`, `--commit <sha>`). |
 | `/codex-br adversarial-review [focus]` | Steerable **challenge** review that questions the design, tradeoffs, and assumptions rather than just listing defects. |
 
-All three default to **maximum reasoning effort (`xhigh`)** and return Codex's
-output verbatim. Pass `--effort <low|medium|high|xhigh>` to dial it down,
+All three default to **maximum reasoning effort (`ultra`)** and return Codex's
+output verbatim. Pass `--effort <low|medium|high|xhigh|ultra>` to dial it down,
 `--model <id>` to override the model.
 
-**Cost:** every invocation bills `openai.gpt-5.5` usage to your AWS account's
-Bedrock spend, and `xhigh` is the most expensive effort setting. `--effort medium`
+**Cost:** every invocation bills `openai.gpt-5.6-sol` usage to your AWS account's
+Bedrock spend, and `ultra` is the most expensive effort setting. `--effort medium`
 is the economical choice for routine passes.
 
 ## Requirements
 
 - **Node.js 18.18+** and the Codex CLI: `npm install -g @openai/codex`
-- **An AWS account entitled to OpenAI frontier models on Bedrock.** `openai.gpt-5.5`
+- **An AWS account entitled to OpenAI frontier models on Bedrock.** `openai.gpt-5.6-sol`
   is a *gated* model (you may see "not available for this account, contact AWS
   Sales" until access is granted) and is currently served in **us-east-2 only**
   (`openai.gpt-5.4` adds us-west-2). The open-weight `openai.gpt-oss-*` models are
@@ -51,7 +51,7 @@ A Codex profile is a file `~/.codex/<name>.config.toml`, layered on top of your
 base config when you pass `--profile <name>`. Create `~/.codex/br.config.toml`:
 
 ```toml
-model = "openai.gpt-5.5"
+model = "openai.gpt-5.6-sol"
 model_provider = "amazon-bedrock"
 
 [model_providers.amazon-bedrock.aws]
@@ -115,7 +115,7 @@ source ~/.zshrc
 curl -s https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses \
   -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" \
   -H "Content-Type: application/json" \
-  -d '{"model":"openai.gpt-5.5","input":"ping","max_output_tokens":16}'
+  -d '{"model":"openai.gpt-5.6-sol","input":"ping","max_output_tokens":16}'
 # HTTP 200 + a response object = access confirmed.
 
 # Confirm Codex routes through Bedrock:
@@ -150,14 +150,15 @@ actively developing the skill.
 
 ## Gotchas (learned the hard way)
 
-- **`openai.gpt-5.5` is invisible to `aws bedrock list-foundation-models`** (as
-  of 2026-06). The frontier GPT-5.x models live on a separate Bedrock "mantle" endpoint
+- **`openai.gpt-5.6-sol` is invisible to `aws bedrock list-foundation-models`** (as
+  of 2026-08, re-verified). The frontier GPT-5.x models live on a separate Bedrock "mantle" endpoint
   (`bedrock-mantle.us-east-2.api.aws`, OpenAI Responses API), not the standard
   runtime surface. Use the curl check above to confirm access, not
   `list-foundation-models` (which returns only the open-weight `gpt-oss-*`).
-- **Reasoning effort `minimal` is rejected** by `gpt-5.5` on Bedrock (instant
-  HTTP 400). Valid values are `low | medium | high | xhigh`. The skill defaults
-  to `xhigh`.
+- **Reasoning effort `minimal` was rejected** by `openai.gpt-5.5` on Bedrock (instant
+  HTTP 400); assume the same for `openai.gpt-5.6-sol`. Valid values are
+  `low | medium | high | xhigh | ultra` (`ultra` verified live on `openai.gpt-5.6-sol`
+  2026-08-12). The skill defaults to `ultra`.
 - **A `200` with `output_tokens: 0`** from the mantle endpoint is a transient
   server-side generation hiccup, not a config fault. Retry before escalating.
 - **No background jobs.** This skill runs Codex non-interactively (`codex exec`),
@@ -172,7 +173,7 @@ actively developing the skill.
 
 | | OpenAI `codex` plugin | `codex-br` (this) |
 |---|---|---|
-| Backend | Default profile → ChatGPT/OpenAI | `br` profile → Amazon Bedrock (`openai.gpt-5.5`) |
+| Backend | Default profile → ChatGPT/OpenAI | `br` profile → Amazon Bedrock (`openai.gpt-5.6-sol`) |
 | Transport | `codex app-server` (JSON-RPC, broker) | one-shot `codex exec` |
 | Background jobs | Yes (`/status`, `/result`, `/cancel`) | No (foreground only) |
 | Review | `/codex:review` + `/codex:adversarial-review` | `review` + `adversarial-review` |
