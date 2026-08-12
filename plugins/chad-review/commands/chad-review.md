@@ -502,11 +502,16 @@ step 7 ran:
   own choice, not findings and not backlog. The updated manifests and lockfiles
   stay uncommitted; the report tells the session to land them as their own
   `deps:` commit. The skill still never commits.
-- **Red**: restore every touched manifest and lockfile from the pre-update
-  snapshot (never `git checkout`, which would also revert the user's own
-  uncommitted manifest edits), and report the failing output as a HIGH finding.
-  No per-dep bisect; whatever pins this project to a stale in-range version is
-  real work for the session that picks up the finding.
+- **Red**: restore the failing package's manifests and lockfiles from the
+  pre-update snapshot (never `git checkout`, which would also revert the user's
+  own uncommitted manifest edits), and report the failing output as a HIGH
+  finding. The unit of keep-or-revert is the manifest, not the run: in a
+  multi-package repo each package's update stands or falls with its own gate,
+  so green packages keep their updates while a red one reverts (proven on the
+  first live run: a cdk-opennext patch broke one package's typecheck while the
+  Go and web updates were green). No per-dep bisect within a manifest;
+  whatever pins that package to a stale in-range version is real work for the
+  session that picks up the finding.
 
 **What is left after updating is findings, not judgment calls**: a CVE whose fix
 is out of range (name the major that closes it; that is a NEEDS-DECISION line),
