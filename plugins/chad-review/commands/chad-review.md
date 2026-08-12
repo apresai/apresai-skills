@@ -1,6 +1,6 @@
 ---
 name: chad-review
-description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
+description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis. Dependency freshness updates dependencies rather than recommending updates: the ecosystem's own in-range command (npm update, go get -u), kept only when the project's gate re-runs green, reverted otherwise, left uncommitted for a separate deps: commit. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
 ---
 
 # Chad Review: 6-Pass Code Review
@@ -9,8 +9,11 @@ Autonomous review of uncommitted working-tree changes, or the last commit if the
 tree is clean.
 
 **This skill is not read-only, and calling it read-only has been wrong.** It
-never edits the change under review, never commits, and never applies a fix, and
-those three are real invariants. But getting there means executing the project's
+never edits the change under review, never commits, and never applies a fix to
+the code it is reviewing, and those three are real invariants. It makes exactly
+one edit of its own: pass 5 updates dependencies in place (in-range native
+update commands, kept only if the gate re-runs green, reverted otherwise, never
+committed). Beyond that, doing its job means executing the project's
 own commands: its gate, its tests, its codegen, its linters, its vulnerability
 scanner. Those write to disk. `go mod tidy` rewrites manifests, `npm ci` rewrites
 `node_modules`, a formatter in a `validate` target rewrites source, and a
@@ -30,7 +33,7 @@ Each pass answers one distinct question, so no defect is reported twice:
 | 2. BEHAVIOR AND RISK | What changed, and what breaks it | agent + parent |
 | 3. TESTS | Do affected tests pass, and do tests exist | parent + agent |
 | 4. OBSERVABILITY | Debuggable in production without a repro | reviewer agent |
-| 5. FRESHNESS | Deps current, CVE-free, not end-of-life | parent; one agent only to resolve versions |
+| 5. FRESHNESS | Deps updated in range, CVE-free, not end-of-life | parent |
 | 6. SIMPLIFY | Is it clean | reviewer agent |
 
 **Model tiering is session-relative.** There is deliberately NO `model:`
@@ -69,11 +72,11 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    **Only when step 1 actually listed a `??` entry.** With no untracked files
    there is nothing for the guard to protect, and a file that appears later is a
-   new artifact rather than a finding, which is how Phase 2 step 5 already treats
+   new artifact rather than a finding, which is how Phase 2 step 6 already treats
    it. Skipping is not a shortcut around the safety property: it is declining to
    back up the empty set, on the evidence `git status --porcelain` just produced.
    Say so in the header (`Untracked guard: not needed, 0 untracked files`) and
-   skip the matching verify in Phase 2 step 5. On a clean-tree last-commit review
+   skip the matching verify in Phase 2 step 6. On a clean-tree last-commit review
    this is always the case.
 
    ```bash
@@ -93,8 +96,8 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    `Chad Review: working tree (2 staged, 3 unstaged, 1 untracked), opus session, LOOKUP=haiku REVIEW=sonnet JUDGE=opus`
    If the session model is undeterminable, use the `unknown` row and say so.
 4. The diff feeds passes 1, 2, 3 (coverage), 4, and 6. The changed files list
-   drives test selection. Pass 5 is whole-project: it audits dependencies
-   regardless of the diff, reading the file list only to prioritize and tag.
+   drives test selection. Pass 5 is whole-project: it audits and updates
+   dependencies regardless of the diff, reading the file list only to tag.
 5. **Route by language family:**
 
    ```bash
@@ -120,10 +123,9 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    DRIFT step (see `[docs/status]` and `[docs/live-value]`), run the way
    `freshness.sh` is run, not routing commentary.
 
-   **Mixed-language diffs**: spawn ONE reviewer per block, plus the FRESHNESS
-   version-resolution agent only if pass 5 calls for one. **Scope the diff per block**: each
-   reviewer sees ONLY that language's hunks. DRIFT's codebase-wide grep is
-   scope-independent, and the parent and FRESHNESS agent still see everything.
+   **Mixed-language diffs**: spawn ONE reviewer per block. **Scope the diff per
+   block**: each reviewer sees ONLY that language's hunks. DRIFT's
+   codebase-wide grep is scope-independent, and the parent still sees everything.
    All findings merge into one report.
 
    If the script is missing, fall back to the picks in §"Execution strategy".
@@ -152,8 +154,8 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0, or 1 if there are versions to resolve | Every pass runs INLINE in the parent, FRESHNESS aside; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs its script in the parent regardless of shape, and spawns only if that script found dependencies needing version resolution. |
-   | `deps` | 1 | FRESHNESS runs FULLY FRESH as a sub-agent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
+   | `light` | 0 | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
+   | `deps` | 0 | FRESHNESS runs in the parent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
    Print `Diff shape: <shape>`. When it is not `standard`, add "rerun with
@@ -437,9 +439,9 @@ to correlate with the triggering request.
 
 ## 5. FRESHNESS
 
-Nothing this project depends on is unsafe, dead, or so far behind that catching
-up becomes its own migration. Whole-project: it runs regardless of what the diff
-touches, and the changed-files list is read only to tag `(diff-touched)`.
+Nothing this project depends on is unsafe, dead, or behind where its own
+manifest ranges allow it to be. Whole-project: it runs regardless of what the
+diff touches, and the changed-files list is read only to tag `(diff-touched)`.
 
 **Run the audit.** Everything mechanical lives in the script: manifests, direct
 dependencies, runtime constraints, version-bearing references in files that are
@@ -469,30 +471,50 @@ Five ways its output can be misread, and no others:
 
 Prefer `FIX` records over raw `SCAN` lines when writing the report. They are
 already grouped by the upgrade that closes them, so one row can carry nine
-advisories and becomes one UPGRADE NOW line rather than nine.
+advisories and becomes one line rather than nine.
 
-**Resolve versions** for `DEP` records only: context7 `resolve-library-id`, then
-`query-docs` for latest version and breaking surface. Cap around 12 lookups,
-runtimes and core frameworks first, and name the ones you skipped.
+**Then update the dependencies.** Not classify, not offer: update. This needs
+no upgrade policy because the native tools are already conservative:
+`npm update` moves only within the ranges `package.json` declares, and
+`go get -u` never crosses a major (a Go major is a different import path). For
+each manifest the script discovered:
 
-**Then the judgment this pass exists to make.** For anything behind:
+- Go module: `go get -u ./... && go mod tidy`
+- npm package: `npm update`
+- Another ecosystem with a native in-range updater: use it. None: skip it and
+  say so in the report.
 
-- **CRITICAL, overriding everything below**: a known CVE, an end-of-life runtime,
-  or an unsupported framework major.
-- **UPGRADE NOW**: the target is mature (~90+ days, several patches), or the gap
-  is minor or patch with no breaking surface, or the current major is losing
-  support. This is the default for anything behind. It is do-now, never a
-  backlog entry, and you offer to perform it.
-- **HOLD**: only a major that shipped under ~60 to 90 days ago with a real
-  breaking surface and few patches. Give a revisit signal ("after x.2", "+90d").
-  Under semver a pre-1.0 `0.y` bump is breaking, so treat it as a major.
+The update runs in Phase 2, after the tests have run on the user's change alone
+(so a failure attributes cleanly), and before the receipt is emitted (so the
+fingerprint covers the updated tree). **Only when step 1 and the pre-flight
+gate were green**: on a tree that is already failing, the re-run below cannot
+attribute anything, so skip the update and report one line,
+`FRESHNESS | update skipped: gate already red`. **First snapshot every
+manifest and lockfile** the update will touch (`cp` to a temp dir): the revert
+path must restore the pre-update state, and on a working-tree review those
+files can carry the user's own uncommitted edits, which `git checkout` would
+destroy along with the bumps. Then update, and re-run the same gate pre-flight
+step 7 ran:
 
-**Report** one row per flagged dependency (name, current, latest, why, the call),
-built from `FIX` records rather than raw `SCAN` lines so one upgrade closing nine
-advisories is one row. Then one line each as
-`FRESHNESS [security|eol|upgrade-now|hold|coverage] | <dep or ecosystem> | <=15 words`.
+- **Green**: keep the updates. Report each moved dep as `old -> new`, plus one
+  informational line naming majors still held back (straight from
+  `npm outdated` / `go list -m -u ...`): they are out of range by the manifest's
+  own choice, not findings and not backlog. The updated manifests and lockfiles
+  stay uncommitted; the report tells the session to land them as their own
+  `deps:` commit. The skill still never commits.
+- **Red**: restore every touched manifest and lockfile from the pre-update
+  snapshot (never `git checkout`, which would also revert the user's own
+  uncommitted manifest edits), and report the failing output as a HIGH finding.
+  No per-dep bisect; whatever pins this project to a stale in-range version is
+  real work for the session that picks up the finding.
 
-Clean means "all direct dependencies current or within a safe lag, no CVE, no
+**What is left after updating is findings, not judgment calls**: a CVE whose fix
+is out of range (name the major that closes it; that is a NEEDS-DECISION line),
+an end-of-life runtime, an unsupported framework major, a `COVERAGE ... GAP`.
+One line each as
+`FRESHNESS [security|eol|major-held|coverage] | <dep or ecosystem> | <=15 words`.
+
+Clean means "every in-range update applied or none needed, no CVE, no
 end-of-life runtime, **and every discovered ecosystem actually scanned**". The
 last clause is not decoration: without it the honest output for a repo whose
 Swift graph was never opened is indistinguishable from a clean one, which is the
@@ -538,7 +560,7 @@ Three tiers, and the expensive one is deliberately the smallest.
 
 | Tier | Steps | Model |
 |---|---|---|
-| **LOOKUP** | confidence scoring, version resolution for `DEP` records | `haiku` |
+| **LOOKUP** | confidence scoring | `haiku` |
 | **REVIEW** | the per-language reviewer that reads the diff and raises findings | `sonnet` |
 | **JUDGE** | the parent's attack probes, and re-verification of any CRITICAL | `opus`, or the session model when that is cheaper |
 
@@ -579,9 +601,8 @@ that gates a release. It is the largest available speed lever and costs no code.
 
 ### Phase 1: fan out
 
-Launch **one reviewer per language block**, in ONE message. Add the FRESHNESS
-version-resolution agent to that same message only when pass 5 asked for one, so
-a single-language diff is 1 or 2 Agent tool uses and CDK plus Go is 2 or 3.
+Launch **one reviewer per language block**, in ONE message, so a
+single-language diff is 1 Agent tool use and CDK plus Go is 2.
 
 **Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), 4, and 6, at the
 REVIEW tier (sonnet). `subagent_type` comes from the routing script
@@ -597,13 +618,11 @@ emitted it: `general-purpose`, REVIEW tier, and its prompt carries the
 `docs-drift.sh` records plus an instruction to read the flagged docs in FULL,
 since the contradiction is rarely inside the diff hunks.
 
-**FRESHNESS** runs in the parent: `freshness.sh` does the whole audit in a few
-seconds, and in one on a small repo. Measured at 6s on a 4,900-file repo with
-three ecosystems, most of it the two scanner round trips. It spawns ONE agent,
-LOOKUP tier, in exactly one case: the script emitted
-`DEP` records that still need version resolution. Hand that agent the `DEP` lines
-and nothing else, since discovery is already done, and let it return the resolved
-versions and breaking surfaces. No `DEP` records means no agent.
+**FRESHNESS** runs in the parent and spawns nothing: `freshness.sh` does the
+whole audit in a few seconds, and in one on a small repo. Measured at 6s on a
+4,900-file repo with three ecosystems, most of it the two scanner round trips.
+Version resolution needs no agent either: the update commands and
+`npm outdated` / `go list -m -u` answer it mechanically in Phase 2 step 2.
 
 Wait for all Phase 1 results before proceeding.
 
@@ -613,11 +632,16 @@ One pass, holding every finding at once:
 
 1. **Run the tests.** Do not delegate: run them directly so output streams to the
    user and the parent has full context to propose fixes.
-2. **Attack** (BEHAVIOR AND RISK, attack half) with targeted grep and file reads
+2. **Update the dependencies** (pass 5's update step): run the in-range
+   updates, re-run the gate, keep or revert per §5. This is the skill's one
+   sanctioned edit of its own, and it sits here on purpose: after step 1, so a
+   test failure attributes to the user's change and not the bumps, and before
+   step 8, so the receipt's fingerprint covers the updated tree.
+3. **Attack** (BEHAVIOR AND RISK, attack half) with targeted grep and file reads
    to confirm edge cases. This is JUDGE-tier work: inline when the parent is
    already there (opus and sonnet sessions), otherwise delegate this step alone
    to one JUDGE sub-agent.
-3. **Score, then keep only what clears 80.** Hand every raised finding, in ONE
+4. **Score, then keep only what clears 80.** Hand every raised finding, in ONE
    batch, to a single LOOKUP-tier agent that did not write them. An author is a
    poor judge of its own findings, and one batched scorer costs almost nothing.
    Give it the diff, the project's own guidelines, and the 0-to-100 scale from
@@ -639,14 +663,14 @@ One pass, holding every finding at once:
    Emit one `Filtered: N raised, M dropped below 80` line. Dropping must stay
    visible, because a silent filter is just backlogging with better manners. A
    dropped CRITICAL stays listed as `[dropped: <score>, <=10-word reason]`.
-4. **Re-verify CRITICALs.** Any CRITICAL that cleared 80, and anything that
+5. **Re-verify CRITICALs.** Any CRITICAL that cleared 80, and anything that
    cleared it by a narrow margin, gets a
    second look against the code before it enters the verdict. This step can
    confirm a finding, or sharpen its file:line, or downgrade its severity. It
    **cannot** drop it: failing to confirm is not evidence of absence, and only
-   step 3's rule removes a finding. An unconfirmed CRITICAL stays in the report,
+   step 4's rule removes a finding. An unconfirmed CRITICAL stays in the report,
    marked `[unconfirmed]`, and still counts toward the verdict.
-5. **Confirm the working tree survived.** Skip this only when pre-flight step 2
+6. **Confirm the working tree survived.** Skip this only when pre-flight step 2
    skipped the backup because there were no untracked files; there is nothing to
    verify, and the header already says so.
 
@@ -671,8 +695,8 @@ One pass, holding every finding at once:
    own findings. Files that appeared during the review are new artifacts, not
    findings, and the script ignores them. Never issue a verdict on a tree you
    have not confirmed still holds the files you reviewed.
-6. **Write the verdict.**
-7. **Emit the receipt.** Every completed review emits one, whatever the
+7. **Write the verdict.**
+8. **Emit the receipt.** Every completed review emits one, whatever the
    verdict: a NO-GO receipt records that the review happened and forces the
    fix-then-re-review loop, and `verify` fails it at the gate.
 
@@ -703,9 +727,9 @@ The prompt contract (what every sub-agent prompt must contain, the verbatim
 output contract, the prompt skeleton, and the Agent call shape) lives in
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/fanout.md`.
 
-Read it when you are about to launch an agent, and only then: `standard` shape,
-or `light`/`deps` where FRESHNESS found versions to resolve. A `light`
-review that spawns nothing never needs it, and `light` is the common case.
+Read it when you are about to launch an agent, and only then: `standard` shape.
+`light` and `deps` spawn nothing and never need it, and `light` is the common
+case.
 
 ## Performance budget
 
@@ -722,9 +746,10 @@ agent, not the sum.
 
 Running long, cut in this order:
 
-1. **FRESHNESS**: cap the context7 version loop, or resolve only runtimes and
-   core frameworks. NEVER skip `freshness.sh` itself: a CVE or EOL runtime is
-   CRITICAL and the script costs a few seconds.
+1. **FRESHNESS**: the update commands cost seconds; if the gate re-run is the
+   budget problem, scope it the way lever 3 scopes TESTS. NEVER skip
+   `freshness.sh` itself: a CVE or EOL runtime is CRITICAL and the script costs
+   a few seconds.
 2. **DRIFT `[types]` and `[spec/lint]`**: the most expensive sub-checks, since
    they compile or shell out. With no handler changes, mark the spec sub-checks
    N/A immediately without running generators.
@@ -774,7 +799,7 @@ Gate: <command> (<green | N failures | none detected>)
 [gaps with severity, or "Clean"]
 
 ### 5. FRESHNESS
-[currency table + CVE/EOL/UPGRADE-NOW lines, or "Clean"/"N/A"]
+[updated deps (old -> new) + majors held back + CVE/EOL/coverage lines, or "Clean"/"N/A"]
 
 ### 6. SIMPLIFY
 [quality findings, capped at MEDIUM, or "Clean"]
@@ -787,10 +812,10 @@ Filtered: N raised, M dropped
 Receipt: <path, or "published to PR #N">
 ```
 
-Carry each finding's wording verbatim. Steps 3 and 4 may lower a severity or
+Carry each finding's wording verbatim. Steps 4 and 5 may lower a severity or
 sharpen a `file:line`, and those edits carry through; nothing else is rewritten.
 **Drop the confidence score**: it is a routing signal for the filter, not
-something the reader needs once a finding has survived it. A CRITICAL that step 4 could not confirm keeps its severity and
+something the reader needs once a finding has survived it. A CRITICAL that step 5 could not confirm keeps its severity and
 gains `[unconfirmed]`. Also **strip any process narration** an agent emitted
 despite the contract. Findings in the deliverable, never the process.
 
@@ -808,18 +833,18 @@ unrelated commit:
   hard-block, because the usual cause is environmental rather than a defect in
   the diff. State the ecosystem and the cause in the verdict line itself, not
   only in the FRESHNESS body.
-- **HIGH (sunsetting major): CONDITIONAL** if urgent, otherwise advisory.
-- **MEDIUM UPGRADE NOW findings: never silently backlogged.** A GO stays a GO,
-  but the report surfaces them prominently, the Fix Prompt lists them with a
-  verify step, and you OFFER to perform them in this change or a fast-follow.
-  Backlogging a mature framework upgrade is the failure mode this pass prevents.
-- **HOLD and single-patch LOW lag: advisory only.** Only these feed the BACKLOG.
+- **A reverted update batch (the gate went red): HIGH**, carrying the failing
+  output. Whatever pins this project to a stale in-range version is real work
+  for the session that picks up the finding.
+- **Applied updates: informational.** They appear in the report and the `deps:`
+  commit instruction, never in the verdict. Majors held back are one
+  informational line, not backlog; a CVE blocked on a major is a NEEDS-DECISION
+  line.
 
 ## After the report: fix prompt
 
-Offer a copyable **fix prompt** when the verdict is NO-GO or CONDITIONAL, or when
-FRESHNESS produced UPGRADE NOW findings even on a GO, or when SIMPLIFY produced
-findings. Keep it proportional; no filler. It must:
+Offer a copyable **fix prompt** when the verdict is NO-GO or CONDITIONAL, or
+when SIMPLIFY produced findings. Keep it proportional; no filler. It must:
 
 1. **List every finding needing action**, with pass, severity, file, and lines.
 2. **Describe the outcome of each fix**, not the implementation ("ghost.go should
@@ -831,15 +856,12 @@ findings. Keep it proportional; no filler. It must:
    what blocks the merge. One exception: a FRESHNESS CRITICAL the diff did not
    touch is listed under required fixes labeled "schedule now, does not block
    this commit".
-5. **Add a "Recommended, safe to do now" heading** for UPGRADE NOW findings, each
-   with its concrete bump (`current -> target`) and a verify step, plus an
-   explicit offer to perform them. Keep HOLD items out.
-6. **Add a `/tidy` handoff line** when SIMPLIFY produced findings: name the files
+5. **Add a `/tidy` handoff line** when SIMPLIFY produced findings: name the files
    rather than restating each cleanup in prose. Exclude executable prompt content
    (`CLAUDE.md`, `*/SKILL.md`, `.claude/**`, `prompts/`, a plugin's `commands/`,
    `agents/`, `skills/`); `/tidy` refuses to edit those, so list them as manual
-   follow-ups instead. Step 7 states the order.
-7. **End with the loop that closes it**: apply the fixes, run `/tidy` if
+   follow-ups instead. Step 6 states the order.
+6. **End with the loop that closes it**: apply the fixes, run `/tidy` if
    SIMPLIFY had findings, then run `/chad-review` again to confirm. Naming the
    order here is what keeps the tidy step from landing after the gate.
 
@@ -852,8 +874,10 @@ question: the fix prompt is already in the report body.
 
 ## Rules
 
-- NEVER edit a source file, commit, or apply a proposed fix. Show it only. The
-  single exception is Phase 2 step 5 restoring a file that vanished during the
+- NEVER edit a source file, commit, or apply a proposed fix. Show it only. Two
+  exceptions, both bounded: Phase 2 step 2 updating dependency manifests and
+  lockfiles (kept only on a green gate re-run, reverted otherwise, never
+  committed), and Phase 2 step 6 restoring a file that vanished during the
   review, which puts the tree back as it was rather than changing the diff.
 - **The no-edit rule is not a read-only guarantee, and it is not tool-enforced.**
   Sub-agents hold Bash, Edit, and Write, and the review runs the project's own
@@ -875,9 +899,8 @@ question: the fix prompt is already in the report body.
 - ALWAYS pass an explicit `model` on every Agent launch, per §"Model tiering".
   Haiku is correct for LOOKUP and wrong above it; never fable.
 - **The prescribed agents are the entire budget**: one reviewer per routing
-  block (language blocks and the status-bearing docs block alike), the
-  FRESHNESS version-resolution agent when pass 5 calls for one, and
-  the single batched confidence scorer in Phase 2 step 3. That scorer is the one
+  block (language blocks and the status-bearing docs block alike), and
+  the single batched confidence scorer in Phase 2 step 4. That scorer is the one
   sanctioned exception to "no agent checks another agent": it is LOOKUP tier, it
   handles every finding in one call, and independence from the author is the
   whole point of it. Never spawn a second agent for work one can finish.

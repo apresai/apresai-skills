@@ -1,8 +1,7 @@
 # chad-review: writing sub-agent prompts
 
-Read this ONLY when you are about to launch an agent: `standard` shape, or
-`light`/`deps` where `freshness.sh` emitted `DEP` records needing version
-resolution. On a `light` review that spawns nothing, none of this applies, which
+Read this ONLY when you are about to launch an agent: `standard` shape.
+`light` and `deps` spawn nothing, so none of this applies to them, which
 is why it lives here rather than in the always-loaded skill body.
 
 Model tiering, the agent budget, and the Phase 1 / Phase 2 split stay in
@@ -63,8 +62,6 @@ Output. Strict, no exceptions:
 - A pass with no findings outputs exactly: Clean
 - A sub-check whose project convention is absent outputs exactly:
   TAG | N/A - convention not detected
-(FRESHNESS agent: emit the recommendation table first, that is data, then the
- severity and UPGRADE-NOW lines as TAG | dep | <=15-word recommendation.)
 ```
 
 Prompt skeleton:

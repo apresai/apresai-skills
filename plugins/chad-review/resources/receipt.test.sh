@@ -163,7 +163,8 @@ check "emit prints an absolute receipt path" "$r/.git/chad-review/receipts/" "$o
 f=$(grep -o '/.*\.json' <<<"$out" | head -1)
 if jq -e . "$f" >/dev/null 2>&1; then ok "the receipt is valid JSON"; else bad "the receipt is valid JSON"; fi
 check "receipt records the verdict" '"verdict": "GO"' "$(cat "$f")"
-check "receipt records the plugin version" '"plugin_version": "2.4.1"' "$(cat "$f")"
+pv=$(jq -r .version "$(dirname "$SCRIPT")/../.claude-plugin/plugin.json")
+check "receipt records the plugin version" "\"plugin_version\": \"$pv\"" "$(cat "$f")"
 check "receipt fingerprint is versioned" '"fingerprint": "patchid-v1:' "$(cat "$f")"
 v=$(verify "$r")
 check "exact head passes" "PASS: GO receipt" "$v"
