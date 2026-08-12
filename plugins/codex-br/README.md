@@ -35,7 +35,7 @@ is the economical choice for routine passes.
 - **An AWS account entitled to OpenAI frontier models on Bedrock.** `openai.gpt-5.6-sol`
   is a *gated* model (you may see "not available for this account, contact AWS
   Sales" until access is granted) and is currently served in **us-east-2 only**
-  (`openai.gpt-5.4` adds us-west-2). The open-weight `openai.gpt-oss-*` models are
+  (`openai.gpt-5.4` adds us-west-2; us-east-2-only re-verified for `openai.gpt-5.6-sol` 2026-08-12). The open-weight `openai.gpt-oss-*` models are
   **not** served on this path, so they are not a substitute.
 - **A Bedrock API key (bearer token)** from that account, exported as
   `AWS_BEARER_TOKEN_BEDROCK`.
@@ -155,7 +155,7 @@ actively developing the skill.
   (`bedrock-mantle.us-east-2.api.aws`, OpenAI Responses API), not the standard
   runtime surface. Use the curl check above to confirm access, not
   `list-foundation-models` (which returns only the open-weight `gpt-oss-*`).
-- **Reasoning effort `minimal` was rejected** by `openai.gpt-5.5` on Bedrock (instant
+- **Reasoning effort `minimal` was rejected** by `openai.gpt-5.5` on Bedrock in 2026-06 (instant
   HTTP 400); assume the same for `openai.gpt-5.6-sol`. Valid values are
   `low | medium | high | xhigh | ultra` (`ultra` verified live on `openai.gpt-5.6-sol`
   2026-08-12). The skill defaults to `ultra`.
