@@ -486,7 +486,14 @@ each manifest the script discovered:
 
 The update runs in Phase 2, after the tests have run on the user's change alone
 (so a failure attributes cleanly), and before the receipt is emitted (so the
-fingerprint covers the updated tree). Then re-run the same gate pre-flight
+fingerprint covers the updated tree). **Only when step 1 and the pre-flight
+gate were green**: on a tree that is already failing, the re-run below cannot
+attribute anything, so skip the update and report one line,
+`FRESHNESS | update skipped: gate already red`. **First snapshot every
+manifest and lockfile** the update will touch (`cp` to a temp dir): the revert
+path must restore the pre-update state, and on a working-tree review those
+files can carry the user's own uncommitted edits, which `git checkout` would
+destroy along with the bumps. Then update, and re-run the same gate pre-flight
 step 7 ran:
 
 - **Green**: keep the updates. Report each moved dep as `old -> new`, plus one
@@ -495,11 +502,11 @@ step 7 ran:
   own choice, not findings and not backlog. The updated manifests and lockfiles
   stay uncommitted; the report tells the session to land them as their own
   `deps:` commit. The skill still never commits.
-- **Red**: revert the whole batch, restoring every manifest and lockfile the
-  update touched (`git checkout -- go.mod go.sum package.json package-lock.json`
-  as applicable), and report the failing output as a HIGH finding. No per-dep
-  bisect; whatever pins this project to a stale in-range version is real work
-  for the session that picks up the finding.
+- **Red**: restore every touched manifest and lockfile from the pre-update
+  snapshot (never `git checkout`, which would also revert the user's own
+  uncommitted manifest edits), and report the failing output as a HIGH finding.
+  No per-dep bisect; whatever pins this project to a stale in-range version is
+  real work for the session that picks up the finding.
 
 **What is left after updating is findings, not judgment calls**: a CVE whose fix
 is out of range (name the major that closes it; that is a NEEDS-DECISION line),
@@ -553,7 +560,7 @@ Three tiers, and the expensive one is deliberately the smallest.
 
 | Tier | Steps | Model |
 |---|---|---|
-| **LOOKUP** | confidence scoring, version resolution for `DEP` records | `haiku` |
+| **LOOKUP** | confidence scoring | `haiku` |
 | **REVIEW** | the per-language reviewer that reads the diff and raises findings | `sonnet` |
 | **JUDGE** | the parent's attack probes, and re-verification of any CRITICAL | `opus`, or the session model when that is cheaper |
 
@@ -808,7 +815,7 @@ Receipt: <path, or "published to PR #N">
 Carry each finding's wording verbatim. Steps 4 and 5 may lower a severity or
 sharpen a `file:line`, and those edits carry through; nothing else is rewritten.
 **Drop the confidence score**: it is a routing signal for the filter, not
-something the reader needs once a finding has survived it. A CRITICAL that step 4 could not confirm keeps its severity and
+something the reader needs once a finding has survived it. A CRITICAL that step 5 could not confirm keeps its severity and
 gains `[unconfirmed]`. Also **strip any process narration** an agent emitted
 despite the contract. Findings in the deliverable, never the process.
 
