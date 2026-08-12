@@ -163,7 +163,7 @@ check "emit prints an absolute receipt path" "$r/.git/chad-review/receipts/" "$o
 f=$(grep -o '/.*\.json' <<<"$out" | head -1)
 if jq -e . "$f" >/dev/null 2>&1; then ok "the receipt is valid JSON"; else bad "the receipt is valid JSON"; fi
 check "receipt records the verdict" '"verdict": "GO"' "$(cat "$f")"
-check "receipt records the plugin version" '"plugin_version": "2.4.0"' "$(cat "$f")"
+check "receipt records the plugin version" '"plugin_version": "2.4.1"' "$(cat "$f")"
 check "receipt fingerprint is versioned" '"fingerprint": "patchid-v1:' "$(cat "$f")"
 v=$(verify "$r")
 check "exact head passes" "PASS: GO receipt" "$v"
@@ -240,6 +240,18 @@ check "dirty emit records tree state" '"tree_state": "dirty"' "$(cat "$(grep -o 
 v=$(verify "$r")
 check "untracked fold-in survives the commit" "PASS: GO receipt" "$v"
 check "fold-in match is convergence" "(convergence)" "$v"
+
+# --- 9b. dirty-tree emit, tree UNCHANGED, bare verify passes ----------------------
+# Regression (2026-08-12): verify defaulted to head-mode fingerprinting, so a
+# receipt emitted from a dirty tree (untracked file present) was falsely
+# reported stale by a bare verify seconds later, with nothing changed. verify
+# now computes both modes and matches either.
+r=$(newrepo)
+( cd "$r" && printf 'wip note\n' > untracked.md ) >/dev/null 2>&1
+emit "$r" --verdict GO >/dev/null
+v=$(verify "$r")
+check "unchanged dirty tree verifies without --worktree" "PASS: GO receipt" "$v"
+check "unchanged dirty tree match is convergence" "(convergence)" "$v"
 
 # --- 10. dirty-tree emit (modified tracked file), commit verbatim ----------------
 r=$(newrepo)
