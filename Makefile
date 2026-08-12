@@ -1,4 +1,4 @@
-.PHONY: help get-version validate validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts validate-prose check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
+.PHONY: help get-version validate validate-mirrors validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts validate-prose check-clean check-branch deploy deploy-minor deploy-major clean version bump-patch bump-minor bump-major
 
 # Release targets rely on prerequisites running in the listed order
 # (check-clean and check-branch must both run before anything writes a
@@ -15,6 +15,7 @@ help:
 	@echo ""
 	@echo "Validation:"
 	@echo "  validate           - Run all validation checks for marketplace compliance"
+	@echo "  validate-mirrors   - AGENTS.md is a byte-identical mirror of CLAUDE.md"
 	@echo "  validate-marketplace - Validate marketplace.json schema"
 	@echo "  validate-plugins   - Validate all plugin.json manifests"
 	@echo "  validate-structure - Validate directory structure"
@@ -297,7 +298,16 @@ validate-prose:
 		exit 1; \
 	fi
 
-validate: validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts validate-prose
+validate-mirrors:
+	@echo "==> Validating AGENTS.md mirror..."
+	@if out=$$(bash scripts/check-mirrors.sh); then \
+		echo "  ✅ $${out#OK: }"; \
+	else \
+		echo "  ❌ $$out"; \
+		exit 1; \
+	fi
+
+validate: validate-mirrors validate-marketplace validate-plugins validate-structure validate-versions validate-resource-refs validate-scripts validate-prose
 	@echo ""
 	@echo "================================"
 	@echo "✅ All validations passed!"
