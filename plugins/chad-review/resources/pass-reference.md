@@ -460,9 +460,10 @@ initialization parameters appear. For `unittest`, the `subTest` context manager
 Discovery, extraction, and scanning are in `resources/freshness.sh`; run it rather
 than reimplementing them here. What stays judgment:
 
-**Pick the oracle from the evidence, not from a default.** `DEP` records from a
-manifest resolve against their registry or context7. `REF` records usually do
-not: a Lambda runtime enum resolves against the AWS runtime support table, an
+**Pick the oracle from the evidence, not from a default.** `DEP` records need
+no oracle: the update step moves them to the top of their declared range, and
+`npm outdated` / `go list -m -u` name what stayed behind. `REF` records do need
+one: a Lambda runtime enum resolves against the AWS runtime support table, an
 Anthropic model ID against the `claude-api` skill, a non-Anthropic model ID
 (`openai.gpt-*`, `amazon.nova-*`, `gemini-*`) against that vendor's own
 deprecation docs, since no local skill covers those and `claude-api` scopes
@@ -501,7 +502,8 @@ it is what hid a CVSS 8.7 advisory on regist.
 when writing the report: it is already grouped by the upgrade that closes the
 advisories, so 21 findings read as roughly 10 decisions. Quote `SCAN` only when a
 specific advisory needs naming. A `FIX` row carrying nine advisories is one
-UPGRADE NOW line, not nine.
+line, not nine, and after the update step the only `FIX` rows left to report are
+the ones an in-range update could not close.
 
 ---
 
