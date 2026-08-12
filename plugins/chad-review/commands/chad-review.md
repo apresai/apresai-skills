@@ -514,22 +514,29 @@ step 7 ran:
   session that picks up the finding.
 
 **What is left after updating takes exactly the judgment this pass exists to
-hold.** Sort every remaining item into one of four tiers; naming the tier is
-what stops these from all being routed to the user:
+hold.** Sort every remaining item into a tier; naming the tier is what stops
+these from all being routed to the user:
 
 - **A direct production dependency blocked by breaking changes** (a held major
   on a runtime/product dep, a red-gate revert, or a CVE whose fix crosses a
-  major). Judge the breakage itself first. **Trivial and mechanical** (a type
-  guard, a rename, an import move) is not a decision: mark it
-  `fix-and-take-now` with the concrete fix, and the session applies it as its
-  own change right after this review, without asking the user. **Real breaking
-  surface** gets a decision block: current -> target, what concretely breaks
-  (the gate output when the update was attempted, the changelog's breaking
-  surface when it was not), and a proposed path. In an interactive session,
-  ask the user with that data in hand; as a sub-agent or headless, mark it
-  NEEDS-DECISION. Dev-tooling majors (devDependencies, linters, test runners)
-  stay on the one informational held-majors line; nobody needs a decision
-  block for eslint.
+  major). Production vs dev-tooling is decidable from the manifest, not the
+  script: `dependencies` vs `devDependencies` in package.json, and for Go
+  whether shipped code imports it (freshness.sh does not mark this; read the
+  manifest). Judge the breakage itself first. **Trivial and mechanical** is
+  not a decision: the failing output names the exact lines and the fix changes
+  no runtime behavior (a type guard, a rename, an import move); when in doubt
+  it is NOT trivial. Mark it `fix-and-take-now` with the concrete fix; the
+  session applies it right after this review as its own change through the
+  normal pipeline, its own commit or PR with its own review, never folded
+  silently into the change under review, and the review itself still edits
+  nothing beyond the §5 update step. **Real breaking surface** gets a decision
+  block: current -> target, what concretely breaks (the gate output when the
+  update was attempted, the changelog's breaking surface when it was not), and
+  a proposed path. In an interactive session, ask the user with that data in
+  hand; as a sub-agent or headless, mark it NEEDS-DECISION. Dev-tooling majors
+  (devDependencies, linters, test runners) stay on the one informational
+  held-majors line, nobody needs a decision block for eslint, with one
+  promotion: a CVE moves a dev-tooling dep into this bullet's full judgment.
 - **A transitive or bundled dependency inside a well-known library** (the AWS
   SDK's internals, a dep bundled in aws-cdk-lib): warn, never block, never
   NEEDS-DECISION. Say what it is, why it is unreachable (bundled, pinned by
@@ -542,7 +549,9 @@ what stops these from all being routed to the user:
 
 One line each as
 `FRESHNESS [security|eol|fix-and-take-now|decision|bundled|coverage] | <dep or ecosystem> | <=15 words`,
-with each decision block directly under the line that summarizes it.
+with each decision block directly under the line that summarizes it. `security`
+tags any direct-dep CVE line whatever tier resolves it; a bundled CVE stays
+tagged `bundled` with its severity in the line.
 
 Clean means "every in-range update applied or none needed, no CVE, no
 end-of-life runtime, **and every discovered ecosystem actually scanned**". The
@@ -830,7 +839,7 @@ Gate: <command> (<green | N failures | none detected>)
 [gaps with severity, or "Clean"]
 
 ### 5. FRESHNESS
-[updated deps (old -> new) + tier lines (security/eol, fix-and-take-now, decision, bundled, coverage) + decision blocks, or "Clean"/"N/A"]
+[updated deps (old -> new) + FRESHNESS tag lines (security, eol, fix-and-take-now, decision, bundled, coverage) + decision blocks, or "Clean"/"N/A"]
 
 ### 6. SIMPLIFY
 [quality findings, capped at MEDIUM, or "Clean"]
