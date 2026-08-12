@@ -15,7 +15,11 @@
 # when the current content is provably what was reviewed:
 #   - the exact reviewed head (receipt taken on a clean tree), or
 #   - the same fingerprint (a clean rebase moves the sha but not the patch-id,
-#     so an unchanged PR diff converges without a re-review).
+#     so an unchanged PR diff converges without a re-review). verify computes
+#     BOTH the head-mode and worktree-mode fingerprints and matches either, so
+#     a receipt emitted from a dirty tree (untracked files folded in) verifies
+#     without any flag as long as the tree content is unchanged; verify used to
+#     default to head-mode only and falsely reported such receipts stale.
 # Anything else fails closed: a changed diff, a NO-GO or CONDITIONAL verdict,
 # a missing receipt, a receipt for another repo or base, or a PR comment that
 # merely looks like a review. A generic reviewer cannot satisfy the gate by
@@ -349,26 +353,31 @@ candidate_row() {
 }
 
 do_verify() {
-  local pr="" fpmode=head
+  local pr=""
   base_flag=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --pr)       pr="${2:-}"; shift 2 || usage ;;
       --base)     base_flag="${2:-}"; shift 2 || usage ;;
-      --worktree) fpmode=worktree; shift ;;
+      --worktree) shift ;;   # accepted for back-compat; both modes always run now
       *) usage ;;
     esac
   done
   command -v jq >/dev/null 2>&1 || cannot "verify needs jq"
   require_repo_head
 
-  local base mb cur_head cur_fp repo store f rows gh_ok=0 prhead block
+  local base mb cur_head cur_fp_head cur_fp_wt repo store f rows gh_ok=0 prhead block
   base=$(resolve_base) || cannot "no base ref resolvable; pass --base"
   git rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1 || cannot "base ref $base does not resolve"
   mb=$(git merge-base "$base" HEAD 2>/dev/null || true)
   [[ -n "$mb" ]] || cannot "no merge base between $base and HEAD"
   cur_head=$(git rev-parse HEAD)
-  cur_fp=$(fingerprint "$fpmode" "$mb")
+  # Both modes, always: a receipt emitted from a dirty tree carries a
+  # worktree-mode fingerprint, one from a clean tree a head-mode one, and the
+  # verifier cannot know which kind it is about to meet. On a clean tree the
+  # two computations produce the same patch-id, so the extra one is free.
+  cur_fp_head=$(fingerprint head "$mb")
+  cur_fp_wt=$(fingerprint worktree "$mb")
   repo=$(repo_identity)
 
   # A PR gate must judge the head that will merge. A local checkout behind or
@@ -425,8 +434,8 @@ do_verify() {
   fi
 
   local matches best verdict src how
-  matches=$(printf '%s\n' "$scoped" | awk -F'\t' -v h="$cur_head" -v fp="$cur_fp" \
-    '($5 == "clean" && $4 == h) || (fp != "" && $6 == fp)')
+  matches=$(printf '%s\n' "$scoped" | awk -F'\t' -v h="$cur_head" -v fph="$cur_fp_head" -v fpw="$cur_fp_wt" \
+    '($5 == "clean" && $4 == h) || (fph != "" && $6 == fph) || (fpw != "" && $6 == fpw)')
   if [[ -z "$matches" ]]; then
     echo "FAIL: receipt(s) found but stale: the diff changed since the review"
     return 1
