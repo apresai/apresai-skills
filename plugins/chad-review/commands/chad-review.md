@@ -1,6 +1,6 @@
 ---
 name: chad-review
-description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis. Dependency freshness updates dependencies rather than recommending updates: the ecosystem's own in-range command (npm update, go get -u), kept only when the project's gate re-runs green, reverted otherwise (per package in multi-package repos), left uncommitted for a separate deps: commit. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
+description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis. Dependency freshness updates dependencies rather than recommending updates: the ecosystem's own in-range command (npm update, go get -u), kept only when the project's gate re-runs green, reverted otherwise (per package in multi-package repos), left uncommitted for a separate deps: commit. What cannot be auto-applied is judged, not queued: a trivial mechanical fix is taken, real breaking surface becomes a data-backed decision prompt, and bundled or transitive lag inside well-known libraries warns without ever blocking. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
 ---
 
 # Chad Review: 6-Pass Code Review
@@ -513,11 +513,45 @@ step 7 ran:
   whatever pins that package to a stale in-range version is real work for the
   session that picks up the finding.
 
-**What is left after updating is findings, not judgment calls**: a CVE whose fix
-is out of range (name the major that closes it; that is a NEEDS-DECISION line),
-an end-of-life runtime, an unsupported framework major, a `COVERAGE ... GAP`.
+**What is left after updating takes exactly the judgment this pass exists to
+hold.** Sort every remaining item into a tier; naming the tier is what stops
+these from all being routed to the user:
+
+- **A direct production dependency blocked by breaking changes** (a held major
+  on a runtime/product dep, a red-gate revert, or a CVE whose fix crosses a
+  major). Production vs dev-tooling is decidable from the manifest, not the
+  script: `dependencies` vs `devDependencies` in package.json, and for Go
+  whether shipped code imports it (freshness.sh does not mark this; read the
+  manifest). Judge the breakage itself first. **Trivial and mechanical** is
+  not a decision: the failing output names the exact lines and the fix changes
+  no runtime behavior (a type guard, a rename, an import move); when in doubt
+  it is NOT trivial. Mark it `fix-and-take-now` with the concrete fix; the
+  session applies it right after this review as its own change through the
+  normal pipeline, its own commit or PR with its own review, never folded
+  silently into the change under review, and the review itself still edits
+  nothing beyond the §5 update step. **Real breaking surface** gets a decision
+  block: current -> target, what concretely breaks (the gate output when the
+  update was attempted, the changelog's breaking surface when it was not), and
+  a proposed path. In an interactive session, ask the user with that data in
+  hand; as a sub-agent or headless, mark it NEEDS-DECISION. Dev-tooling majors
+  (devDependencies, linters, test runners) stay on the one informational
+  held-majors line, nobody needs a decision block for eslint, with one
+  promotion: a CVE moves a dev-tooling dep into this bullet's full judgment.
+- **A transitive or bundled dependency inside a well-known library** (the AWS
+  SDK's internals, a dep bundled in aws-cdk-lib): warn, never block, never
+  NEEDS-DECISION. Say what it is, why it is unreachable (bundled, pinned by
+  the parent), and when it resolves (the parent's next release). A CVE here
+  keeps the same framing with its severity attached: be aware, not actionable
+  here, watch the parent. It never moves the verdict.
+- **An end-of-life runtime or unsupported framework major**: CRITICAL. These
+  are direct and actionable, and severity is the point.
+- **A `COVERAGE ... GAP`**: report with the cause the script states, as before.
+
 One line each as
-`FRESHNESS [security|eol|major-held|coverage] | <dep or ecosystem> | <=15 words`.
+`FRESHNESS [security|eol|fix-and-take-now|decision|bundled|coverage] | <dep or ecosystem> | <=15 words`,
+with each decision block directly under the line that summarizes it. `security`
+tags any direct-dep CVE line whatever tier resolves it; a bundled CVE stays
+tagged `bundled` with its severity in the line.
 
 Clean means "every in-range update applied or none needed, no CVE, no
 end-of-life runtime, **and every discovered ecosystem actually scanned**". The
@@ -525,9 +559,10 @@ last clause is not decoration: without it the honest output for a repo whose
 Swift graph was never opened is indistinguishable from a clean one, which is the
 failure this pass shipped with.
 
-A CVE or EOL on something the diff touched is NO-GO. Pre-existing and untouched
-is CONDITIONAL: this change is safe, the project is not. Everything else is
-advisory.
+A CVE or EOL on a direct dependency the diff touched is NO-GO. Pre-existing and
+untouched on a direct dependency is CONDITIONAL: this change is safe, the
+project is not. A bundled or transitive advisory, CVE included, is advisory
+only and never moves the verdict. Everything else is advisory.
 
 ## 6. SIMPLIFY
 
@@ -804,7 +839,7 @@ Gate: <command> (<green | N failures | none detected>)
 [gaps with severity, or "Clean"]
 
 ### 5. FRESHNESS
-[updated deps (old -> new) + majors held back + CVE/EOL/coverage lines, or "Clean"/"N/A"]
+[updated deps (old -> new) + FRESHNESS tag lines (security, eol, fix-and-take-now, decision, bundled, coverage) + decision blocks, or "Clean"/"N/A"]
 
 ### 6. SIMPLIFY
 [quality findings, capped at MEDIUM, or "Clean"]
@@ -828,10 +863,13 @@ despite the contract. Findings in the deliverable, never the process.
 pre-existing dependency issue unrelated to the diff should not hard-block an
 unrelated commit:
 
-- **CRITICAL on a dependency the diff touched or introduced: NO-GO.**
-- **CRITICAL that is pre-existing and untouched: CONDITIONAL**, with a prominent
-  callout. This change is safe to commit; the project carries a CRITICAL issue to
-  schedule now.
+- **CRITICAL on a direct dependency the diff touched or introduced: NO-GO.**
+- **CRITICAL that is pre-existing and untouched, on a direct dependency:
+  CONDITIONAL**, with a prominent callout. This change is safe to commit; the
+  project carries a CRITICAL issue to schedule now.
+- **A bundled or transitive advisory, CVE included: never moves the verdict.**
+  It is a warn line in the FRESHNESS body, full stop. Escalating one of these
+  to CONDITIONAL is the failure the bundled tier exists to prevent.
 - **Any `COVERAGE ... GAP`: CONDITIONAL**, never a silent GO. An unscanned
   ecosystem is not a clean one, and the failure this guards against is a review
   that reads as complete over a dependency graph it never opened. It does not
@@ -839,13 +877,15 @@ unrelated commit:
   the diff. State the ecosystem and the cause in the verdict line itself, not
   only in the FRESHNESS body.
 - **A reverted package's update (its gate went red): HIGH**, naming the
-  package and carrying the failing output. Whatever pins that package to a
-  stale in-range version is real work for the session that picks up the
-  finding.
-- **Applied updates: informational.** They appear in the report and the `deps:`
-  commit instruction, never in the verdict. Majors held back are one
-  informational line, not backlog; a CVE blocked on a major is a NEEDS-DECISION
-  line.
+  package and carrying the failing output, then judged by the tier rules: a
+  trivial mechanical fix is `fix-and-take-now`, real breaking surface is a
+  decision block.
+- **Applied updates and `fix-and-take-now` items: never in the verdict.**
+  Applied updates appear in the report and the `deps:` commit instruction;
+  fix-and-take-now items are work the session does right after the review.
+  Dev-tooling majors held back are one informational line, not backlog.
+  Decision blocks are asked interactively or marked NEEDS-DECISION, and a GO
+  stays a GO while they wait.
 
 ## After the report: fix prompt
 

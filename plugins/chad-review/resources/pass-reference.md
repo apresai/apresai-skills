@@ -505,6 +505,15 @@ specific advisory needs naming. A `FIX` row carrying nine advisories is one
 line, not nine, and after the update step the only `FIX` rows left to report are
 the ones an in-range update could not close.
 
+**A `FIX` row the update could not move may be bundled, and that changes its
+tier.** Check before reporting: npm marks these `"inBundle": true` in the
+lockfile entry, and a vendored dir is the same condition by hand. A bundled
+package is pinned by its parent (aws-cdk-lib bundling brace-expansion is the
+canonical case), so `npm update` cannot reach it and neither can the user
+without forking. That row is tier-bundled: a warn line naming the parent and
+the parent-release condition that clears it, never a NEEDS-DECISION, never a
+verdict mover, whatever its CVSS.
+
 ---
 
 ## § SIMPLIFY
