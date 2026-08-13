@@ -806,6 +806,7 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 | Situation | Tool |
 |---|---|
 | About to commit or push; want the rigorous gate, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
+| Routed audit (leaf through audit, `/simplify`, challenger on high-risk); experimental, not the merge gate | `/ultra-audit` |
 | Quality-only cleanup, applied, **before** the gate | `/tidy` |
 | Quick read of one file or a change under three files | `/review` (built-in) |
 | Code already in a GitHub PR; want inline PR comments and CI context | `pr-review-toolkit:review-pr` |

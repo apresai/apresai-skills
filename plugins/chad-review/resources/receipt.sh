@@ -75,7 +75,7 @@ MARKER='<!-- chad-review-receipt v1 -->'
 STORE_KEEP=20
 
 usage() {
-  echo "usage: receipt.sh emit --verdict GO|NO-GO|CONDITIONAL [--base <ref>] [--pr <n>] [--counts critical=0,high=0,medium=0,low=0]" >&2
+  echo "usage: receipt.sh emit --verdict GO|NO-GO|CONDITIONAL [--tool chad-review|ultra-audit] [--base <ref>] [--pr <n>] [--counts critical=0,high=0,medium=0,low=0]" >&2
   echo "       receipt.sh publish [--pr <n>] [--file <receipt.json>]" >&2
   echo "       receipt.sh verify [--base <ref>] [--pr <n>] [--worktree]" >&2
   exit 2
@@ -128,7 +128,7 @@ store_dir() {
     [[ -n "$d" ]] && d=$(cd "$d" 2>/dev/null && pwd)
   fi
   [[ -n "$d" ]] || return 1
-  printf '%s/chad-review/receipts\n' "$d"
+  printf '%s/%s/receipts\n' "$d" "${1:-chad-review}"
 }
 
 # fingerprint <head|worktree> <merge-base> : prints patchid-v1:<sha>, or
@@ -171,11 +171,12 @@ require_repo_head() {
 # --- emit --------------------------------------------------------------------
 
 do_emit() {
-  local verdict="" counts="" pr=""
+  local verdict="" counts="" pr="" tool="chad-review"
   base_flag=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --verdict) verdict="${2:-}"; shift 2 || usage ;;
+      --tool)    tool="${2:-}"; shift 2 || usage ;;
       --base)    base_flag="${2:-}"; shift 2 || usage ;;
       --pr)      pr="${2:-}"; shift 2 || usage ;;
       --counts)  counts="${2:-}"; shift 2 || usage ;;
@@ -183,6 +184,7 @@ do_emit() {
     esac
   done
   case "$verdict" in GO|NO-GO|CONDITIONAL) ;; *) usage ;; esac
+  case "$tool" in chad-review|ultra-audit) ;; *) usage ;; esac
   [[ -n "$pr" && ! "$pr" =~ ^[0-9]+$ ]] && usage
 
   local c_critical=0 c_high=0 c_medium=0 c_low=0 part
@@ -211,7 +213,7 @@ do_emit() {
   fp=$(fingerprint "$fpmode" "$mb")
   [[ -n "$fp" ]] || cannot "nothing to fingerprint: the diff against $base is empty"
 
-  store=$(store_dir) || cannot "cannot locate the git common dir"
+  store=$(store_dir "$tool") || cannot "cannot locate the git common dir"
   mkdir -p "$store" && chmod 700 "$store" 2>/dev/null
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   file="$store/$ts-$(printf '%.12s' "$head").json"
@@ -222,11 +224,13 @@ do_emit() {
 
   repo=$(repo_identity)
   top=$(git rev-parse --show-toplevel)
+  local schema="chad-review-receipt"
+  [[ "$tool" == "ultra-audit" ]] && schema="ultra-audit-receipt"
   {
     printf '{\n'
-    printf '  "schema": "chad-review-receipt",\n'
+    printf '  "schema": "%s",\n' "$schema"
     printf '  "schema_version": 1,\n'
-    printf '  "tool": "chad-review",\n'
+    printf '  "tool": "%s",\n' "$tool"
     printf '  "plugin_version": "%s",\n' "$(json_str "$(plugin_version)")"
     printf '  "repo": "%s",\n' "$(json_str "$repo")"
     printf '  "repo_path": "%s",\n' "$(json_str "$top")"
@@ -301,11 +305,19 @@ do_publish() {
 
   head=$(jq -r .head_sha "$file"); fp=$(jq -r .fingerprint "$file")
   verdict=$(jq -r .verdict "$file"); base=$(jq -r .base_ref "$file")
+  local pub_tool pub_marker pub_label
+  pub_tool=$(jq -r '.tool // "chad-review"' "$file")
+  pub_marker="$MARKER"
+  pub_label="chad-review receipt"
+  if [[ "$pub_tool" == "ultra-audit" ]]; then
+    pub_marker='<!-- ultra-audit-receipt v1 -->'
+    pub_label="ultra-audit receipt"
+  fi
   tmp=$(mktemp)
   {
-    printf '%s\n' "$MARKER"
-    printf 'chad-review receipt: **%s** for `%.12s` (fingerprint `%s`, base %s)\n\n' \
-      "$verdict" "$head" "$fp" "$base"
+    printf '%s\n' "$pub_marker"
+    printf '%s: **%s** for `%.12s` (fingerprint `%s`, base %s)\n\n' \
+      "$pub_label" "$verdict" "$head" "$fp" "$base"
     printf '```json\n'
     cat "$file"
     printf '```\n'
@@ -315,7 +327,7 @@ do_publish() {
   # --edit-last` is rejected on purpose (it edits whatever your last comment
   # was, receipt or not).
   id=$(gh api "repos/$repo/issues/$pr/comments" --paginate 2>/dev/null \
-    | jq -rs --arg m "$MARKER" '[.[] | .[]?
+    | jq -rs --arg m "$pub_marker" '[.[] | .[]?
         | select((.body | contains($m))
             and (.author_association == "OWNER" or .author_association == "MEMBER"
                  or .author_association == "COLLABORATOR"))][0].id // empty' 2>/dev/null)

@@ -87,7 +87,7 @@ Current split, useful when looking for a precedent to copy:
 
 | Uses `commands/` | Uses `skills/` |
 |---|---|
-| apple-release (5 commands), chad-review, go-lambda, image-encoding, nextjs-opennext | bubbletea-design, codex-br, tidy, xai-voice |
+| apple-release (5 commands), chad-review (2 commands), go-lambda, image-encoding, nextjs-opennext | bubbletea-design, codex-br, tidy, xai-voice |
 
 A plugin can ship both. `apple-release` also ships `resources/` (the full
 saved App Store Review Guidelines). `chad-review` and `image-encoding`
