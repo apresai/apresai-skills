@@ -391,7 +391,7 @@ fi
 is_exec_md() {
   local f="$1" root
   case "$f" in
-    CLAUDE.md|*/CLAUDE.md|SKILL.md|*/SKILL.md) return 0 ;;
+    CLAUDE.md|*/CLAUDE.md|Claude.md|*/Claude.md|AGENTS.md|*/AGENTS.md|SKILL.md|*/SKILL.md) return 0 ;;
     .claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
     *"/commands/"*|"commands/"*|*"/agents/"*|"agents/"*|*"/skills/"*|"skills/"*) ;;
     *) return 1 ;;

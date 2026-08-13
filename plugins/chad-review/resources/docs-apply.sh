@@ -29,7 +29,8 @@ skipped=0
 
 exec_path() {
   case "$1" in
-    CLAUDE.md|*/CLAUDE.md|SKILL.md|*/SKILL.md|.claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
+    CLAUDE.md|*/CLAUDE.md|Claude.md|*/Claude.md|AGENTS.md|*/AGENTS.md|SKILL.md|*/SKILL.md) return 0 ;;
+    .claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
     */commands/*|commands/*|*/agents/*|agents/*|*/skills/*|skills/*) return 0 ;;
   esac
   return 1

@@ -94,6 +94,18 @@ check "exec markdown gets its own block" "Executable prompt content" "$out"
 check "exec markdown reviewer is general-purpose" "general-purpose" "$out"
 rm -rf "$r"
 
+# --- 6b. AGENTS.md and Claude.md are executable mirrors of CLAUDE.md ---------
+r=$(newrepo)
+printf '# Codex mirror\n' > "$r/AGENTS.md"
+out=$(run "$r")
+check "AGENTS.md is executable prompt content" "Executable prompt content" "$out"
+rm -rf "$r"
+r=$(newrepo)
+printf '# Claude mirror\n' > "$r/Claude.md"
+out=$(run "$r")
+check "Claude.md is executable prompt content" "Executable prompt content" "$out"
+rm -rf "$r"
+
 # --- 7. regression: Go routes to feature-dev:code-reviewer -------------------
 r=$(newrepo)
 printf 'package main\n' > "$r/main.go"

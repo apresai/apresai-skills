@@ -47,5 +47,17 @@ out=$(cd "$r" && bash "$SCRIPT" 2>&1)
 check "exec-md stale is skipped" "SKIP" "$out"
 if grep -q 'build 117' "$r/CLAUDE.md"; then ok "CLAUDE.md was not rewritten"; else bad "CLAUDE.md was not rewritten"; fi
 
+r=$(newrepo)
+printf '152\n' > "$r/BUILD_NUMBER"
+printf '# Notes\n\nUse build 117 or later.\n' > "$r/AGENTS.md"
+out=$(cd "$r" && bash "$SCRIPT" 2>&1)
+if grep -q 'build 117' "$r/AGENTS.md"; then ok "AGENTS.md was not rewritten"; else bad "AGENTS.md was not rewritten"; fi
+
+r=$(newrepo)
+printf '152\n' > "$r/BUILD_NUMBER"
+printf '# Notes\n\nUse build 117 or later.\n' > "$r/Claude.md"
+out=$(cd "$r" && bash "$SCRIPT" 2>&1)
+if grep -q 'build 117' "$r/Claude.md"; then ok "Claude.md was not rewritten"; else bad "Claude.md was not rewritten"; fi
+
 echo "docs-apply.sh: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
