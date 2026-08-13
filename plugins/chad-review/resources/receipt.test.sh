@@ -382,6 +382,22 @@ v=$(verify "$r")
 check "a receipt missing its fingerprint does not count" "FAIL: no valid chad-review receipt" "$v"
 check "corrupt candidates exit 1, not a crash" "code=1" "$v"
 
+# --- 23. an ultra-audit receipt does not satisfy the chad-review gate ------------
+r=$(newrepo)
+out=$(emit "$r" --tool ultra-audit --verdict GO)
+check "ultra-audit emit writes its own store" "$r/.git/ultra-audit/receipts/" "$out"
+if grep -qF "$r/.git/chad-review/receipts/" <<<"$out"; then
+  bad "ultra-audit emit does not write the chad-review store"
+else
+  ok "ultra-audit emit does not write the chad-review store"
+fi
+f=$(grep -o '/.*\.json' <<<"$out" | head -1)
+check "ultra-audit receipt names its tool" '"tool": "ultra-audit"' "$(cat "$f")"
+check "ultra-audit receipt uses its schema" '"schema": "ultra-audit-receipt"' "$(cat "$f")"
+v=$(verify "$r")
+check "ultra-audit receipt does not pass chad-review verify" "FAIL: no valid chad-review receipt" "$v"
+check "ultra-audit receipt leaves verify at 1" "code=1" "$v"
+
 echo
 echo "receipt.sh: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]] || exit 1
