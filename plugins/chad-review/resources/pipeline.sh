@@ -339,8 +339,8 @@ case "$tier" in
     if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
       add_node "simplify"
     fi
-    add_node "impl-review"
     add_node "docs-apply"
+    add_node "impl-review"
     add_node "receipt"
     if [[ "$n_code" -eq 0 || "$tiny" -eq 1 ]]; then
       agents=0
@@ -360,8 +360,8 @@ case "$tier" in
     if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
       add_node "simplify"
     fi
-    add_node "impl-review"
     add_node "docs-apply"
+    add_node "impl-review"
     add_node "score"
     add_node "receipt"
     agents=$lang_blocks
@@ -375,16 +375,16 @@ case "$tier" in
     add_node "contract-mirror"
     add_node "tests"
     add_node "freshness-audit"
+    if [[ "$spec" == "yes" ]]; then
+      add_node "spec-vs-diff"
+    fi
     add_node "freshness-update"
     if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
       add_node "simplify"
     fi
-    add_node "impl-review"
-    if [[ "$spec" == "yes" ]]; then
-      add_node "spec-vs-diff"
-    fi
-    add_node "challenger"
     add_node "docs-apply"
+    add_node "impl-review"
+    add_node "challenger"
     add_node "score"
     add_node "receipt"
     agents=$((lang_blocks + 1))

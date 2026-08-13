@@ -73,6 +73,11 @@ out=$(run "$r")
 check "modest go is small" "TIER=small" "$out"
 check "small lists simplify" "simplify" "$(printf '%s\n' "$out" | grep '^NODES=')"
 check "small lists impl-review" "impl-review" "$(printf '%s\n' "$out" | grep '^NODES=')"
+nodes=$(printf '%s\n' "$out" | grep '^NODES=')
+case "$nodes" in
+  *docs-apply*impl-review*) ok "small applies docs before impl-review" ;;
+  *) bad "small applies docs before impl-review"; printf '       got: %s\n' "$nodes" ;;
+esac
 absent "small does not list challenger" "challenger" "$(printf '%s\n' "$out" | grep '^NODES=')"
 rm -rf "$r"
 
@@ -133,6 +138,21 @@ r=$(newrepo)
 printf 'openapi: 3.0.0\ninfo:\n  title: t\n  version: 0.0.1\n' > "$r/openapi.yaml"
 out=$(run "$r")
 check "openapi file is audit" "TIER=audit" "$out"
+rm -rf "$r"
+
+# --- 12. audit with a plan runs spec-vs-diff before docs-apply ----------------
+r=$(newrepo)
+printf '# Plan\n\nDo the login.\n' > "$r/PLAN.md"
+printf 'package auth\n\nfunc Login() {}\n' > "$r/auth.go"
+out=$(run "$r")
+check "plan plus auth is audit" "TIER=audit" "$out"
+check "plan plus auth has SPEC=yes" "SPEC=yes" "$out"
+nodes=$(printf '%s\n' "$out" | grep '^NODES=')
+check "audit lists spec-vs-diff" "spec-vs-diff" "$nodes"
+case "$nodes" in
+  *spec-vs-diff*docs-apply*) ok "spec-vs-diff runs before docs-apply" ;;
+  *) bad "spec-vs-diff runs before docs-apply"; printf '       got: %s\n' "$nodes" ;;
+esac
 rm -rf "$r"
 
 echo "pipeline.sh: $pass passed, $fail failed"

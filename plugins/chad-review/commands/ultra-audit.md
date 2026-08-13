@@ -69,9 +69,10 @@ of what actually runs.
 
 ## Apply then review
 
-After `gate` and `tests`, run apply nodes (`simplify`, `freshness-update`,
-`docs-apply`) if listed, then re-run the same gate. Red after apply: stop,
-report the red output, do not emit a Built PASS.
+After `gate` and `tests`, run `spec-vs-diff` if listed, then apply nodes
+(`simplify`, `freshness-update`, `docs-apply`) if listed, then re-run the
+same gate. Red after apply: stop, report the red output, do not emit a
+Built PASS. Skip `docs-apply` when spec-vs-diff returned FAIL.
 
 Reviewer prompts get the post-apply diff, the script records, and a rubric
 path. Not this conversation. Not the author's rationale. Resolve
