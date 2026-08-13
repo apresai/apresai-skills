@@ -48,12 +48,12 @@ check "deps apply is deps" "APPLY=deps" "$out"
 absent "deps does not simplify" "simplify" "$(printf '%s\n' "$out" | grep '^NODES=')"
 rm -rf "$r"
 
-# --- 3. tiny Go file is leaf --------------------------------------------------
+# --- 3. tiny Go file is small (leaf is docs/config only) ----------------------
 r=$(newrepo)
 printf 'package p\n\nfunc F() {}\n' > "$r/f.go"
 out=$(run "$r")
-check "tiny go is leaf" "TIER=leaf" "$out"
-check "tiny go has zero agents" "AGENTS=0" "$out"
+check "tiny go is small" "TIER=small" "$out"
+check "tiny go lists tests" "tests" "$(printf '%s\n' "$out" | grep '^NODES=')"
 rm -rf "$r"
 
 # --- 4. modest one-language Go change is small --------------------------------
@@ -112,7 +112,7 @@ rm -rf "$r"
 r=$(newrepo)
 printf '# Plan\n\n**Status:** Active\n\nThis is the working master plan.\n' > "$r/PLAN.md"
 out=$(run "$r")
-check "status-bearing is small" "TIER=small" "$out"
+check "status-bearing is standard" "TIER=standard" "$out"
 check "status floor recorded" "status-docs" "$(printf '%s\n' "$out" | grep '^FLOORS=')"
 check "status spec present" "SPEC=yes" "$out"
 rm -rf "$r"
@@ -153,6 +153,114 @@ case "$nodes" in
   *spec-vs-diff*docs-apply*) ok "spec-vs-diff runs before docs-apply" ;;
   *) bad "spec-vs-diff runs before docs-apply"; printf '       got: %s\n' "$nodes" ;;
 esac
+rm -rf "$r"
+
+# --- 13. go.mod plus a README is still deps -----------------------------------
+r=$(newrepo)
+printf 'module example.com/x\n\ngo 1.22\n' > "$r/go.mod"
+printf 'hello\n' > "$r/README.md"
+out=$(run "$r")
+check "manifest plus readme is deps" "TIER=deps" "$out"
+check "manifest plus readme updates deps" "freshness-update" "$(printf '%s\n' "$out" | grep '^NODES=')"
+rm -rf "$r"
+
+# --- 14. shell and terraform count as code ------------------------------------
+r=$(newrepo)
+printf '#!/bin/sh\necho hi\n' > "$r/deploy.sh"
+out=$(run "$r")
+check "shell is small not leaf" "TIER=small" "$out"
+rm -rf "$r"
+r=$(newrepo)
+printf 'resource "null_resource" "x" {}\n' > "$r/main.tf"
+out=$(run "$r")
+check "terraform is small not leaf" "TIER=small" "$out"
+rm -rf "$r"
+
+# --- 15. a large test file is not leaf ----------------------------------------
+r=$(newrepo)
+{
+  echo "package p"
+  echo "func TestF(t *testing.T) {"
+  n=1
+  while [[ $n -le 80 ]]; do echo "	_ = $n"; n=$((n+1)); done
+  echo "}"
+} > "$r/f_test.go"
+out=$(run "$r")
+check "test-only file is small" "TIER=small" "$out"
+check "test-only file runs tests" "tests" "$(printf '%s\n' "$out" | grep '^NODES=')"
+rm -rf "$r"
+
+# --- 16. author.go is not an auth floor ---------------------------------------
+r=$(newrepo)
+printf 'package p\n\nfunc Author() {}\n' > "$r/author.go"
+out=$(run "$r")
+check "author.go is not audit" "TIER=small" "$out"
+absent "author.go is not RISK=auth" "RISK=auth" "$out"
+rm -rf "$r"
+
+# --- 17. handler.go alone is not an api floor ---------------------------------
+r=$(newrepo)
+printf 'package p\n\nfunc Handle() {}\n' > "$r/handler.go"
+out=$(run "$r")
+check "handler.go is not audit" "TIER=small" "$out"
+rm -rf "$r"
+
+# --- 18. AGENTS.md and Claude.md floor to standard ----------------------------
+r=$(newrepo)
+printf '# Codex\n' > "$r/AGENTS.md"
+out=$(run "$r")
+check "AGENTS.md is standard" "TIER=standard" "$out"
+rm -rf "$r"
+r=$(newrepo)
+printf '# Claude\n' > "$r/Claude.md"
+out=$(run "$r")
+check "Claude.md is standard" "TIER=standard" "$out"
+rm -rf "$r"
+
+# --- 19. leftover root PLAN.md does not arm spec-vs-diff ----------------------
+r=$(newrepo)
+printf '# Old plan\n' > "$r/PLAN.md"
+( cd "$r" && git add -A && git commit -qm plan ) >/dev/null
+printf 'package auth\n\nfunc Login() {}\n' > "$r/auth.go"
+out=$(run "$r")
+check "auth without a plan change is audit" "TIER=audit" "$out"
+check "untouched PLAN.md is SPEC=no" "SPEC=no" "$out"
+absent "untouched PLAN.md does not list spec-vs-diff" "spec-vs-diff" "$(printf '%s\n' "$out" | grep '^NODES=')"
+rm -rf "$r"
+
+# --- 20. untracked backup precedes the gate -----------------------------------
+r=$(newrepo)
+printf 'A readme.\n' > "$r/README.md"
+out=$(run "$r")
+nodes=$(printf '%s\n' "$out" | grep '^NODES=')
+case "$nodes" in
+  NODES=untracked-backup,gate,*) ok "backup runs before gate when untracked" ;;
+  *) bad "backup runs before gate when untracked"; printf '       got: %s\n' "$nodes" ;;
+esac
+rm -rf "$r"
+
+# --- 21. SKIP keeps the last token --------------------------------------------
+r=$(newrepo)
+printf 'A readme.\n' > "$r/README.md"
+out=$(run "$r")
+skip=$(printf '%s\n' "$out" | grep '^SKIP=')
+check "leaf SKIP still lists score" "score" "$skip"
+rm -rf "$r"
+
+# --- 22. two-language tiny diff is not leaf -----------------------------------
+r=$(newrepo)
+printf 'package p\n\nfunc F() {}\n' > "$r/f.go"
+printf 'export const x = 1\n' > "$r/app.ts"
+out=$(run "$r")
+check "two-language tiny is not leaf" "TIER=" "$out"
+absent "two-language tiny is not leaf" "TIER=leaf" "$out"
+rm -rf "$r"
+
+# --- 23. APPLY omits simplify when NODES omitted it ---------------------------
+r=$(newrepo)
+printf '# Project\n' > "$r/CLAUDE.md"
+out=$(run "$r")
+absent "exec-md APPLY has no simplify" "simplify" "$(printf '%s\n' "$out" | grep '^APPLY=')"
 rm -rf "$r"
 
 echo "pipeline.sh: $pass passed, $fail failed"

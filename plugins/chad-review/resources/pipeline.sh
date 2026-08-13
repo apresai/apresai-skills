@@ -126,8 +126,14 @@ is_test() {
 }
 
 is_code() {
+  local b
+  b=$(basename "$1")
+  case "$b" in
+    Makefile|Dockerfile|Justfile|Taskfile.yml) return 0 ;;
+  esac
   case "$1" in
     *.go|*.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.swift|*.py|*.rs|*.kt|*.java|*.rb|*.c|*.h|*.m|*.mm) return 0 ;;
+    *.sh|*.bash|*.zsh|*.tf|*.tfvars|*.sql) return 0 ;;
   esac
   return 1
 }
@@ -164,13 +170,19 @@ file_lines() {
 }
 
 risk_from_path() {
-  local f="$1"
+  local f="$1" b
+  b=$(basename "$1")
   case "$f" in
-    *auth*|*session*|*middleware*|*oauth*|*jwt*|*billing*|*payment*|*stripe*|*crypto*) echo "auth" ;;
-    *migration*|*schema.prisma*|*dynamodb*) echo "migration" ;;
-    *openapi*|*swagger*|*handler*) echo "api" ;;
-    *) echo "" ;;
+    */auth/*|*/oauth/*|*/session/*|*/middleware/*) echo "auth"; return ;;
+    */billing/*|*/payment/*|*/payments/*|*/stripe/*|*/crypto/*) echo "auth"; return ;;
+    */migrations/*|*schema.prisma*|*/dynamodb*) echo "migration"; return ;;
+    *openapi*|*swagger*) echo "api"; return ;;
   esac
+  case "$b" in
+    auth.go|auth.ts|auth.tsx|auth.js|auth.py|auth.swift|auth.rs) echo "auth"; return ;;
+    *oauth*|*jwt*) echo "auth"; return ;;
+  esac
+  echo ""
 }
 
 while IFS= read -r f; do
@@ -198,12 +210,15 @@ done <<< "$files"
 
 route_args=()
 [[ "$mode" == "last-commit" ]] && route_args+=(--last-commit)
-route_out=$(bash "$here/chad-review-route.sh" "${route_args[@]+"${route_args[@]}"}" 2>/dev/null || true)
+route_rc=0
+route_out=$(bash "$here/chad-review-route.sh" "${route_args[@]+"${route_args[@]}"}" 2>/dev/null) || route_rc=$?
 
 has_exec=0
 has_status=0
 lang_blocks=0
 has_openapi=0
+route_failed=0
+[[ "$route_rc" -ne 0 ]] && route_failed=1
 while IFS= read -r line; do
   case "$line" in
     "--- Routing: Executable prompt content"*) has_exec=1; lang_blocks=$((lang_blocks+1)) ;;
@@ -225,9 +240,8 @@ fi
 # --- spec presence ------------------------------------------------------------
 
 spec=no
-if [[ -f "$repo_root/PLAN.md" || -f "$repo_root/plan.md" ]]; then
-  spec=yes
-fi
+printf '%s\n' "$files" | grep -qxF 'PLAN.md' && spec=yes
+printf '%s\n' "$files" | grep -qxF 'plan.md' && spec=yes
 
 # --- floors and tier ----------------------------------------------------------
 
@@ -262,18 +276,28 @@ if [[ "$has_exec" -eq 1 ]]; then
   fi
 fi
 
+if [[ "$route_failed" -eq 1 ]]; then
+  add_floor "route-failed"
+  if [[ -z "$tier" || "$tier" == "leaf" || "$tier" == "deps" || "$tier" == "small" ]]; then
+    tier="standard"
+  fi
+fi
+
 if [[ "$has_status" -eq 1 ]]; then
   add_floor "status-docs"
-  if [[ -z "$tier" || "$tier" == "leaf" ]]; then
-    tier="small"
+  if [[ -z "$tier" || "$tier" == "leaf" || "$tier" == "deps" || "$tier" == "small" ]]; then
+    tier="standard"
   fi
 fi
 
 tiny=0
 [[ "$file_count" -le 4 && "$n_prod_lines" -le 40 ]] && tiny=1
 
+# Manifests plus docs or config is still a deps review: the update node
+# is the point. Docs-only / config-only (no code, no tests, no manifests)
+# is the only leaf.
 deps_only=0
-[[ "$n_manifest" -gt 0 && "$n_code" -eq 0 && "$n_test" -eq 0 && "$n_docs" -eq 0 && "$n_other" -eq 0 && "$has_exec" -eq 0 ]] && deps_only=1
+[[ "$n_manifest" -gt 0 && "$n_code" -eq 0 && "$n_test" -eq 0 && "$has_exec" -eq 0 ]] && deps_only=1
 
 no_code=0
 [[ "$n_code" -eq 0 && "$n_test" -eq 0 && "$n_manifest" -eq 0 && "$n_other" -eq 0 && "$has_exec" -eq 0 ]] && no_code=1
@@ -281,7 +305,7 @@ no_code=0
 if [[ -z "$tier" ]]; then
   if [[ "$deps_only" -eq 1 ]]; then
     tier="deps"
-  elif [[ "$no_code" -eq 1 || "$tiny" -eq 1 ]]; then
+  elif [[ "$no_code" -eq 1 ]]; then
     tier="leaf"
   elif [[ "$lang_blocks" -le 1 && "$file_count" -le 15 && "$n_prod_lines" -le 200 ]]; then
     tier="small"
@@ -299,18 +323,13 @@ add_node() {
   if [[ -z "$nodes" ]]; then nodes="$1"; else nodes="$nodes,$1"; fi
 }
 
-add_node "gate"
 if [[ "$untracked" -gt 0 ]]; then
   add_node "untracked-backup"
 fi
+add_node "gate"
 
 agents=0
-apply="none"
 skip=""
-
-set_apply() {
-  apply="$1"
-}
 
 case "$tier" in
   leaf)
@@ -318,7 +337,6 @@ case "$tier" in
     add_node "skim"
     add_node "receipt"
     agents=0
-    set_apply "none"
     skip="freshness-update,docs-drift,contract-mirror,tests,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score"
     ;;
   deps)
@@ -327,7 +345,6 @@ case "$tier" in
     add_node "freshness-update"
     add_node "receipt"
     agents=0
-    set_apply "deps"
     skip="docs-drift,contract-mirror,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score,skim"
     ;;
   small)
@@ -347,7 +364,6 @@ case "$tier" in
     else
       agents=1
     fi
-    set_apply "simplify,docs-stale,deps"
     skip="spec-vs-diff,challenger,score,skim"
     [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
     ;;
@@ -366,7 +382,6 @@ case "$tier" in
     add_node "receipt"
     agents=$lang_blocks
     [[ "$agents" -lt 1 ]] && agents=1
-    set_apply "simplify,docs-stale,deps"
     skip="spec-vs-diff,challenger,skim"
     [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
     ;;
@@ -389,7 +404,6 @@ case "$tier" in
     add_node "receipt"
     agents=$((lang_blocks + 1))
     [[ "$agents" -lt 2 ]] && agents=2
-    set_apply "simplify,docs-stale,deps"
     skip="skim"
     [[ "$spec" == "no" ]] && skip="$skip,spec-vs-diff"
     [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
@@ -399,7 +413,7 @@ esac
 # Drop skip entries that are actually in NODES.
 prune_skip() {
   local s="$1" item
-  printf '%s' "$s" | tr ',' '\n' | while IFS= read -r item; do
+  printf '%s\n' "$s" | tr ',' '\n' | while IFS= read -r item || [[ -n "$item" ]]; do
     [[ -z "$item" ]] && continue
     printf '%s' ",$nodes," | grep -q ",$item," && continue
     printf '%s\n' "$item"
@@ -409,13 +423,18 @@ prune_skip() {
 skip=$(prune_skip "$skip")
 [[ -z "$skip" ]] && skip="none"
 
+apply=""
+printf '%s' ",$nodes," | grep -q ",simplify," && apply="${apply}simplify,"
+printf '%s' ",$nodes," | grep -q ",docs-apply," && apply="${apply}docs-stale,"
+printf '%s' ",$nodes," | grep -q ",freshness-update," && apply="${apply}deps,"
+apply=${apply%,}
+[[ -z "$apply" ]] && apply="none"
+
 reason=""
 case "$tier" in
   none) reason="nothing to review" ;;
   leaf)
-    if [[ "$tiny" -eq 1 && "$n_code" -gt 0 ]]; then reason="tiny code diff, no floors"
-    elif [[ "$no_code" -eq 1 ]]; then reason="docs or config only, no floors"
-    else reason="leaf, no floors"; fi
+    reason="docs or config only, no floors"
     ;;
   deps) reason="manifests and lockfiles only" ;;
   small) reason="one language, modest size, no high-risk floors" ;;
