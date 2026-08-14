@@ -205,6 +205,40 @@ TestFlight within a few minutes.
 - Upload success/failure + any warnings
 - TestFlight link: `https://appstoreconnect.apple.com/apps` (or the direct
   `…/apps/{ASC_APP_ID}/testflight/ios` if the Makefile defines `ASC_APP_ID`)
+- Anything Step 6 surfaced, stated as a future blocker rather than as work to do now
+
+## Step 6: Submission-readiness check (report only, never a gate)
+
+A successful upload is the cheapest moment to notice something that will block the NEXT App Store
+submission, because nothing here is on the critical path and the app is already at a known-good
+state. Run the project's ASC status target if it has one:
+
+```bash
+make asc-status 2>/dev/null || make -C ios asc-status 2>/dev/null \
+  || echo "no ASC status target in this project; skip (do not hand-roll one here)"
+```
+
+**The field that goes missing unnoticed is `whatsNew`.** It is not required for an app's FIRST
+release, so it stays empty through the whole pre-launch period without ever failing anything, and
+then blocks the first UPDATE submission. regist is the observation: version 1.1 went through two
+complete App Review cycles (rejected 2026-07-13 and 2026-07-20) with `whatsNew` en-US MISSING, and
+neither rejection cited it. So an empty `whatsNew` on a pre-launch app is not a bug to chase, and it
+is also not a field anyone will be reminded about later.
+
+**Report it. Do not fix it from this skill.** Two independent reasons:
+
+1. A missing `whatsNew` cannot fail a TestFlight upload, so acting on it is outside this skill's
+   scope, and this skill stops at TestFlight.
+2. If a review submission is already in flight, version metadata is the wrong thing to touch. ASC
+   has returned `409 "version is not editable"` for metadata writes in that state, and any write
+   that does land changes what the reviewer receives.
+
+While the status target is open, confirm the upload did NOT disturb an in-flight review: `attachedBuild`
+should be the same build as before the upload, and any in-flight submission should keep its original
+state and timestamp. **Uploading a build during review is safe** (it lands in TestFlight unattached,
+verified on regist across builds 163 and 164 while submission `151cf8b2` sat in WAITING_FOR_REVIEW);
+**attaching a build is what touches the submission.** Never attach as a side effect of a TestFlight
+push.
 
 ## Notes
 
@@ -330,6 +364,8 @@ questions that actually block one:
 
 - which build is ATTACHED to the version, which is not necessarily the newest one uploaded
 - whether `whatsNew` exists for every locale, whose absence is the most common submission failure
+  for an UPDATE (a first release does not require it, which is exactly why it goes unnoticed; see
+  Step 6)
 - whether a review submission is already in flight, which blocks creating another
 - the subscription and subscription-group version ids, since a submission that omits the
   subscription item is what caused this app's 2.1(b) rejection
