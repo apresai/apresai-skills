@@ -153,7 +153,7 @@ compare against, and "attachedBuild is 161" on its own proves nothing.
 [ -n "$STATUS" ] && $STATUS   # record attachedBuild, and any in-flight submission's id + state + timestamp
 ```
 
-Write those three values down in the session before moving on. If `$STATUS` exits non-zero here,
+Write those values down in the session before moving on. If `$STATUS` exits non-zero here,
 say so and carry on: a status probe is not a gate on uploading a build, but Step 5 must then report
 that it had no baseline rather than implying the comparison passed.
 
