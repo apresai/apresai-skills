@@ -45,11 +45,23 @@ elif test -f ios/Makefile && grep -qE '^upload:' ios/Makefile; then
 else
   echo "No upload/ios-upload target found: ask the user which target builds+uploads this app."
 fi
-echo "upload target: $UP   info target: $INFO"
+
+# Optional: an ASC status target, used by the Step 2 snapshot and the Step 5 check.
+# DETECT it here rather than discovering it by running it, so that later a non-zero
+# exit means the command FAILED rather than "no such target". Conflating those two
+# is how a real auth or network error gets reported as "nothing to check".
+STATUS=""
+if grep -qE '^asc-status:' Makefile 2>/dev/null; then
+  STATUS="make asc-status"
+elif test -f ios/Makefile && grep -qE '^asc-status:' ios/Makefile; then
+  STATUS="make -C ios asc-status"
+fi
+echo "upload target: $UP   info target: $INFO   status target: ${STATUS:-none}"
 ```
 
 Use the detected `$UP` / `$INFO` in every step below. (Standardizing every repo on bare
-`make upload` / `make info` is the goal; until then, detect.)
+`make upload` / `make info` is the goal; until then, detect.) `$STATUS` is optional: an empty
+`$STATUS` means this project exposes no ASC status target, which is a skip, not a failure.
 
 ## Step 1: Validate requirements
 
@@ -131,6 +143,20 @@ xcodegen projects, `grep CURRENT_PROJECT_VERSION project.yml`; otherwise
 `grep -m1 CURRENT_PROJECT_VERSION <project>.xcodeproj/project.pbxproj`. Always verify against the
 actual project config, never against memory of the last release.
 
+### Snapshot the ASC state, BEFORE the upload
+
+Only when Step 0 found a `$STATUS` target. Step 5 checks that the upload did not disturb an
+in-flight review, and that check is a comparison: without a before-value there is nothing to
+compare against, and "attachedBuild is 161" on its own proves nothing.
+
+```bash
+[ -n "$STATUS" ] && $STATUS   # record attachedBuild, and any in-flight submission's id + state + timestamp
+```
+
+Write those three values down in the session before moving on. If `$STATUS` exits non-zero here,
+say so and carry on: a status probe is not a gate on uploading a build, but Step 5 must then report
+that it had no baseline rather than implying the comparison passed.
+
 ## Step 2.5: Pre-upload gates
 
 Run these before any archive/upload; they exist to prevent stale-build-number uploads and
@@ -199,24 +225,24 @@ issue #29743, a tracked altool bug report, *not* a Fastlane dependency). Do not 
 alone; rely on the success/error strings and confirm the build appears in App Store Connect →
 TestFlight within a few minutes.
 
-## Step 5: Report
+## Step 5: Submission-readiness check (report only, never a gate)
 
-- Version + build number uploaded (`$INFO` to confirm)
-- Upload success/failure + any warnings
-- TestFlight link: `https://appstoreconnect.apple.com/apps` (or the direct
-  `…/apps/{ASC_APP_ID}/testflight/ios` if the Makefile defines `ASC_APP_ID`)
-- Anything Step 6 surfaced, stated as a future blocker rather than as work to do now
-
-## Step 6: Submission-readiness check (report only, never a gate)
-
-A successful upload is the cheapest moment to notice something that will block the NEXT App Store
-submission, because nothing here is on the critical path and the app is already at a known-good
-state. Run the project's ASC status target if it has one:
+**Runs BEFORE the report, because its whole output is an input to the report.** A successful upload
+is the cheapest moment to notice something that will block the NEXT App Store submission: nothing
+here is on the critical path and the app is already at a known-good state.
 
 ```bash
-make asc-status 2>/dev/null || make -C ios asc-status 2>/dev/null \
-  || echo "no ASC status target in this project; skip (do not hand-roll one here)"
+if [ -n "$STATUS" ]; then
+  $STATUS || echo "STATUS PROBE FAILED (see stderr above): report this, do NOT read it as 'nothing to check'"
+else
+  echo "no ASC status target in this project; skip (do not hand-roll one here)"
+fi
 ```
+
+Note what that does NOT do: it does not treat a non-zero exit as "no target". `$STATUS` was resolved
+by detection in Step 0, so if it is set, the target exists, and a failure here is an auth, network,
+or API error worth reporting. Never let stderr disappear into a "skip" line; that suppresses exactly
+the signal this step exists to produce.
 
 **The field that goes missing unnoticed is `whatsNew`.** It is not required for an app's FIRST
 release, so it stays empty through the whole pre-launch period without ever failing anything, and
@@ -233,12 +259,22 @@ is also not a field anyone will be reminded about later.
    has returned `409 "version is not editable"` for metadata writes in that state, and any write
    that does land changes what the reviewer receives.
 
-While the status target is open, confirm the upload did NOT disturb an in-flight review: `attachedBuild`
-should be the same build as before the upload, and any in-flight submission should keep its original
-state and timestamp. **Uploading a build during review is safe** (it lands in TestFlight unattached,
-verified on regist across builds 163 and 164 while submission `151cf8b2` sat in WAITING_FOR_REVIEW);
-**attaching a build is what touches the submission.** Never attach as a side effect of a TestFlight
-push.
+While the status target is open, confirm the upload did NOT disturb an in-flight review by comparing
+against **the Step 2 snapshot**: `attachedBuild` should be unchanged, and any in-flight submission
+should keep its original state and timestamp. With no snapshot (no `$STATUS`, or the Step 2 probe
+failed), report that the comparison could not be made; a lone after-value proves nothing.
+**Uploading a build during review is safe** (it lands in TestFlight unattached, verified on regist
+across builds 163 and 164 while submission `151cf8b2` sat in WAITING_FOR_REVIEW); **attaching a build
+is what touches the submission.** Never attach as a side effect of a TestFlight push.
+
+## Step 6: Report
+
+- Version + build number uploaded (`$INFO` to confirm)
+- Upload success/failure + any warnings
+- TestFlight link: `https://appstoreconnect.apple.com/apps` (or the direct
+  `…/apps/{ASC_APP_ID}/testflight/ios` if the Makefile defines `ASC_APP_ID`)
+- Whatever Step 5 surfaced: a readiness gap stated as a future blocker rather than as work to do
+  now, the before-and-after comparison result, and a failed or skipped status probe named as such
 
 ## Notes
 
@@ -365,7 +401,7 @@ questions that actually block one:
 - which build is ATTACHED to the version, which is not necessarily the newest one uploaded
 - whether `whatsNew` exists for every locale, whose absence is the most common submission failure
   for an UPDATE (a first release does not require it, which is exactly why it goes unnoticed; see
-  Step 6)
+  Step 5)
 - whether a review submission is already in flight, which blocks creating another
 - the subscription and subscription-group version ids, since a submission that omits the
   subscription item is what caused this app's 2.1(b) rejection
