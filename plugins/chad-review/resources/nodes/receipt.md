@@ -9,11 +9,16 @@ bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/receipt.
   --counts critical=N,high=N,medium=N,low=N
 ```
 
-Map axes to the receipt verdict: any Built FAIL or Challenge DOES NOT HOLD or
-Spec FAIL is NO-GO. Spec N/A plus Built PASS plus Challenge SKIPPED or HOLDS
-is GO. A pre-existing whole-project freshness CRITICAL the diff did not touch
-is CONDITIONAL.
+Map to the receipt verdict: any Built FAIL, Spec FAIL, or Challenge DOES NOT
+HOLD is NO-GO. Any surviving CRITICAL or HIGH finding from ANY node
+(impl-review, skim, tests, docs-drift, contract-mirror, or freshness on a
+diff-touched dependency) is also NO-GO: the axes summarize the run, they do
+not outrank findings, and a receipt that satisfies the merge gate must never
+carry a GO over an unfixed CRITICAL. A pre-existing whole-project freshness
+CRITICAL the diff did not touch is CONDITIONAL. Otherwise GO. The
+CRITICAL/HIGH half is also enforced mechanically: `receipt.sh verify` fails a
+GO receipt whose own counts record critical or high findings.
 
 Print the path on `Receipt:`. If `gh pr view --json number` works, also pass
-`--pr <n>`. The published comment is an ultra-audit receipt and does not
-satisfy `receipt.sh verify`.
+`--pr <n>`. The published comment is an ultra-audit receipt and satisfies
+`receipt.sh verify` at the merge gate, the same as a chad-review receipt.

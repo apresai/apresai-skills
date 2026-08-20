@@ -805,17 +805,19 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 
 | Situation | Tool |
 |---|---|
-| About to commit or push; want the rigorous gate, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
-| Routed audit (leaf through audit, `/simplify`, challenger on high-risk); experimental, not the merge gate | `/ultra-audit` |
+| About to commit or push; the default routed review whose receipt satisfies the merge gate | `/ultra-audit` |
+| Want the fixed 6-pass fan-out, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
 | Quality-only cleanup, applied, **before** the gate | `/tidy` |
 | Quick read of one file or a change under three files | `/review` (built-in) |
 | Code already in a GitHub PR; want inline PR comments and CI context | `pr-review-toolkit:review-pr` |
 
-chad-review is for before the commit; pr-review-toolkit is for after the PR is
-open. `/tidy` runs before chad-review, never after: applying edits after the gate
-mutates the reviewed diff and re-arms it. The cycle is build, test, `/tidy`,
-`/chad-review`, PR, then `receipt.sh verify --pr <n>` immediately before the
-merge: the merge gate checks the receipt, not the session's memory of a review.
+Both review tools run before the commit; pr-review-toolkit is for after the PR
+is open. `/tidy` runs before the review, never after: applying edits after the
+gate mutates the reviewed diff and re-arms it. The cycle is build, test,
+`/tidy`, `/ultra-audit` (or `/chad-review`), PR, then
+`receipt.sh verify --pr <n>` immediately before the merge: the merge gate
+checks the receipt, not the session's memory of a review, and either tool's
+receipt satisfies it.
 
 ## Final report
 

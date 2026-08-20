@@ -8,9 +8,12 @@
 # and this suite locks the properties the gate stands on: the exact reviewed
 # head passes; a clean rebase with an unchanged diff converges; ANY substantive
 # change, a NO-GO, a missing receipt, or a generic look-alike review fails
-# closed; and a receipt emitted on a dirty tree still matches after the exact
+# closed; a receipt emitted on a dirty tree still matches after the exact
 # same content is committed (the untracked fold-in equivalence, verified here
-# by running the real code, not on paper).
+# by running the real code, not on paper); and either tool's receipt
+# (chad-review or ultra-audit) satisfies the gate, with the newest ruling for
+# the current content winning across both and a mismatched schema/tool pair
+# never counting.
 #
 # Hermetic: every fixture repo, its bare "origin", the receipt store (via
 # HOME/TMPDIR redirection is NOT enough since the store lives in .git), the gh
@@ -216,7 +219,7 @@ check "newest ruling for the content wins" "verdict NO-GO" "$v"
 # --- 7. no receipt at all --------------------------------------------------------
 r=$(newrepo)
 v=$(verify "$r")
-check "missing receipt fails" "FAIL: no valid chad-review receipt" "$v"
+check "missing receipt fails" "FAIL: no valid review receipt" "$v"
 check "missing receipt exits 1" "code=1" "$v"
 
 # --- 8. a generic review comment never satisfies the gate ------------------------
@@ -229,7 +232,7 @@ jq -n '[{id: 1, author_association: "OWNER",
 GH_STUB_FAIL=0
 v=$(verify "$r" --pr 7)
 GH_STUB_FAIL=1
-check "a look-alike review comment never passes" "FAIL: no valid chad-review receipt" "$v"
+check "a look-alike review comment never passes" "FAIL: no valid review receipt" "$v"
 
 # --- 9. dirty-tree emit (untracked files), commit verbatim, verify ---------------
 r=$(newrepo)
@@ -309,7 +312,7 @@ rm -f "$(store_of "$r")"/*.json
 GH_STUB_FAIL=0
 v=$(verify "$r" --pr 7)
 GH_STUB_FAIL=1
-check "an untrusted author's receipt does not count" "FAIL: no valid chad-review receipt" "$v"
+check "an untrusted author's receipt does not count" "FAIL: no valid review receipt" "$v"
 
 # --- 16. gh unavailable degrades to local-only with a warning ---------------------
 r=$(newrepo)
@@ -379,10 +382,10 @@ printf '{"schema": "chad-review-receipt", "schema_version": 1, "tool": "chad-rev
   > "$(store_of "$r")/20260731T120000Z-corrupt.json"
 printf 'not json at all\n' > "$(store_of "$r")/20260731T120001Z-junk.json"
 v=$(verify "$r")
-check "a receipt missing its fingerprint does not count" "FAIL: no valid chad-review receipt" "$v"
+check "a receipt missing its fingerprint does not count" "FAIL: no valid review receipt" "$v"
 check "corrupt candidates exit 1, not a crash" "code=1" "$v"
 
-# --- 23. an ultra-audit receipt does not satisfy the chad-review gate ------------
+# --- 23. an ultra-audit receipt satisfies the same gate ---------------------------
 r=$(newrepo)
 out=$(emit "$r" --tool ultra-audit --verdict GO)
 check "ultra-audit emit writes its own store" "$r/.git/ultra-audit/receipts/" "$out"
@@ -395,8 +398,106 @@ f=$(grep -o '/.*\.json' <<<"$out" | head -1)
 check "ultra-audit receipt names its tool" '"tool": "ultra-audit"' "$(cat "$f")"
 check "ultra-audit receipt uses its schema" '"schema": "ultra-audit-receipt"' "$(cat "$f")"
 v=$(verify "$r")
-check "ultra-audit receipt does not pass chad-review verify" "FAIL: no valid chad-review receipt" "$v"
-check "ultra-audit receipt leaves verify at 1" "code=1" "$v"
+check "ultra-audit receipt passes verify" "PASS: GO receipt" "$v"
+check "ultra-audit receipt verifies exact-head" "(exact-head)" "$v"
+check "ultra-audit verify exits 0" "code=0" "$v"
+
+# --- 24. newest ruling wins ACROSS tools on the same content ----------------------
+r=$(newrepo)
+emit "$r" --tool ultra-audit --verdict GO >/dev/null
+emit "$r" --verdict NO-GO >/dev/null
+v=$(verify "$r")
+check "a newer chad-review NO-GO shadows an older ultra-audit GO" "verdict NO-GO" "$v"
+emit "$r" --tool ultra-audit --verdict GO >/dev/null
+v=$(verify "$r")
+check "a newer ultra-audit GO out-ranks the NO-GO again" "PASS: GO receipt" "$v"
+
+# --- 25. ultra-audit publish and cross-machine verify via its own marker ----------
+r=$(newrepo)
+h=$(cd "$r" && git rev-parse HEAD)
+reset_gh "$h"
+out=$(emit "$r" --tool ultra-audit --verdict GO)
+f=$(grep -o '/.*\.json' <<<"$out" | head -1)
+GH_STUB_FAIL=0
+publish "$r" --pr 7 --file "$f" >/dev/null
+GH_STUB_FAIL=1
+check "the comment carries the ultra-audit marker" "ultra-audit-receipt v1" "$(jq -r '.[0].body' "$GH_STUB_DIR/comments.json")"
+rm -f "$r/.git/ultra-audit/receipts/"*.json "$r/.git/chad-review/receipts/"*.json 2>/dev/null
+GH_STUB_FAIL=0
+v=$(verify "$r" --pr 7)
+GH_STUB_FAIL=1
+check "cross-machine verify passes from the ultra-audit comment" "PASS: GO receipt (github)" "$v"
+
+# --- 26. a mismatched schema/tool pair is a forgery, not a receipt ----------------
+r=$(newrepo)
+emit "$r" --verdict GO >/dev/null
+f=$(ls -1 "$(store_of "$r")"/*.json | head -1)
+jq '.schema = "ultra-audit-receipt"' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+v=$(verify "$r")
+check "ultra-audit schema with chad-review tool never counts" "FAIL: no valid review receipt" "$v"
+jq '.schema = "chad-review-receipt" | .tool = "ultra-audit"' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+v=$(verify "$r")
+check "chad-review schema with ultra-audit tool never counts" "FAIL: no valid review receipt" "$v"
+
+# --- 27. bare publish picks the newest receipt across both stores -----------------
+r=$(newrepo)
+h=$(cd "$r" && git rev-parse HEAD)
+reset_gh "$h"
+emit "$r" --verdict GO >/dev/null
+emit "$r" --tool ultra-audit --verdict GO >/dev/null
+GH_STUB_FAIL=0
+p=$(publish "$r" --pr 7)
+GH_STUB_FAIL=1
+check "bare publish succeeds across stores" "published: new receipt comment" "$p"
+check "bare publish picked the newer (ultra-audit) receipt" "ultra-audit-receipt v1" "$(jq -r '.[0].body' "$GH_STUB_DIR/comments.json")"
+r=$(newrepo)
+h=$(cd "$r" && git rev-parse HEAD)
+reset_gh "$h"
+emit "$r" --tool ultra-audit --verdict GO >/dev/null
+emit "$r" --verdict GO >/dev/null
+GH_STUB_FAIL=0
+publish "$r" --pr 7 >/dev/null
+GH_STUB_FAIL=1
+check "reversed order picks the newer (chad-review) receipt" "chad-review-receipt v1" "$(jq -r '.[0].body' "$GH_STUB_DIR/comments.json")"
+
+# --- 28. an untrusted author's ultra-audit marker comment is rejected -------------
+r=$(newrepo)
+h=$(cd "$r" && git rev-parse HEAD)
+reset_gh "$h"
+out=$(emit "$r" --tool ultra-audit --verdict GO)
+f=$(grep -o '/.*\.json' <<<"$out" | head -1)
+GH_STUB_FAIL=0 GH_STUB_AUTHOR=NONE publish "$r" --pr 7 --file "$f" >/dev/null
+rm -f "$r/.git/ultra-audit/receipts/"*.json "$r/.git/chad-review/receipts/"*.json 2>/dev/null
+GH_STUB_FAIL=0
+v=$(verify "$r" --pr 7)
+GH_STUB_FAIL=1
+check "an untrusted author's ultra-audit receipt does not count" "FAIL: no valid review receipt" "$v"
+
+# --- 29. an emitted_at tie is fail-closed: the non-GO ruling wins -----------------
+r=$(newrepo)
+emit "$r" --verdict GO >/dev/null
+out=$(emit "$r" --tool ultra-audit --verdict NO-GO)
+f2=$(grep -o '/.*\.json' <<<"$out" | head -1)
+ts=$(jq -r .emitted_at "$(ls -1 "$(store_of "$r")"/*.json | head -1)")
+jq --arg t "$ts" '.emitted_at = $t' "$f2" > "$f2.tmp" && mv "$f2.tmp" "$f2"
+v=$(verify "$r")
+check "tied timestamps let the NO-GO win" "verdict NO-GO" "$v"
+check "tied-timestamp verify fails closed" "code=1" "$v"
+
+# --- 30. a GO recording critical/high findings fails the gate mechanically --------
+r=$(newrepo)
+emit "$r" --verdict GO --counts critical=1,high=0,medium=0,low=0 >/dev/null
+v=$(verify "$r")
+check "GO with a critical count fails" "records 1 critical/high finding" "$v"
+check "contradicted GO exits 1" "code=1" "$v"
+r=$(newrepo)
+emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=2,medium=3,low=0 >/dev/null
+v=$(verify "$r")
+check "ultra-audit GO with high counts fails" "records 2 critical/high finding" "$v"
+r=$(newrepo)
+emit "$r" --verdict GO --counts critical=0,high=0,medium=5,low=2 >/dev/null
+v=$(verify "$r")
+check "GO with only medium/low counts still passes" "PASS: GO receipt" "$v"
 
 echo
 echo "receipt.sh: $pass passed, $fail failed"
