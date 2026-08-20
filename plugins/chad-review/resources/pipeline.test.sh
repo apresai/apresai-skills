@@ -263,5 +263,23 @@ out=$(run "$r")
 absent "exec-md APPLY has no simplify" "simplify" "$(printf '%s\n' "$out" | grep '^APPLY=')"
 rm -rf "$r"
 
+# --- 25. leaf with markdown runs docs-drift (gate promotion regression) -------
+r=$(newrepo)
+printf 'A readme.\n\nJust three plain lines.\n' > "$r/README.md"
+out=$(run "$r")
+check "md leaf is still leaf" "TIER=leaf" "$out"
+check "md leaf NODES include docs-drift" "docs-drift" "$(printf '%s\n' "$out" | grep '^NODES=')"
+absent "md leaf SKIP drops docs-drift" "docs-drift" "$(printf '%s\n' "$out" | grep '^SKIP=')"
+rm -rf "$r"
+
+# --- 26. config-only leaf has no markdown, docs-drift stays skipped -----------
+r=$(newrepo)
+printf 'node_modules/\n' > "$r/.gitignore"
+out=$(run "$r")
+check "config-only is leaf" "TIER=leaf" "$out"
+absent "config leaf NODES omit docs-drift" "docs-drift" "$(printf '%s\n' "$out" | grep '^NODES=')"
+check "config leaf SKIP lists docs-drift" "docs-drift" "$(printf '%s\n' "$out" | grep '^SKIP=')"
+rm -rf "$r"
+
 echo "pipeline.sh: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

@@ -293,6 +293,9 @@ fi
 tiny=0
 [[ "$file_count" -le 4 && "$n_prod_lines" -le 40 ]] && tiny=1
 
+n_md=$(printf '%s\n' "$files" | grep -c -E '\.(md|mdx)$' || true)
+[[ -n "$n_md" ]] || n_md=0
+
 # Manifests plus docs or config is still a deps review: the update node
 # is the point. Docs-only / config-only (no code, no tests, no manifests)
 # is the only leaf.
@@ -333,6 +336,13 @@ skip=""
 
 case "$tier" in
   leaf)
+    # docs-drift is the one deterministic scan a docs-only diff actually
+    # needs; skipping it on leaf was a gate regression once ultra-audit
+    # receipts began satisfying the merge gate (prune_skip drops it from
+    # SKIP when added). Config-only leaves have no markdown and skip it.
+    if [[ "$n_md" -gt 0 ]]; then
+      add_node "docs-drift"
+    fi
     add_node "freshness-audit"
     add_node "skim"
     add_node "receipt"
