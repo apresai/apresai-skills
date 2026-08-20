@@ -1,6 +1,6 @@
 ---
 name: tidy
-description: Apply quality-only cleanups to the code just changed. This skill EDITS FILES, so use it only when deliberately invoked: the user says "tidy this up", "clean this up", "simplify what I just wrote", invokes /tidy, or reaches the named simplify step of a documented build cycle (build, test, tidy, review). Do not fire it on your own mid-task, and do not treat a passing mention of simplicity as a request to start editing. Removes missed reuse, dead code, wrong-altitude logic, needless abstraction, defensive noise for impossible states, and compatibility scaffolding. Scope-fenced to the current diff, behavior-preserving, and gated on a verifier that can actually disprove a change; applies nothing when the repo has none. Never edits executable prompt content, never commits. Runs BEFORE /chad-review.
+description: Apply quality-only cleanups to the code just changed. This skill EDITS FILES, so use it only when deliberately invoked: the user says "tidy this up", "clean this up", "simplify what I just wrote", invokes /tidy, or reaches the named simplify step of a documented build cycle (build, test, tidy, review). Do not fire it on your own mid-task, and do not treat a passing mention of simplicity as a request to start editing. Removes missed reuse, dead code, wrong-altitude logic, needless abstraction, defensive noise for impossible states, and compatibility scaffolding. Scope-fenced to the current diff, behavior-preserving, and gated on a verifier that can actually disprove a change; applies nothing when the repo has none. Never edits executable prompt content, never commits. Runs BEFORE the review gate (/ultra-audit or /chad-review).
 ---
 
 # Tidy
@@ -11,10 +11,10 @@ performs. Quality only: this skill must not change what the code does.
 ## Where this sits in the cycle
 
 ```
-build -> test -> /tidy (applies) -> /chad-review (gates, read-only) -> PR -> merge
+build -> test -> /tidy (applies) -> /ultra-audit (gates) -> PR -> merge
 ```
 
-**Run before the review, never after.** `/chad-review` is a merge gate, and its
+**Run before the review, never after.** The review (/ultra-audit, or /chad-review) is a merge gate, and its
 verdict only holds while the diff against main is unchanged (chad-review 2.4.0
 records that binding as a receipt: verdict plus a stable diff fingerprint, and
 `receipt.sh verify` enforces it mechanically at merge time, so an edit after the
@@ -233,7 +233,7 @@ so behavior preservation cannot be proven. Applied nothing.
 ```
 
 Close with the handoff, since this skill is the step before the gate:
-`Next: /chad-review`.
+`Next: /ultra-audit`.
 
 ## Rules
 
@@ -251,5 +251,5 @@ Close with the handoff, since this skill is the step before the gate:
   language block at a time until it is green again, by reversing your own edits
   from the step 4 record. NEVER use `git checkout`, `git restore`, `git stash`,
   or `git reset` to do it; they cannot tell your edits from the user's.
-- Run before `/chad-review`, never after. If a review already ran, tidy, then
+- Run before the review (`/ultra-audit` or `/chad-review`), never after. If a review already ran, tidy, then
   re-run the review; the gate must see the final diff.
