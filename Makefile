@@ -49,8 +49,8 @@ help:
 #   - A scheme prefix (`obsidian:resources/aws-cost-tagging.md`) is a pointer
 #     into somewhere else entirely, not into this marketplace. The negative
 #     lookbehind on `:` drops those.
-#   - A plugin may legitimately cite ANOTHER plugin's resource, as tidy's
-#     SKILL.md cites chad-review's pass-reference.md. So a reference resolves if
+#   - A plugin may legitimately cite ANOTHER plugin's resource (a skill
+#     reusing chad-review's pass-reference.md, say). So a reference resolves if
 #     the file exists under ANY plugin's resources/, not only its own. The bug
 #     worth catching is a pointer to a file that exists nowhere.
 validate-resource-refs:
