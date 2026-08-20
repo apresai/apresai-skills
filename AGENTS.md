@@ -36,7 +36,6 @@ apresai-skills/
 │   ├── go-lambda/
 │   ├── image-encoding/
 │   ├── nextjs-opennext/
-│   ├── tidy/
 │   └── xai-voice/
 ├── AGENTS.md                # byte-identical mirror of CLAUDE.md (Codex reads this)
 ├── CLAUDE.md                # the editable original of this guidance
@@ -87,11 +86,11 @@ Current split, useful when looking for a precedent to copy:
 
 | Uses `commands/` | Uses `skills/` |
 |---|---|
-| apple-release (5 commands), chad-review (2 commands), go-lambda, image-encoding, nextjs-opennext | bubbletea-design, codex-br, tidy, xai-voice |
+| apple-release (5 commands), chad-review (2 commands), go-lambda, image-encoding, nextjs-opennext | bubbletea-design, codex-br, xai-voice |
 
 A plugin can ship both. `apple-release` also ships `resources/` (the full
 saved App Store Review Guidelines). `chad-review` and `image-encoding`
-have no `README.md`, and neither does `tidy`, which is allowed.
+have no `README.md`, which is allowed.
 
 A skill's `description` is load-bearing: it is the only thing deciding
 whether the skill fires. Write it as trigger conditions, not as a summary.

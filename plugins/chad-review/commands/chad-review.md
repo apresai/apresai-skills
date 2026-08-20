@@ -584,7 +584,7 @@ Quality only: correctness defects belong to BEHAVIOR AND RISK.
   change.
 
 Severity caps at **MEDIUM**: nothing here is a correctness defect. Report, never
-apply. The Fix Prompt hands these to `/tidy`.
+apply. The Fix Prompt hands these to `/simplify`.
 
 > Per-language simplification signals: `pass-reference.md` § SIMPLIFY.
 
@@ -807,14 +807,14 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 |---|---|
 | About to commit or push; the default routed review whose receipt satisfies the merge gate | `/ultra-audit` |
 | Want the fixed 6-pass fan-out, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
-| Quality-only cleanup, applied, **before** the gate | `/tidy` |
+| Quality-only cleanup, applied, **before** the gate | `/simplify` (built-in) |
 | Quick read of one file or a change under three files | `/review` (built-in) |
 | Code already in a GitHub PR; want inline PR comments and CI context | `pr-review-toolkit:review-pr` |
 
 Both review tools run before the commit; pr-review-toolkit is for after the PR
-is open. `/tidy` runs before the review, never after: applying edits after the
+is open. `/simplify` runs before the review, never after: applying edits after the
 gate mutates the reviewed diff and re-arms it. The cycle is build, test,
-`/tidy`, `/ultra-audit` (or `/chad-review`), PR, then
+`/simplify`, `/ultra-audit` (or `/chad-review`), PR, then
 `receipt.sh verify --pr <n>` immediately before the merge: the merge gate
 checks the receipt, not the session's memory of a review, and either tool's
 receipt satisfies it.
@@ -905,14 +905,16 @@ when SIMPLIFY produced findings. Keep it proportional; no filler. It must:
    what blocks the merge. One exception: a FRESHNESS CRITICAL the diff did not
    touch is listed under required fixes labeled "schedule now, does not block
    this commit".
-5. **Add a `/tidy` handoff line** when SIMPLIFY produced findings: name the files
-   rather than restating each cleanup in prose. Exclude executable prompt content
-   (`CLAUDE.md`, `*/SKILL.md`, `.claude/**`, `prompts/`, a plugin's `commands/`,
-   `agents/`, `skills/`); `/tidy` refuses to edit those, so list them as manual
-   follow-ups instead. Step 6 states the order.
-6. **End with the loop that closes it**: apply the fixes, run `/tidy` if
-   SIMPLIFY had findings, then run `/chad-review` again to confirm. Naming the
-   order here is what keeps the tidy step from landing after the gate.
+5. **Add a `/simplify` handoff line** when SIMPLIFY produced findings: name the
+   files rather than restating each cleanup in prose. Exclude executable prompt
+   content (`CLAUDE.md`, `*/SKILL.md`, `.claude/**`, `prompts/`, a plugin's
+   `commands/`, `agents/`, `skills/`): the built-in `/simplify` has no refusal
+   of its own, so the handoff line IS the fence; list exec-content cleanups as
+   manual follow-ups instead. Step 6 states the order.
+6. **End with the loop that closes it**: apply the fixes, run `/simplify`
+   scoped to exactly the files the handoff line names if SIMPLIFY had
+   findings, then run `/chad-review` again to confirm. Naming the order here
+   is what keeps the cleanup step from landing after the gate.
 
 Then: ask "Want me to enter plan mode with this prompt, or do you want to edit it
 first?" ONLY when the verdict is NO-GO or CONDITIONAL AND this is a direct
