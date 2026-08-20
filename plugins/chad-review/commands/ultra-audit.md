@@ -1,6 +1,6 @@
 ---
 name: ultra-audit
-description: Routed pre-commit audit. Use when the user invokes /ultra-audit, wants a complexity-routed review (leaf, deps, small, standard, audit), or asks for spec-vs-diff, a fresh-context challenger, in-range dep updates, and docs brought in line with the implementation in one pass. Experimental. Does not replace /chad-review. Merge still requires a chad-review receipt.
+description: Routed pre-commit audit and the default pre-merge review. Use when the user invokes /ultra-audit, wants a complexity-routed review (leaf, deps, small, standard, audit), or asks for spec-vs-diff, a fresh-context challenger, in-range dep updates, and docs brought in line with the implementation in one pass. Its receipt satisfies receipt.sh verify at the merge gate, the same gate a /chad-review receipt passes.
 ---
 
 # Ultra Audit
@@ -9,9 +9,10 @@ Routed audit of the dirty working tree, or the last commit if the tree is clean.
 A script picks the pipeline. This file executes that plan. It does not re-derive
 the tier.
 
-**Experimental.** Does not replace `/chad-review`. Wrapup and `receipt.sh verify`
-still require a chad-review receipt. After this command finishes, say
-`Next: /chad-review` when the user is about to merge.
+**The default pre-merge review.** The receipt this run emits satisfies
+`receipt.sh verify` at the merge gate, the same as a `/chad-review` receipt.
+`/chad-review` remains available when the fixed 6-pass fan-out is wanted
+explicitly.
 
 `resources/...` paths resolve against the skill root:
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
@@ -91,14 +92,14 @@ Built:   PASS | FAIL
 Challenge: HOLDS | DOES NOT HOLD | SKIPPED
 Apply:   <what ran, or skipped because spec failed>
 Receipt: <path>
-Next:    /chad-review
 ```
 
 No blended GO. Spec N/A when `SPEC=no` or the node was skipped. Challenge
 SKIPPED when `challenger` was not in `NODES=`.
 
-Then `/chad-review` if this branch is heading for merge. An ultra-audit
-receipt does not satisfy `receipt.sh verify`.
+The receipt satisfies `receipt.sh verify` at the merge gate. When this branch
+is heading for merge, run `receipt.sh verify --pr <n>` immediately before
+`gh pr merge`, the same way a chad-review receipt is verified.
 
 ## Rules
 
