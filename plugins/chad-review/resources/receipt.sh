@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# receipt.sh: durable, machine-checkable proof that chad-review reviewed
-# exactly this diff.
+# receipt.sh: durable, machine-checkable proof that a chad-review or
+# ultra-audit review covered exactly this diff.
 #
 # WHY THIS EXISTS
 # The merge gate ("a chad-review ran against the PR head") used to be enforced
@@ -23,8 +23,11 @@
 # Anything else fails closed: a changed diff, a NO-GO or CONDITIONAL verdict,
 # a missing receipt, a receipt for another repo or base, or a PR comment that
 # merely looks like a review. A generic reviewer cannot satisfy the gate by
-# accident, because a candidate must carry this schema, this tool name, and a
-# fingerprint that matches the diff being merged.
+# accident, because a candidate must carry one of the two schema/tool pairs
+# (chad-review-receipt with chad-review, or ultra-audit-receipt with
+# ultra-audit) and a fingerprint that matches the diff being merged. Either
+# tool's receipt satisfies the gate; the newest ruling for the current
+# content wins across both.
 #
 # THE FINGERPRINT
 # `git patch-id --stable` over the merge-base diff, with every diff knob
@@ -42,8 +45,9 @@
 # diff, so a receipt emitted before `git add` still matches after the commit.
 #
 # DURABILITY
-# Local store: <git-common-dir>/chad-review/receipts/ (shared across
-# worktrees, survives worktree teardown, never committed; newest 20 kept).
+# Local stores: <git-common-dir>/<tool>/receipts/, one per tool (shared across
+# worktrees, survives worktree teardown, never committed; newest 20 kept per
+# store). emit writes to its own tool's store; verify scans both.
 # GitHub: one idempotent PR comment carrying the marker and the receipt JSON,
 # so a different session or machine can verify without this filesystem.
 # `verify` takes the union and trusts the newest ruling FOR THE CURRENT
@@ -72,6 +76,7 @@
 set -uo pipefail
 
 MARKER='<!-- chad-review-receipt v1 -->'
+MARKER_UA='<!-- ultra-audit-receipt v1 -->'
 STORE_KEEP=20
 
 usage() {
@@ -269,7 +274,7 @@ do_emit() {
 # --- publish -------------------------------------------------------------------
 
 do_publish() {
-  local pr="" file="" repo store f id tmp head fp verdict base
+  local pr="" file="" repo store f id tmp head fp verdict base sd best_base=""
   base_flag=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -291,14 +296,24 @@ do_publish() {
   fi
 
   if [[ -z "$file" ]]; then
-    # Newest local receipt for this repo, whatever the branch: the caller who
-    # wants precision passes --file (emit does exactly that).
-    store=$(store_dir) || cannot "cannot locate the git common dir"
-    while IFS= read -r f; do
-      [[ -z "$f" ]] && continue
-      if jq -e --arg r "$repo" '.schema == "chad-review-receipt" and .repo == $r' \
-          "$store/$f" >/dev/null 2>&1; then file="$store/$f"; break; fi
-    done < <(ls -1 "$store" 2>/dev/null | LC_ALL=C sort -r)
+    # Newest local receipt for this repo across both tool stores, whatever the
+    # branch: the caller who wants precision passes --file (emit does exactly
+    # that). The timestamp filename prefix makes the basename comparison a
+    # time comparison.
+    for sd in chad-review ultra-audit; do
+      store=$(store_dir "$sd") || cannot "cannot locate the git common dir"
+      while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        if jq -e --arg r "$repo" \
+            '(.schema == "chad-review-receipt" or .schema == "ultra-audit-receipt") and .repo == $r' \
+            "$store/$f" >/dev/null 2>&1; then
+          if [[ -z "$best_base" || "$f" > "$best_base" ]]; then
+            best_base="$f"; file="$store/$f"
+          fi
+          break
+        fi
+      done < <(ls -1 "$store" 2>/dev/null | LC_ALL=C sort -r)
+    done
     [[ -n "$file" ]] || { echo "FAIL: no local receipt to publish; run emit first"; return 1; }
   fi
   jq -e . "$file" >/dev/null 2>&1 || { echo "FAIL: $file is not valid JSON"; return 1; }
@@ -310,7 +325,7 @@ do_publish() {
   pub_marker="$MARKER"
   pub_label="chad-review receipt"
   if [[ "$pub_tool" == "ultra-audit" ]]; then
-    pub_marker='<!-- ultra-audit-receipt v1 -->'
+    pub_marker="$MARKER_UA"
     pub_label="ultra-audit receipt"
   fi
   tmp=$(mktemp)
@@ -351,15 +366,20 @@ do_publish() {
 # --- verify ---------------------------------------------------------------------
 
 # stdin: one receipt JSON. stdout: one TSV candidate row, or nothing when the
-# document is not a structurally valid chad-review receipt. This filter is the
-# "generic reviews never pass" rule: no marker schema, no candidacy.
+# document is not a structurally valid receipt from either tool. This filter is
+# the "generic reviews never pass" rule: no marker schema, no candidacy, and
+# the schema must pair with its own tool (a mismatched pair is a forgery, not
+# a receipt).
 candidate_row() {
   jq -r --arg src "$1" '
     select(type == "object")
-    | select(.schema == "chad-review-receipt" and .schema_version == 1 and .tool == "chad-review")
+    | select(.schema_version == 1)
+    | select((.schema == "chad-review-receipt" and .tool == "chad-review")
+             or (.schema == "ultra-audit-receipt" and .tool == "ultra-audit"))
     | select(((.fingerprint // "") != "") and ((.head_sha // "") != "") and ((.verdict // "") != ""))
     | [(.emitted_at // "0"), $src, .verdict, .head_sha, (.tree_state // "clean"),
-       .fingerprint, (.repo // "-"), (.base_ref // "-")]
+       .fingerprint, (.repo // "-"), (.base_ref // "-"),
+       (((.findings.critical // 0) + (.findings.high // 0)) | tostring)]
     | @tsv' 2>/dev/null
   return 0
 }
@@ -378,7 +398,7 @@ do_verify() {
   command -v jq >/dev/null 2>&1 || cannot "verify needs jq"
   require_repo_head
 
-  local base mb cur_head cur_fp_head cur_fp_wt repo store f rows gh_ok=0 prhead block
+  local base mb cur_head cur_fp_head cur_fp_wt repo store sd f rows gh_ok=0 prhead block
   base=$(resolve_base) || cannot "no base ref resolvable; pass --base"
   git rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1 || cannot "base ref $base does not resolve"
   mb=$(git merge-base "$base" HEAD 2>/dev/null || true)
@@ -409,13 +429,15 @@ do_verify() {
   fi
 
   rows=""
-  store=$(store_dir 2>/dev/null || true)
-  if [[ -n "$store" && -d "$store" ]]; then
-    while IFS= read -r f; do
-      [[ -z "$f" ]] && continue
-      rows+=$(candidate_row local < "$store/$f")$'\n'
-    done < <(ls -1 "$store" 2>/dev/null)
-  fi
+  for sd in chad-review ultra-audit; do
+    store=$(store_dir "$sd" 2>/dev/null || true)
+    if [[ -n "$store" && -d "$store" ]]; then
+      while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        rows+=$(candidate_row local < "$store/$f")$'\n'
+      done < <(ls -1 "$store" 2>/dev/null)
+    fi
+  done
   if [[ -n "$pr" && "$gh_ok" == 1 ]]; then
     # Receipts published to the PR: jq pulls the fenced JSON out of each
     # trusted marker comment and strips its newlines, which keeps it valid
@@ -425,8 +447,8 @@ do_verify() {
       [[ -z "$block" ]] && continue
       rows+=$(printf '%s' "$block" | candidate_row github)$'\n'
     done < <(gh api "repos/$repo/issues/$pr/comments" --paginate 2>/dev/null \
-      | jq -rs --arg m "$MARKER" '.[] | .[]?
-          | select((.body | contains($m))
+      | jq -rs --arg m "$MARKER" --arg m2 "$MARKER_UA" '.[] | .[]?
+          | select(((.body | contains($m)) or (.body | contains($m2)))
               and (.author_association == "OWNER" or .author_association == "MEMBER"
                    or .author_association == "COLLABORATOR"))
           | (.body | split("```json\n")[1] // "" | split("\n```")[0] // "" | gsub("\n"; ""))' 2>/dev/null)
@@ -434,7 +456,7 @@ do_verify() {
 
   rows=$(printf '%s' "$rows" | grep -v '^$' || true)
   if [[ -z "$rows" ]]; then
-    echo "FAIL: no valid chad-review receipt found (local store or PR comments)"
+    echo "FAIL: no valid review receipt found (chad-review or ultra-audit; local store or PR comments)"
     return 1
   fi
 
@@ -453,13 +475,30 @@ do_verify() {
     return 1
   fi
 
-  # Newest ruling for THIS content wins; on an emitted_at tie the GitHub copy
-  # does (github < local sorts first).
+  # Newest ruling for THIS content wins. On an emitted_at tie, fail closed: a
+  # non-GO ruling at the newest timestamp out-ranks a GO at the same instant
+  # (with two tool stores merged, same-second emits are reachable, and the
+  # bare whole-line sort fallback would otherwise let GO win by lexical
+  # accident). Among tied rows of the same verdict, the GitHub copy wins
+  # (github < local sorts first).
+  local newest_ts tie_nogo blockers
   best=$(printf '%s\n' "$matches" | LC_ALL=C sort -t"$(printf '\t')" -k1,1r -k2,2 | head -1)
+  newest_ts=$(printf '%s' "$best" | cut -f1)
+  tie_nogo=$(printf '%s\n' "$matches" | awk -F'\t' -v t="$newest_ts" '$1 == t && $3 != "GO"' \
+    | LC_ALL=C sort -t"$(printf '\t')" -k2,2 | head -1)
+  [[ -n "$tie_nogo" ]] && best="$tie_nogo"
   verdict=$(printf '%s' "$best" | cut -f3)
   src=$(printf '%s' "$best" | cut -f2)
   if [[ "$verdict" != "GO" ]]; then
     echo "FAIL: newest receipt for this content has verdict $verdict"
+    return 1
+  fi
+  # A GO that records unfixed critical or high findings contradicts both
+  # tools' verdict mapping (nodes/receipt.md, chad-review verdict rules);
+  # enforce that contract mechanically rather than trusting the emitter.
+  blockers=$(printf '%s' "$best" | cut -f9)
+  if [[ -n "$blockers" && "$blockers" != "0" ]]; then
+    echo "FAIL: newest receipt is GO but records $blockers critical/high finding(s); re-review"
     return 1
   fi
   if [[ "$(printf '%s' "$best" | cut -f5)" == "clean" && "$(printf '%s' "$best" | cut -f4)" == "$cur_head" ]]; then
