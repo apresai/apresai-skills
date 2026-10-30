@@ -23,9 +23,12 @@ Take a version only once it has been published for 14 days.
 
 - **Trusted publishers** are exempt: a package on the trusted-publisher list
   in the project's or user's `CLAUDE.md` (Dependencies section) may be taken
-  the day it ships, newest stable within its current major. No list found
-  means no exemptions. For npm, run `npm update <trusted pkgs>` without
-  `--before` after the floored update.
+  the day it ships, newest stable within its current major. Confirm the
+  publisher by npm scope owner or `npm view <pkg> maintainers`, or by Go
+  module path, not by name. No list found means no exemptions. For npm, run
+  `npm update <trusted pkgs>` without `--before` after the floored update;
+  snapshot the lockfile first, and if that pass moved any package that is not
+  itself trusted, restore the snapshot and report those trusted bumps as held.
 - **Go** has no `--before`. Capture `go list -m all` before and after
   `go get -u`. For each moved module that is not trusted, read the release date
   with `gh release view <new version> --repo <owner/repo> --json publishedAt`.
