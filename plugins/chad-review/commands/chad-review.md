@@ -1,9 +1,9 @@
 ---
 name: chad-review
-description: 6-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, dependency-freshness, and simplification analysis. Dependency freshness updates dependencies rather than recommending updates: the ecosystem's own in-range command (npm update, go get -u), kept only when the project's gate re-runs green, reverted otherwise (per package in multi-package repos), left uncommitted for a separate deps: commit. What cannot be auto-applied is judged, not queued: a trivial mechanical fix is taken, real breaking surface becomes a data-backed decision prompt, and bundled or transitive lag inside well-known libraries warns without ever blocking. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
+description: 5-pass autonomous pre-commit code review. Use when the user wants to review their changes before committing, asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted working-tree changes (staged, unstaged, and untracked) if any exist; otherwise falls back to the last commit. Runs drift, behavior-and-risk, test, observability, and dependency-freshness analysis. Dependency freshness updates dependencies rather than recommending updates: the ecosystem's own in-range command (npm update, go get -u), kept only when the project's gate re-runs green, reverted otherwise (per package in multi-package repos), left uncommitted for a separate deps: commit. What cannot be auto-applied is judged, not queued: a trivial mechanical fix is taken, real breaking surface becomes a data-backed decision prompt, and bundled or transitive lag inside well-known libraries warns without ever blocking. Documentation drift is deterministic (docs-drift.sh scans complete changed docs for status contradictions and stale operational values; contract-mirror.sh finds handwritten twins of generated types), and every completed review emits a machine-readable receipt (verdict plus a stable diff fingerprint) that receipt.sh verify checks at the merge gate: the exact reviewed head passes, a clean rebase with an unchanged diff converges, any substantive diff change re-arms.
 ---
 
-# Chad Review: 6-Pass Code Review
+# Chad Review: 5-Pass Code Review
 
 Autonomous review of uncommitted working-tree changes, or the last commit if the
 tree is clean.
@@ -34,7 +34,6 @@ Each pass answers one distinct question, so no defect is reported twice:
 | 3. TESTS | Do affected tests pass, and do tests exist | parent + agent |
 | 4. OBSERVABILITY | Debuggable in production without a repro | reviewer agent |
 | 5. FRESHNESS | Deps updated in range, CVE-free, not end-of-life | parent |
-| 6. SIMPLIFY | Is it clean | reviewer agent |
 
 **Model tiering is session-relative.** There is deliberately NO `model:`
 frontmatter pin: the parent inherits the session model and each sub-agent carries
@@ -95,7 +94,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    §"Model tiering":
    `Chad Review: working tree (2 staged, 3 unstaged, 1 untracked), opus session, LOOKUP=haiku REVIEW=sonnet JUDGE=opus`
    If the session model is undeterminable, use the `unknown` row and say so.
-4. The diff feeds passes 1, 2, 3 (coverage), 4, and 6. The changed files list
+4. The diff feeds passes 1, 2, 3 (coverage), and 4. The changed files list
    drives test selection. Pass 5 is whole-project: it audits and updates
    dependencies regardless of the diff, reading the file list only to tag.
 5. **Route by language family:**
@@ -564,30 +563,6 @@ untouched on a direct dependency is CONDITIONAL: this change is safe, the
 project is not. A bundled or transitive advisory, CVE included, is advisory
 only and never moves the verdict. Everything else is advisory.
 
-## 6. SIMPLIFY
-
-The change is as small and as plain as it can be while still doing the job.
-Quality only: correctness defects belong to BEHAVIOR AND RISK.
-
-- **Reuse missed**: a new helper duplicating an existing one. Name the existing
-  symbol and its path.
-- **Dead code**: added-then-unused code, refactor leftovers, unreachable
-  branches.
-- **Wrong altitude**: a handler doing storage-shaped work, a data layer making
-  presentation decisions.
-- **Needless abstraction**: an interface with one implementation, a wrapper
-  adding no behavior, generalization for a requirement that does not exist yet.
-- **Defensive noise**: handling, fallbacks, or validation for states that cannot
-  occur. Trust internal code and framework guarantees; validate at system
-  boundaries only.
-- **Compatibility scaffolding**: a feature flag or shim where the code could just
-  change.
-
-Severity caps at **MEDIUM**: nothing here is a correctness defect. Report, never
-apply. The Fix Prompt hands these to `/simplify`.
-
-> Per-language simplification signals: `pass-reference.md` § SIMPLIFY.
-
 ## Execution strategy
 
 ### Model tiering (session-relative)
@@ -644,13 +619,13 @@ that gates a release. It is the largest available speed lever and costs no code.
 Launch **one reviewer per language block**, in ONE message, so a
 single-language diff is 1 Agent tool use and CDK plus Go is 2.
 
-**Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), 4, and 6, at the
+**Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), and 4, at the
 REVIEW tier (sonnet). `subagent_type` is `general-purpose` for every block, as
 the routing script emits it: a reviewer that reports everything with a
 confidence, so the Phase 2 scorer is the only filter. Routing still decides
 which hunks, codegen hint, and Context7 docs each block gets. It reads the diff ONCE
 and emits each pass as its own labeled section, which is what keeps the
-six-heading invariant intact. It needs tool access to run generators, spec
+five-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
 
 The **status-bearing docs reviewer** is one of these blocks when routing
@@ -806,7 +781,7 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 | Situation | Tool |
 |---|---|
 | About to commit or push; the default routed review whose receipt satisfies the merge gate | `/ultra-audit` |
-| Want the fixed 6-pass fan-out, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
+| Want the fixed 5-pass fan-out, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
 | Quality-only cleanup, applied, **before** the gate | `/simplify` (built-in) |
 | Quick read of one file or a change under three files | `/review` (built-in) |
 | Code already in a GitHub PR; want inline PR comments and CI context | `pr-review-toolkit:review-pr` |
@@ -843,9 +818,6 @@ Gate: <command> (<green | N failures | none detected>)
 
 ### 5. FRESHNESS
 [updated deps (old -> new) + FRESHNESS tag lines (security, eol, fix-and-take-now, decision, bundled, coverage) + decision blocks, or "Clean"/"N/A"]
-
-### 6. SIMPLIFY
-[quality findings, capped at MEDIUM, or "Clean"]
 
 Filtered: N raised, M dropped
 
@@ -892,8 +864,7 @@ unrelated commit:
 
 ## After the report: fix prompt
 
-Offer a copyable **fix prompt** when the verdict is NO-GO or CONDITIONAL, or
-when SIMPLIFY produced findings. Keep it proportional; no filler. It must:
+Offer a copyable **fix prompt** when the verdict is NO-GO or CONDITIONAL. Keep it proportional; no filler. It must:
 
 1. **List every finding needing action**, with pass, severity, file, and lines.
 2. **Describe the outcome of each fix**, not the implementation ("ghost.go should
@@ -905,16 +876,9 @@ when SIMPLIFY produced findings. Keep it proportional; no filler. It must:
    what blocks the merge. One exception: a FRESHNESS CRITICAL the diff did not
    touch is listed under required fixes labeled "schedule now, does not block
    this commit".
-5. **Add a `/simplify` handoff line** when SIMPLIFY produced findings: name the
-   files rather than restating each cleanup in prose. Exclude executable prompt
-   content (`CLAUDE.md`, `*/SKILL.md`, `.claude/**`, `prompts/`, a plugin's
-   `commands/`, `agents/`, `skills/`): the built-in `/simplify` has no refusal
-   of its own, so the handoff line IS the fence; list exec-content cleanups as
-   manual follow-ups instead. Step 6 states the order.
-6. **End with the loop that closes it**: apply the fixes, run `/simplify`
-   scoped to exactly the files the handoff line names if SIMPLIFY had
-   findings, then run `/chad-review` again to confirm. Naming the order here
-   is what keeps the cleanup step from landing after the gate.
+5. **End with the loop that closes it**: apply the fixes, then run
+   `/chad-review` again to confirm. Any cleanup pass (`/simplify`) runs before
+   that re-review, never after it, per §"Choosing between review tools".
 
 Then: ask "Want me to enter plan mode with this prompt, or do you want to edit it
 first?" ONLY when the verdict is NO-GO or CONDITIONAL AND this is a direct
@@ -942,7 +906,7 @@ question: the fix prompt is already in the report body.
   appears in the project's own gate or CI workflow. When a discovered command's
   effect is not obvious from its name, do not run it: report it as undetermined
   and say what you skipped.
-- NEVER silently skip a pass. All six appear as headings in every report. A pass
+- NEVER silently skip a pass. All five appear as headings in every report. A pass
   may return early per the shape matrix, but only with the explicit line
   "N/A - not applicable to this diff shape (<shape>)". The same holds one level
   down: an absent convention says `N/A - convention not detected` rather than

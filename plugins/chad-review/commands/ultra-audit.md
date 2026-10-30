@@ -11,7 +11,7 @@ the tier.
 
 **The default pre-merge review.** The receipt this run emits satisfies
 `receipt.sh verify` at the merge gate, the same as a `/chad-review` receipt.
-`/chad-review` remains available when the fixed 6-pass fan-out is wanted
+`/chad-review` remains available when the fixed 5-pass fan-out is wanted
 explicitly.
 
 `resources/...` paths resolve against the skill root:

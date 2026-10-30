@@ -2,7 +2,7 @@
 # chad-review-route.sh: pick the per-language reviewer based on what's in the diff.
 #
 # WHY THIS EXISTS
-# chad-review's 6-pass STRUCTURE is language-agnostic, but the review brief is
+# chad-review's 5-pass STRUCTURE is language-agnostic, but the review brief is
 # not: one reviewer per language block reads only that language's hunks once, at
 # the REVIEW tier (sonnet), with that language's codegen / spec-lint hint and
 # Context7 docs for the frameworks the diff actually imports (CDK blocks also
@@ -239,7 +239,7 @@ echo
 
 # emit_block <lang> <reviewer> <spec_hint> <ctx>
 # ONE REVIEWER PER LANGUAGE. Passes 1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS
-# (coverage only), 4 OBSERVABILITY, and 6 SIMPLIFY all ride a single per-language
+# (coverage only), and 4 OBSERVABILITY all ride a single per-language
 # reviewer at the REVIEW tier, reading the diff once. <spec_hint> is the DRIFT
 # codegen/spec-lint command hint, surfaced on the reviewer row.
 # Pass reviewer="-" for a block that gets no reviewer of its own (prose). It then
@@ -255,7 +255,7 @@ emit_block() {
     return 0
   fi
   cat <<EOF
-  Reviewer (DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY)
+  Reviewer (DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY)
                                        -> $reviewer   [REVIEW tier, sonnet]
       DRIFT codegen / spec-lint hint     : $spec_hint
 EOF
