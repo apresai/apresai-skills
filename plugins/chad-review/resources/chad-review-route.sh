@@ -2,7 +2,7 @@
 # chad-review-route.sh: pick the per-language reviewer based on what's in the diff.
 #
 # WHY THIS EXISTS
-# chad-review's 5-pass STRUCTURE is language-agnostic, but the review brief is
+# chad-review's 5-pass structure is language-agnostic, but the review brief is
 # not: one reviewer per language block reads only that language's hunks once, at
 # the REVIEW tier (sonnet), with that language's codegen / spec-lint hint and
 # Context7 docs for the frameworks the diff actually imports (CDK blocks also

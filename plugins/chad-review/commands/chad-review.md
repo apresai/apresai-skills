@@ -625,7 +625,7 @@ single-language diff is 1 Agent tool use and CDK plus Go is 2.
 REVIEW tier (sonnet). `subagent_type` is `general-purpose` for every block, as
 the routing script emits it: a reviewer that reports everything with a
 confidence, so the Phase 2 scorer is the only filter. Routing still decides
-which hunks, codegen hint, and Context7 docs each block gets. It reads the diff ONCE
+which hunks, codegen hint, and Context7 docs each block gets. It reads the diff once
 and emits each pass as its own labeled section, which is what keeps the
 five-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.
@@ -908,7 +908,7 @@ question: the fix prompt is already in the report body.
   appears in the project's own gate or CI workflow. When a discovered command's
   effect is not obvious from its name, do not run it: report it as undetermined
   and say what you skipped.
-- NEVER silently skip a pass. All five appear as headings in every report. A pass
+- Never silently skip a pass. All five appear as headings in every report. A pass
   may return early per the shape matrix, but only with the explicit line
   "N/A - not applicable to this diff shape (<shape>)". The same holds one level
   down: an absent convention says `N/A - convention not detected` rather than
