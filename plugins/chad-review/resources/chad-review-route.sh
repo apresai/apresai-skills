@@ -2,13 +2,15 @@
 # chad-review-route.sh: pick the per-language reviewer based on what's in the diff.
 #
 # WHY THIS EXISTS
-# chad-review's 6-pass STRUCTURE is language-agnostic, but the reviewer that runs
-# five of those passes is not: one specialist per language block reads that
-# language's hunks once, at the REVIEW tier (sonnet). Go wants `feature-dev:code-reviewer`;
-# CDK TypeScript wants `cloud-architect` (which also covers IaC observability);
-# Next.js React wants `frontend-developer`; generic TS wants `typescript-pro`;
-# iOS Swift has no native specialist so we fall back to `code-reviewer`, enriched
-# with Context7 docs for the frameworks the diff actually imports.
+# chad-review's 6-pass STRUCTURE is language-agnostic, but the review brief is
+# not: one reviewer per language block reads only that language's hunks once, at
+# the REVIEW tier (sonnet), with that language's codegen / spec-lint hint and
+# Context7 docs for the frameworks the diff actually imports (CDK blocks also
+# fold IaC observability into the brief). Every block uses `general-purpose`: a
+# reviewer that reports every finding with a confidence, because filtering
+# belongs to the separate scoring step. Persona or self-filtering reviewer
+# agents (one that drops findings below 80 on its own) lose recall before the
+# scorer ever sees the finding.
 #
 # PROJECT-AGNOSTIC BY DESIGN
 # This script does NOT assume fixed directory names. It adapts to whatever the
@@ -235,10 +237,10 @@ echo "Files detected:"
 [[ -n "$other_files" ]] && echo "  Other / unclassified     : $(cnt "$other_files")"
 echo
 
-# emit_block <lang> <reviewer_specialist> <spec_hint> <ctx>
+# emit_block <lang> <reviewer> <spec_hint> <ctx>
 # ONE REVIEWER PER LANGUAGE. Passes 1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS
 # (coverage only), 4 OBSERVABILITY, and 6 SIMPLIFY all ride a single per-language
-# specialist at the REVIEW tier, reading the diff once. <spec_hint> is the DRIFT
+# reviewer at the REVIEW tier, reading the diff once. <spec_hint> is the DRIFT
 # codegen/spec-lint command hint, surfaced on the reviewer row.
 # Pass reviewer="-" for a block that gets no reviewer of its own (prose). It then
 # prints neither a tier nor the Phase 2 reviewer line, both of which would
@@ -275,13 +277,13 @@ cdk_spec_cmd="cdk synth + cdk diff after build; or tsc --noEmit"
 
 # --- Go ---------------------------------------------------------------------
 [[ -n "$go_files" ]] && emit_block "Go" \
-  "feature-dev:code-reviewer" \
+  "general-purpose" \
   "$go_spec_cmd" \
   ""
 
 # --- CDK TypeScript ---------------------------------------------------------
 [[ -n "$cdk_files" ]] && emit_block "CDK TypeScript ($(first_dir "$cdk_files" || echo infra))" \
-  "cloud-architect" \
+  "general-purpose" \
   "$cdk_spec_cmd" \
   "context7: aws-cdk-lib (current construct APIs), aws-cloudformation"
 
@@ -303,14 +305,14 @@ if [[ -n "$web_files" ]]; then
   fi
   [[ "$web_ctx" == "context7:" ]] && web_ctx="context7: next.js (App Router), react (Server Components)"
   emit_block "Next.js / React ($web_dir)" \
-    "frontend-developer" \
+    "general-purpose" \
     "$web_spec_cmd" \
     "$web_ctx"
 fi
 
 # --- Generic TypeScript / JS (neither CDK nor Next.js) ----------------------
 [[ -n "$ts_files" ]] && emit_block "TypeScript / JS (generic: $(first_dir "$ts_files" || echo .))" \
-  "typescript-pro" \
+  "general-purpose" \
   "tsc --noEmit; regen API types if the project defines codegen" \
   "context7: (resolve from package.json deps the changed files import)"
 
@@ -331,7 +333,7 @@ if [[ -n "$swift_files" ]]; then
   swift_ctx="context7: swift (current syntax)"
   [[ -n "$fw" ]] && swift_ctx+=" + the frameworks the diff imports: $fw"
   emit_block "iOS / Apple Swift ($(first_dir "$swift_files" || echo ios))" \
-    "code-reviewer" \
+    "general-purpose" \
     "$swift_spec_cmd" \
     "$swift_ctx"
 fi
@@ -497,8 +499,8 @@ if [[ -n "$other_files" ]]; then
   # here and the `${exts:-no extension}` fallback below is never reached.
   exts=$(echo "$other_files" | grep -oE '\.[A-Za-z0-9]+$' | sort -u | tr '\n' ' ' | sed 's/ *$//' || true)
   echo "--- Routing: Other / unclassified (${exts:-no extension}) ---"
-  echo "  No language specialist matched these. Review with general-purpose"
-  echo "  (+ code-reviewer for any executable code). Do NOT skip them."
+  echo "  No language block matched these. Review with general-purpose."
+  echo "  Do NOT skip them."
   echo
 fi
 

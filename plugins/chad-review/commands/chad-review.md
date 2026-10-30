@@ -62,7 +62,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    **Back up untracked files first.** The skill's no-edit rule is enforced by
    prompt wording, not by tool restriction: the reviewer agents are
-   `general-purpose` and language specialists holding Bash, Edit, and Write, and
+   `general-purpose`, holding Bash, Edit, and Write, and
    the review runs the project's own gate, test, and codegen commands, which
    write to disk by design. On 2026-06-14 a
    review sub-agent "restored" the tree with a git command that sweeps untracked
@@ -645,10 +645,10 @@ Launch **one reviewer per language block**, in ONE message, so a
 single-language diff is 1 Agent tool use and CDK plus Go is 2.
 
 **Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), 4, and 6, at the
-REVIEW tier (sonnet). `subagent_type` comes from the routing script
-(`feature-dev:code-reviewer` for Go, `cloud-architect` for CDK,
-`frontend-developer` for Next.js, `typescript-pro` for generic TS,
-`code-reviewer` for Swift, `general-purpose` otherwise). It reads the diff ONCE
+REVIEW tier (sonnet). `subagent_type` is `general-purpose` for every block, as
+the routing script emits it: a reviewer that reports everything with a
+confidence, so the Phase 2 scorer is the only filter. Routing still decides
+which hunks, codegen hint, and Context7 docs each block gets. It reads the diff ONCE
 and emits each pass as its own labeled section, which is what keeps the
 six-heading invariant intact. It needs tool access to run generators, spec
 validators, and route-parity tests for DRIFT.

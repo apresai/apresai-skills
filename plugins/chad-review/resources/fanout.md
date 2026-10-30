@@ -98,7 +98,7 @@ Agent call. `model` is REQUIRED, from §"Model tiering":
 ```json
 {
   "description": "Reviewer: DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY",
-  "subagent_type": "feature-dev:code-reviewer",
+  "subagent_type": "general-purpose",
   "model": "<REVIEW tier for this session, normally sonnet>",
   "prompt": "<self-contained prompt as above>"
 }
