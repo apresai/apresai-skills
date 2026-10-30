@@ -55,7 +55,7 @@ mutate, then review nodes see the post-apply diff.
 | `contract-mirror` | `contract-mirror.sh`. |
 | `tests` | Scoped tests for changed files. Quote failures. Do not edit. |
 | `freshness-audit` | `freshness.sh`. Do not update. |
-| `freshness-update` | In-range `npm update` / `go get -u` per `nodes/apply-deps.md`. |
+| `freshness-update` | In-range `npm update` / `go get -u` with the 14-day release-age floor, per `nodes/apply-deps.md`. |
 | `simplify` | Built-in `/simplify`, then re-run the gate. |
 | `impl-review` | Fresh-context implementation review. |
 | `spec-vs-diff` | Fresh-context plan vs diff. Only when `SPEC=yes`. |

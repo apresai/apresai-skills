@@ -472,14 +472,16 @@ Prefer `FIX` records over raw `SCAN` lines when writing the report. They are
 already grouped by the upgrade that closes them, so one row can carry nine
 advisories and becomes one line rather than nine.
 
-**Then update the dependencies.** Not classify, not offer: update. This needs
-no upgrade policy because the native tools are already conservative:
-`npm update` moves only within the ranges `package.json` declares, and
-`go get -u` never crosses a major (a Go major is a different import path). For
-each manifest the script discovered:
+**Then update the dependencies.** Not classify, not offer: update. The native
+tools stay in range on their own: `npm update` moves only within the ranges
+`package.json` declares, and `go get -u` never crosses a major (a Go major is a
+different import path). They do not know about release age, so every update
+also applies the 14-day release-age floor, trusted-publisher exemption, and
+CVE NEEDS-DECISION rule in `resources/nodes/apply-deps.md` § Release-age floor
+(Read it before updating). For each manifest the script discovered:
 
-- Go module: `go get -u ./... && go mod tidy`
-- npm package: `npm update`
+- Go module: `go get -u ./... && go mod tidy`, then the floor check
+- npm package: `npm update --before=<date 14 days ago>`
 - Another ecosystem with a native in-range updater: use it. None: skip it and
   say so in the report.
 
