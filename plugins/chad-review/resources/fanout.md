@@ -69,7 +69,7 @@ Prompt skeleton:
 ```
 You are reviewing a pre-commit diff on the <project> repo. You own passes
 1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS (coverage only, do not run tests),
-4 OBSERVABILITY, and 6 SIMPLIFY.
+and 4 OBSERVABILITY.
 
 The diff under review (from `git diff HEAD` + untracked files):
 <paste diff>
@@ -97,8 +97,8 @@ Agent call. `model` is REQUIRED, from §"Model tiering":
 
 ```json
 {
-  "description": "Reviewer: DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY, SIMPLIFY",
-  "subagent_type": "feature-dev:code-reviewer",
+  "description": "Reviewer: DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY",
+  "subagent_type": "general-purpose",
   "model": "<REVIEW tier for this session, normally sonnet>",
   "prompt": "<self-contained prompt as above>"
 }

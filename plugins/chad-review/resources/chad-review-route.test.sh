@@ -8,7 +8,7 @@
 # a historical banner AND a "Status: Active" line, and a device checklist
 # recommending "build 117/118 or later" against an authoritative build of 152,
 # both sailed through with no reviewer. Second, nothing locked the existing
-# behavior (Go to feature-dev:code-reviewer, exec markdown to general-purpose,
+# behavior (every language block to general-purpose, exec markdown too,
 # the exact prose-block wording the skill quotes), so any of it could regress
 # silently. This suite locks the new three-way markdown partition (exec beats
 # status beats prose), the DOCS-DRIFT-TASK line the parent executes during
@@ -25,12 +25,12 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 ok()   { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 check(){ # check <desc> <expected-substring> <actual>
-  if grep -qF "$2" <<<"$3"; then ok "$1"; else
+  if grep -qF -- "$2" <<<"$3"; then ok "$1"; else
     bad "$1"; printf '       wanted: %s\n       got:\n%s\n' "$2" "$(sed 's/^/         /' <<<"$3")"
   fi
 }
 absent(){ # absent <desc> <substring-that-must-not-appear> <actual>
-  if grep -qF "$2" <<<"$3"; then
+  if grep -qF -- "$2" <<<"$3"; then
     bad "$1"; printf '       must NOT contain: %s\n' "$2"
   else ok "$1"; fi
 }
@@ -74,7 +74,8 @@ printf 'A readme.\n' > "$r/README.md"
 out=$(run "$r")
 check "mixed diff emits the docs DRIFT task" "DOCS-DRIFT-TASK" "$out"
 check "docs task names the script to run" "docs-drift.sh" "$out"
-check "mixed diff still routes generic TS" "typescript-pro" "$out"
+check "mixed diff still routes generic TS" "Routing: TypeScript / JS" "$out"
+check "generic TS reviewer is general-purpose" "-> general-purpose   [REVIEW tier, sonnet]" "$out"
 rm -rf "$r"
 
 # --- 5. docs-only diff also gets the task line -------------------------------
@@ -106,11 +107,27 @@ out=$(run "$r")
 check "Claude.md is executable prompt content" "Executable prompt content" "$out"
 rm -rf "$r"
 
-# --- 7. regression: Go routes to feature-dev:code-reviewer -------------------
+# --- 7. every language block routes to general-purpose ---------------------
 r=$(newrepo)
 printf 'package main\n' > "$r/main.go"
 out=$(run "$r")
-check "Go routes to its specialist" "feature-dev:code-reviewer" "$out"
+check "Go gets its own block" "Routing: Go" "$out"
+check "Go reviewer is general-purpose" "-> general-purpose   [REVIEW tier, sonnet]" "$out"
+rm -rf "$r"
+r=$(newrepo)
+printf "import SwiftUI\n" > "$r/App.swift"
+out=$(run "$r")
+check "Swift still gets a route" "Routing: iOS / Apple Swift" "$out"
+check "Swift reviewer is general-purpose" "-> general-purpose   [REVIEW tier, sonnet]" "$out"
+rm -rf "$r"
+r=$(newrepo)
+printf "export const x = 1\n" > "$r/foo.ts"
+printf "package main\n" > "$r/main.go"
+printf "import Foundation\n" > "$r/A.swift"
+out=$(run "$r")
+for old in feature-dev:code-reviewer cloud-architect frontend-developer typescript-pro "-> code-reviewer"; do
+  absent "no block routes to retired agent $old" "$old" "$out"
+done
 rm -rf "$r"
 
 # --- 8. exec beats status: a command file full of status markers -------------

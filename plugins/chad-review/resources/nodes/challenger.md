@@ -16,4 +16,7 @@ not hold, an assumption that is false. Each of those must say what can go
 wrong, why this path is vulnerable, the likely impact, and a concrete change
 that reduces the risk.
 
-Report only material findings. If the change holds, say HOLDS and return none.
+Report every finding as `SEVERITY | <confidence 0-100> | file:line | finding`,
+low-severity ones included. Do not filter for importance: the score node
+filters once, with everything in view. End with HOLDS or DOES NOT HOLD for
+the change itself; with nothing to report, say HOLDS and return none.

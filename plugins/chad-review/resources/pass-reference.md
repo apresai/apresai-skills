@@ -13,7 +13,6 @@ parent, which reads those sections at execution time.
 | § TESTS | Per-language test scoping, and what "covered" looks like |
 | § OBSERVABILITY | Logging, error-wrapping, and metric idioms |
 | § FRESHNESS | Which oracle answers which evidence, and polarity judgment |
-| § SIMPLIFY | Per-language simplification signals |
 | § GATE | What a project's validation entrypoint should contain |
 
 Full path when installed:
@@ -513,54 +512,6 @@ canonical case), so `npm update` cannot reach it and neither can the user
 without forking. That row is tier-bundled: a warn line naming the parent and
 the parent-release condition that clears it, never a NEEDS-DECISION, never a
 verdict mover, whatever its CVSS.
-
----
-
-## § SIMPLIFY
-
-Quality signals only. Anything that changes behavior belongs to BEHAVIOR AND
-RISK, not here.
-
-**Go:**
-- An interface declared with exactly one implementation and no test double,
-  especially one defined next to its implementation rather than at the consumer
-- Struct fields written but never read, or left behind by a refactor
-- A wrapper function that only forwards arguments unchanged
-- `if err != nil { return err }` chains that a single `errors.Join` or an early
-  helper would flatten
-- Getters and setters on a struct whose fields could simply be exported
-- A new `context.Context` parameter threaded through functions that never use it
-
-**TypeScript:**
-- A redundant type assertion (`as Foo`) where inference already gives `Foo`
-- A barrel `index.ts` re-exporting symbols nothing imports
-- A React component split into sub-components used exactly once, with props
-  threaded purely to satisfy the split
-- `useMemo` or `useCallback` around a trivially cheap expression, where the
-  hook costs more than it saves
-- A utility duplicating something already in the project's `lib/` or `utils/`.
-  Grep before accepting a new helper
-- An `any` or a widened type introduced to silence an error the shape could
-  express properly
-
-**Swift:**
-- A protocol with one conforming type and no test double
-- A computed property that only forwards to a stored one
-- `guard let` chains that a single `if case let` or optional chain would express
-- An extension adding a method used exactly once in the same file
-
-**Python:**
-- A class with one method and no state, which a function would express
-- A wrapper around a stdlib call adding nothing but a name
-- A comprehension nested deeply enough that a loop would read better
-- `try/except` around code that cannot raise the caught exception
-
-**All languages:**
-- Comments explaining what the next line does, restating the code
-- Comments narrating the change ("changed this to fix X"), which address the
-  reviewer rather than the next reader and become noise once merged
-- A feature flag or compatibility shim where the code could simply change
-- Validation repeated at an internal boundary that a caller already enforced
 
 ---
 
