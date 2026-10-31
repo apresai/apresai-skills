@@ -379,7 +379,7 @@ candidate_row() {
     | select(((.fingerprint // "") != "") and ((.head_sha // "") != "") and ((.verdict // "") != ""))
     | [(.emitted_at // "0"), $src, .verdict, .head_sha, (.tree_state // "clean"),
        .fingerprint, (.repo // "-"), (.base_ref // "-"),
-       (((.findings.critical // 0) + (.findings.high // 0)) | tostring)]
+       (((.findings.critical // 0) + (.findings.high // 0) + (.findings.medium // 0) + (.findings.low // 0)) | tostring)]
     | @tsv' 2>/dev/null
   return 0
 }
@@ -493,12 +493,13 @@ do_verify() {
     echo "FAIL: newest receipt for this content has verdict $verdict"
     return 1
   fi
-  # A GO that records unfixed critical or high findings contradicts both
-  # tools' verdict mapping (nodes/receipt.md, chad-review verdict rules);
-  # enforce that contract mechanically rather than trusting the emitter.
+  # A GO that records any open finding, at any severity, contradicts both
+  # tools' verdict mapping since chad-review 3.0.0 (nodes/receipt.md,
+  # chad-review verdict rules): every counted finding is fixed before GO.
+  # Enforce that contract mechanically rather than trusting the emitter.
   blockers=$(printf '%s' "$best" | cut -f9)
   if [[ -n "$blockers" && "$blockers" != "0" ]]; then
-    echo "FAIL: newest receipt is GO but records $blockers critical/high finding(s); re-review"
+    echo "FAIL: newest receipt is GO but records $blockers open finding(s); fix them and re-review"
     return 1
   fi
   if [[ "$(printf '%s' "$best" | cut -f5)" == "clean" && "$(printf '%s' "$best" | cut -f4)" == "$cur_head" ]]; then

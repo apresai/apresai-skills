@@ -1,51 +1,65 @@
 #!/usr/bin/env bash
 # pipeline.sh: emit the ultra-audit execution plan for this diff.
 #
-# A decision DAG, not a prompt. The parent executes NODES= literally and
-# does not re-derive the tier. Ambiguity goes up a tier, never down.
-# --full is the only override and it only goes up.
+# One pipeline, no tiers. Every diff gets every review node: the gate,
+# the deterministic scans, tests, freshness, a fresh-context Opus
+# implementation review, a challenger, per-finding adversarial
+# verification, and one gap sweep. Tiers (leaf/deps/small/standard/audit)
+# were removed in chad-review 3.0.0 because routing a diff to a lighter
+# tier was how findings got skipped.
+#
+# The only nodes left out are ones with no input to act on: spec-vs-diff
+# without a changed PLAN.md, simplify on a diff with no code or with
+# executable prompt content (shipping excludes prompts from /simplify),
+# and untracked-backup with no untracked files. That is input detection,
+# not tiering.
 #
 # USAGE
 #   bash pipeline.sh [--last-commit] [--full]
+#   --full is accepted for compatibility and changes nothing: every run is full.
 #
 # OUTPUT
-# One KEY=value block on stdout, then a REASON line. Always prints TIER
-# (none|leaf|deps|small|standard|audit). Exit 0 when a plan was produced,
-# including TIER=none. Exit 2 for usage. Exit 1 only when the script itself
-# cannot run.
+# One KEY=value block on stdout, then a REASON line. MODE is full or none.
+# RISK names high-risk surfaces (auth, migration, api) for the reviewers'
+# attention; it no longer changes which nodes run. Exit 0 when a plan was
+# produced, including MODE=none. Exit 2 for usage. Exit 1 only when the
+# script itself cannot run.
 #
 # BASH 3.2. No associative arrays, no mapfile. Grep-no-match is normal:
 # every command substitution that can match nothing ends in || true.
 set -euo pipefail
 
-full=0
 mode="working-tree"
 for arg in "$@"; do
   case "$arg" in
-    --full) full=1 ;;
+    --full) ;;
     --last-commit) mode="last-commit" ;;
     *) echo "usage: pipeline.sh [--last-commit] [--full]" >&2; exit 2 ;;
   esac
 done
 
-if ! git rev-parse --git-dir >/dev/null 2>&1; then
-  echo "TIER=none"
+ALL_NODES="gate,untracked-backup,docs-drift,contract-mirror,tests,freshness-audit,spec-vs-diff,freshness-update,simplify,docs-apply,skim,impl-review,challenger,verify,sweep,receipt"
+
+empty_plan() {
+  echo "MODE=none"
   echo "RISK=none"
-  echo "FLOORS=none"
   echo "AGENTS=0"
   echo "APPLY=none"
   echo "SPEC=no"
   echo "SCOPE_ASK=0"
-  echo "UNTRACKED=0"
+  echo "UNTRACKED=$1"
   echo "FILES=0"
   echo "LINES=0"
   echo "LANG_BLOCKS=0"
   echo "NODES="
-  echo "SKIP=gate,untracked-backup,freshness-audit,freshness-update,docs-drift,contract-mirror,tests,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score,skim,receipt"
-  echo "REASON=not a git repository"
+  echo "SKIP=$ALL_NODES"
+  echo "REASON=$2"
   exit 0
-fi
+}
 
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  empty_plan 0 "not a git repository"
+fi
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -64,21 +78,7 @@ file_count=$(printf '%s' "$files" | grep -c . || true)
 [[ -n "$file_count" ]] || file_count=0
 
 if [[ "$file_count" -eq 0 ]]; then
-  echo "TIER=none"
-  echo "RISK=none"
-  echo "FLOORS=none"
-  echo "AGENTS=0"
-  echo "APPLY=none"
-  echo "SPEC=no"
-  echo "SCOPE_ASK=0"
-  echo "UNTRACKED=$untracked"
-  echo "FILES=0"
-  echo "LINES=0"
-  echo "LANG_BLOCKS=0"
-  echo "NODES="
-  echo "SKIP=gate,untracked-backup,freshness-audit,freshness-update,docs-drift,contract-mirror,tests,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score,skim,receipt"
-  echo "REASON=nothing to review"
-  exit 0
+  empty_plan "$untracked" "nothing to review"
 fi
 
 # --- kind predicates ----------------------------------------------------------
@@ -243,225 +243,63 @@ spec=no
 printf '%s\n' "$files" | grep -qxF 'PLAN.md' && spec=yes
 printf '%s\n' "$files" | grep -qxF 'plan.md' && spec=yes
 
-# --- floors and tier ----------------------------------------------------------
+# --- size ask -----------------------------------------------------------------
 
-floors=""
-add_floor() {
-  if [[ -z "$floors" ]]; then floors="$1"; else floors="$floors,$1"; fi
-}
-
-tier=""
 scope_ask=0
-
-if [[ "$full" -eq 1 ]]; then
-  add_floor "full"
-  tier="audit"
-fi
-
-if [[ "$risk" != "none" ]]; then
-  add_floor "$risk"
-  tier="audit"
-fi
-
 if [[ "$file_count" -gt 50 || "$n_prod_lines" -gt 3000 ]]; then
-  add_floor "size"
   scope_ask=1
-  tier="audit"
 fi
-
-if [[ "$has_exec" -eq 1 ]]; then
-  add_floor "exec-md"
-  if [[ -z "$tier" || "$tier" == "leaf" || "$tier" == "deps" || "$tier" == "small" ]]; then
-    tier="standard"
-  fi
-fi
-
-if [[ "$route_failed" -eq 1 ]]; then
-  add_floor "route-failed"
-  if [[ -z "$tier" || "$tier" == "leaf" || "$tier" == "deps" || "$tier" == "small" ]]; then
-    tier="standard"
-  fi
-fi
-
-if [[ "$has_status" -eq 1 ]]; then
-  add_floor "status-docs"
-  if [[ -z "$tier" || "$tier" == "leaf" || "$tier" == "deps" || "$tier" == "small" ]]; then
-    tier="standard"
-  fi
-fi
-
-tiny=0
-[[ "$file_count" -le 4 && "$n_prod_lines" -le 40 ]] && tiny=1
-
-n_md=$(printf '%s\n' "$files" | grep -c -E '\.(md|mdx)$' || true)
-[[ -n "$n_md" ]] || n_md=0
-
-# Manifests plus docs or config is still a deps review: the update node
-# is the point. Docs-only / config-only (no code, no tests, no manifests)
-# is the only leaf.
-deps_only=0
-[[ "$n_manifest" -gt 0 && "$n_code" -eq 0 && "$n_test" -eq 0 && "$has_exec" -eq 0 ]] && deps_only=1
-
-no_code=0
-[[ "$n_code" -eq 0 && "$n_test" -eq 0 && "$n_manifest" -eq 0 && "$n_other" -eq 0 && "$has_exec" -eq 0 ]] && no_code=1
-
-if [[ -z "$tier" ]]; then
-  if [[ "$deps_only" -eq 1 ]]; then
-    tier="deps"
-  elif [[ "$no_code" -eq 1 ]]; then
-    tier="leaf"
-  elif [[ "$lang_blocks" -le 1 && "$file_count" -le 15 && "$n_prod_lines" -le 200 ]]; then
-    tier="small"
-  else
-    tier="standard"
-  fi
-fi
-
-[[ -z "$floors" ]] && floors="none"
 
 # --- nodes --------------------------------------------------------------------
+# Order is load-bearing: backup and gate first, deterministic scans and tests
+# on the user's tree, spec before apply (a spec FAIL vetoes docs-apply), apply
+# nodes, then every review node sees the post-apply diff.
 
 nodes=""
+skip=""
 add_node() {
   if [[ -z "$nodes" ]]; then nodes="$1"; else nodes="$nodes,$1"; fi
 }
-
-if [[ "$untracked" -gt 0 ]]; then
-  add_node "untracked-backup"
-fi
-add_node "gate"
-
-agents=0
-skip=""
-
-case "$tier" in
-  leaf)
-    # docs-drift is the one deterministic scan a docs-only diff actually
-    # needs; skipping it on leaf was a gate regression once ultra-audit
-    # receipts began satisfying the merge gate (prune_skip drops it from
-    # SKIP when added). Config-only leaves have no markdown and skip it.
-    if [[ "$n_md" -gt 0 ]]; then
-      add_node "docs-drift"
-    fi
-    add_node "freshness-audit"
-    add_node "skim"
-    add_node "receipt"
-    agents=0
-    skip="freshness-update,docs-drift,contract-mirror,tests,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score"
-    ;;
-  deps)
-    add_node "tests"
-    add_node "freshness-audit"
-    add_node "freshness-update"
-    add_node "receipt"
-    agents=0
-    skip="docs-drift,contract-mirror,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score,skim"
-    ;;
-  small)
-    add_node "docs-drift"
-    add_node "contract-mirror"
-    add_node "tests"
-    add_node "freshness-audit"
-    add_node "freshness-update"
-    if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
-      add_node "simplify"
-    fi
-    add_node "docs-apply"
-    add_node "impl-review"
-    add_node "receipt"
-    if [[ "$n_code" -eq 0 || "$tiny" -eq 1 ]]; then
-      agents=0
-    else
-      agents=1
-    fi
-    skip="spec-vs-diff,challenger,score,skim"
-    [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
-    ;;
-  standard)
-    add_node "docs-drift"
-    add_node "contract-mirror"
-    add_node "tests"
-    add_node "freshness-audit"
-    add_node "freshness-update"
-    if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
-      add_node "simplify"
-    fi
-    add_node "docs-apply"
-    add_node "impl-review"
-    add_node "score"
-    add_node "receipt"
-    agents=$lang_blocks
-    [[ "$agents" -lt 1 ]] && agents=1
-    skip="spec-vs-diff,challenger,skim"
-    [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
-    ;;
-  audit)
-    add_node "docs-drift"
-    add_node "contract-mirror"
-    add_node "tests"
-    add_node "freshness-audit"
-    if [[ "$spec" == "yes" ]]; then
-      add_node "spec-vs-diff"
-    fi
-    add_node "freshness-update"
-    if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
-      add_node "simplify"
-    fi
-    add_node "docs-apply"
-    add_node "impl-review"
-    add_node "challenger"
-    add_node "score"
-    add_node "receipt"
-    agents=$((lang_blocks + 1))
-    [[ "$agents" -lt 2 ]] && agents=2
-    skip="skim"
-    [[ "$spec" == "no" ]] && skip="$skip,spec-vs-diff"
-    [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
-    ;;
-esac
-
-# Drop skip entries that are actually in NODES.
-prune_skip() {
-  local s="$1" item
-  printf '%s\n' "$s" | tr ',' '\n' | while IFS= read -r item || [[ -n "$item" ]]; do
-    [[ -z "$item" ]] && continue
-    printf '%s' ",$nodes," | grep -q ",$item," && continue
-    printf '%s\n' "$item"
-  done | paste -sd, - 2>/dev/null || true
+add_skip() {
+  if [[ -z "$skip" ]]; then skip="$1"; else skip="$skip,$1"; fi
 }
 
-skip=$(prune_skip "$skip")
+if [[ "$untracked" -gt 0 ]]; then add_node "untracked-backup"; else add_skip "untracked-backup"; fi
+add_node "gate"
+add_node "docs-drift"
+add_node "contract-mirror"
+add_node "tests"
+add_node "freshness-audit"
+if [[ "$spec" == "yes" ]]; then add_node "spec-vs-diff"; else add_skip "spec-vs-diff"; fi
+add_node "freshness-update"
+if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then add_node "simplify"; else add_skip "simplify"; fi
+add_node "docs-apply"
+add_node "skim"
+add_node "impl-review"
+add_node "challenger"
+add_node "verify"
+add_node "sweep"
+add_node "receipt"
+
 [[ -z "$skip" ]] && skip="none"
+
+# One impl-review reviewer per routing block (at least one), plus the
+# challenger and the sweep. Verifiers scale with the finding count and are
+# sized by nodes/verify.md, not here.
+agents=$lang_blocks
+[[ "$agents" -lt 1 ]] && agents=1
+agents=$((agents + 2))
 
 apply=""
 printf '%s' ",$nodes," | grep -q ",simplify," && apply="${apply}simplify,"
-printf '%s' ",$nodes," | grep -q ",docs-apply," && apply="${apply}docs-stale,"
-printf '%s' ",$nodes," | grep -q ",freshness-update," && apply="${apply}deps,"
-apply=${apply%,}
-[[ -z "$apply" ]] && apply="none"
+apply="${apply}docs-stale,deps"
 
-reason=""
-case "$tier" in
-  none) reason="nothing to review" ;;
-  leaf)
-    reason="docs or config only, no floors"
-    ;;
-  deps) reason="manifests and lockfiles only" ;;
-  small) reason="one language, modest size, no high-risk floors" ;;
-  standard)
-    if [[ "$has_exec" -eq 1 ]]; then reason="executable prompt content floors to standard"
-    else reason="above small thresholds, not high-risk"; fi
-    ;;
-  audit)
-    if [[ "$full" -eq 1 ]]; then reason="--full"
-    elif [[ "$scope_ask" -eq 1 ]]; then reason="diff exceeds size ask line"
-    else reason="high-risk floor: $risk"; fi
-    ;;
-esac
+reason="full pipeline"
+[[ "$scope_ask" -eq 1 ]] && reason="full pipeline; diff exceeds size ask line"
+[[ "$route_failed" -eq 1 ]] && reason="$reason; routing script failed, review the whole diff in one block"
 
-echo "TIER=$tier"
+echo "MODE=full"
 echo "RISK=$risk"
-echo "FLOORS=$floors"
 echo "AGENTS=$agents"
 echo "APPLY=$apply"
 echo "SPEC=$spec"

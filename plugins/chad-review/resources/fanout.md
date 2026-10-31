@@ -1,8 +1,8 @@
 # chad-review: writing sub-agent prompts
 
-Read this ONLY when you are about to launch an agent: `standard` shape.
-`light` and `deps` spawn nothing, so none of this applies to them, which
-is why it lives here rather than in the always-loaded skill body.
+Read this ONLY when you are about to launch an agent. `/ultra-audit` launches
+reviewers on every run; `/chad-review`'s `light` and `deps` shapes spawn
+nothing, which is why this lives here rather than in the always-loaded body.
 
 Model tiering, the agent budget, and the Phase 1 / Phase 2 split stay in
 `commands/chad-review.md` §"Execution strategy"; this file is only the prompt
@@ -43,20 +43,21 @@ Output. Strict, no exceptions:
 - Zero preamble, zero restated diff, zero methodology narration.
 - One line per finding:
   SEVERITY | <confidence 0-100> | file:line | <=15-word finding
-- Report every issue you find, including low-severity ones. Do NOT filter for
-  importance: that is a later pass's job, once, with everything in view.
-  Coverage is your job, ranking is not.
-- Score confidence honestly, on this scale, and do not inflate it. A separate
-  agent re-scores every finding independently, and anything under 80 is dropped
-  rather than deferred, so a padded score costs you the finding:
-  - 0: false positive under light scrutiny, or a pre-existing issue.
-  - 25: might be real, could not verify it. Stylistic and not called out in
-    the project's own guidelines.
-  - 50: verified real, but a nitpick or rare in practice, and unimportant next
-    to the rest of the diff.
-  - 75: double-checked, very likely hit in practice, the existing approach is
-    insufficient, or the project's guidelines name it directly.
-  - 100: confirmed, will happen frequently, evidence directly supports it.
+- Report every issue you find, including ones you are uncertain about or
+  consider low-severity. Do not filter for importance or confidence: a
+  separate verification step rules on every finding, and it drops one only
+  when it can quote code or command output that disproves it. A finding you
+  hold back is a bug nobody fixes. Pass through every candidate that has a
+  nameable failure scenario. Omit only pure style or naming preferences that
+  no project rule names.
+- The confidence number is a label for ordering, never a cutoff. Score it
+  honestly:
+  - 25: might be real, could not verify it.
+  - 50: verified real, rare in practice or minor.
+  - 75: double-checked, very likely hit in practice, or a project rule names it.
+  - 100: confirmed, evidence directly supports it.
+- Mark a finding PRE-EXISTING when the failing line is untouched by the diff
+  and the diff does not change whether it is reached. Still report it.
 - Emit one "## <PASS NAME>" heading per pass you own, findings underneath,
   in the order the passes are numbered.
 - A pass with no findings outputs exactly: Clean
@@ -93,13 +94,17 @@ command that deploys, publishes, releases, or migrates. Running the project's
 build, tests, linters, and generators IS expected and they do write to disk.
 ```
 
-Agent call. `model` is REQUIRED, from §"Model tiering":
+Agent call. `model` is REQUIRED. `/ultra-audit` uses `opus` with
+`effort: high` on every reviewer, verifier, challenger, and sweep (its node
+files say so explicitly, which is what permits setting effort).
+`/chad-review` uses §"Model tiering":
 
 ```json
 {
   "description": "Reviewer: DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY",
   "subagent_type": "general-purpose",
-  "model": "<REVIEW tier for this session, normally sonnet>",
+  "model": "<opus for ultra-audit; REVIEW tier for chad-review>",
+  "effort": "<high for ultra-audit; omit for chad-review>",
   "prompt": "<self-contained prompt as above>"
 }
 ```

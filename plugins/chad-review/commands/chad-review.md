@@ -153,7 +153,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0 | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
+   | `light` | 0 | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is the author, so its findings still go to the Phase 2 step 4 verifier (one JUDGE-tier agent) and the report carries the `Verified:` line as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
    | `deps` | 0 | FRESHNESS runs in the parent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
@@ -576,44 +576,46 @@ Three tiers, and the expensive one is deliberately the smallest.
 
 | Tier | Steps | Model |
 |---|---|---|
-| **LOOKUP** | confidence scoring | `haiku` |
+| **LOOKUP** | version lookup for DEP records | `haiku` |
 | **REVIEW** | the per-language reviewer that reads the diff and raises findings | `sonnet` |
-| **JUDGE** | the parent's attack probes, and re-verification of any CRITICAL | `opus`, or the session model when that is cheaper |
+| **JUDGE** | the parent's attack probes, and the Phase 2 step 4 verifiers | `opus`, at `effort: high` |
 
 | Session model | Parent | LOOKUP | REVIEW | JUDGE |
 |---|---|---|---|---|
 | opus | opus | haiku | sonnet | opus |
-| sonnet | sonnet | haiku | sonnet | sonnet |
+| sonnet | sonnet | haiku | sonnet | opus |
 | fable | fable | haiku | sonnet | opus |
 | unknown / haiku / other | = session | haiku | sonnet | opus |
 
-A sonnet session stays at sonnet for JUDGE, so a deliberately cheap session is
-never force-upgraded. A fable session keeps only the orchestration shell on fable.
+JUDGE is opus in every session, a sonnet one included: the verifier decides
+which findings get fixed, and a weaker verifier checking stronger work is the
+weakest arrangement measured. A fable session keeps only the orchestration shell on fable.
 
 **Haiku is correct for LOOKUP and wrong everywhere else.** The line is whether
-the step decides something about the code. Scoring a finding someone else already
-wrote against a rubric pasted verbatim, and reading a version out of a registry,
-are not decisions. Raising the finding is.
+the step decides something about the code. Reading a version out of a registry
+is not a decision. Raising a finding is, and so is ruling on one: haiku used to
+score findings here, and that score decided what got dropped.
 
-**The reviewer is `sonnet`, not `opus`.** It is the largest agent in the run, and
-Anthropic's `/code-review` runs five sonnet reviewers for the same job with no
-opus anywhere. Opus stays on the two steps where being wrong costs the most and
-the volume is smallest. If a change is high-stakes enough to want opus reviewing
-it, ask for that explicitly on that run.
+**The reviewer is `sonnet` here, `opus` in `/ultra-audit`.** `/chad-review` is
+the cheaper explicit fan-out. The default pre-merge review, `/ultra-audit`, runs
+every reviewer on opus at `effort: high`; Anthropic's current code-review plugin
+also moved its bug finders and validators to opus. Both tools verify every
+finding at JUDGE tier.
 
-**Never spawn fable**: at roughly double the Opus rate it buys no review
+**Never spawn fable**: at 2.5 times the Opus rate it buys no review
 advantage here. `opus`, `sonnet`, and `haiku` are aliases resolved at spawn time;
-never hardcode a dated model ID. Pricing snapshot 2026-07-25: Opus 5 $5/$25 per
-MTok, Sonnet 5 $3/$15, Fable 5 $10/$50.
+never hardcode a dated model ID. Pricing snapshot 2026-10-31: Opus 5.5 $4/$20 per
+MTok, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50 (prompts up to 100K tokens),
+Fable 5.1 $10/$50.
 
 ### Effort
 
-The Agent tool exposes `model` but **no `effort` parameter** (verified on Claude
-Code 2.1.220; only the Workflow tool's `agent()` takes effort). Sub-agents inherit
-the session effort, so effort is a session-level dial this skill cannot set per
-pass. Use it deliberately: review accuracy holds well at lower effort, so run the
-everyday pre-commit pass at `medium` and reserve `high` or `xhigh` for a review
-that gates a release. It is the largest available speed lever and costs no code.
+The Agent tool once exposed `model` but no `effort` parameter (verified on Claude
+Code 2.1.220). That is no longer true: the Agent tool now takes `effort`, and
+may use it when a skill explicitly asks. This skill asks for `effort: high` on
+every JUDGE-tier verifier launch, since Opus 5.5 defaults to `medium`.
+Reviewers inherit the session effort. `/ultra-audit` sets `high` on every agent
+it launches.
 
 ### Phase 1: fan out
 
@@ -623,7 +625,7 @@ single-language diff is 1 Agent tool use and CDK plus Go is 2.
 **Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), and 4, at the
 REVIEW tier (sonnet). `subagent_type` is `general-purpose` for every block, as
 the routing script emits it: a reviewer that reports everything with a
-confidence, so the Phase 2 scorer is the only filter. Routing still decides
+confidence, so the Phase 2 verifier is the only filter. Routing still decides
 which hunks, codegen hint, and Context7 docs each block gets. It reads the diff once
 and emits each pass as its own labeled section, which is what keeps the
 five-heading invariant intact. It needs tool access to run generators, spec
@@ -657,35 +659,25 @@ One pass, holding every finding at once:
    to confirm edge cases. This is JUDGE-tier work: inline when the parent is
    already there (opus and sonnet sessions), otherwise delegate this step alone
    to one JUDGE sub-agent.
-4. **Score, then keep only what clears 80.** Hand every raised finding, in ONE
-   batch, to a single LOOKUP-tier agent that did not write them. An author is a
-   poor judge of its own findings, and one batched scorer costs almost nothing.
-   Give it the diff, the project's own guidelines, and the 0-to-100 scale from
-   the output contract verbatim. Where a finding cites a project rule, it must
-   confirm the rule actually says that.
+4. **Verify every finding adversarially.** Follow
+   `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/nodes/verify.md`
+   exactly: JUDGE-tier (`opus`, `effort: high`) verifiers that did not write the
+   findings, grouped by file up to 5 per verifier, all launched in one message.
+   Each finding is CONFIRMED, PLAUSIBLE (the default when the verifier cannot
+   construct the state), or REFUTED, and REFUTED only with quoted code or a
+   command and its output that disproves it. Script-sourced findings skip
+   verification: they are already evidence.
 
-   **Keep a finding only at 80 or above. The burden of proof is on keeping it,
-   not on dropping it.** The old rule was the reverse, and it was the reason
-   these rubrics grew: disproving a vague finding is hard, so nearly everything
-   survived, so every severity band needed prose to justify what arrived.
+   This replaced a confidence-80 filter in 3.0.0. That filter put the burden on
+   keeping a finding, scored by haiku, and it dropped real defects that nobody
+   had disproved; self-reported confidence is not calibrated well enough to cut
+   on. Disproving now carries the burden.
 
-   Common sub-80 causes, for the scorer's benefit: a grep hit inside a comment,
-   string literal, test fixture, or generated file; a "missing test" already
-   covered by a differently named or integration test; a "stale doc" statement
-   that still holds; a behavior change that an adjacent comment or the commit
-   message shows was intended; anything a linter, typechecker, or the gate would
-   have caught; a pre-existing issue on a line this diff did not touch.
-
-   Emit one `Filtered: N raised, M dropped below 80` line. Dropping must stay
-   visible, because a silent filter is just backlogging with better manners. A
-   dropped CRITICAL stays listed as `[dropped: <score>, <=10-word reason]`.
-5. **Re-verify CRITICALs.** Any CRITICAL that cleared 80, and anything that
-   cleared it by a narrow margin, gets a
-   second look against the code before it enters the verdict. This step can
-   confirm a finding, or sharpen its file:line, or downgrade its severity. It
-   **cannot** drop it: failing to confirm is not evidence of absence, and only
-   step 4's rule removes a finding. An unconfirmed CRITICAL stays in the report,
-   marked `[unconfirmed]`, and still counts toward the verdict.
+   Emit one `Verified: N raised, C confirmed, P plausible, R refuted` line, and
+   list each REFUTED finding with its evidence.
+5. **Mark PRE-EXISTING findings.** A finding on a line the diff did not touch,
+   on behavior the diff does not reach, is reported under `Not blocking` and is
+   not counted. Everything else that survived step 4 is counted.
 6. **Confirm the working tree survived.** Skip this only when pre-flight step 2
    skipped the backup because there were no untracked files; there is nothing to
    verify, and the header already says so.
@@ -781,7 +773,7 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 
 | Situation | Tool |
 |---|---|
-| About to commit or push; the default routed review whose receipt satisfies the merge gate | `/ultra-audit` |
+| About to commit or push; the default full adversarial review whose receipt satisfies the merge gate | `/ultra-audit` |
 | Want the fixed 5-pass fan-out, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
 | Quality-only cleanup, applied, **before** the gate | `/simplify` (built-in) |
 | Quick read of one file or a change under three files | `/review` (built-in) |
@@ -820,7 +812,7 @@ Gate: <command> (<green | N failures | none detected>)
 ### 5. FRESHNESS
 [updated deps (old -> new) + FRESHNESS tag lines (security, eol, fix-and-take-now, decision, bundled, coverage) + decision blocks, or "Clean"/"N/A"]
 
-Filtered: N raised, M dropped
+Verified: N raised, C confirmed, P plausible, R refuted
 
 ### Verdict: [GO / NO-GO / CONDITIONAL]
 [1-2 sentences: commit as-is, fix something first, or stop and rethink]
@@ -828,11 +820,14 @@ Filtered: N raised, M dropped
 Receipt: <path, or "published to PR #N">
 ```
 
-Carry each finding's wording verbatim. Steps 4 and 5 may lower a severity or
+Carry each finding's wording verbatim. Step 4 may adjust a severity or
 sharpen a `file:line`, and those edits carry through; nothing else is rewritten.
-**Drop the confidence score**: it is a routing signal for the filter, not
-something the reader needs once a finding has survived it. A CRITICAL that step 5 could not confirm keeps its severity and
-gains `[unconfirmed]`. Also **strip any process narration** an agent emitted
+**Replace the confidence score with the ruling** (CONFIRMED or PLAUSIBLE). A
+PLAUSIBLE finding states what would confirm it.
+
+**Verdict mapping.** GO only when no counted finding remains at any severity.
+Any counted finding is NO-GO: severity decides fix order, never whether a fix
+happens. `receipt.sh verify` fails a GO whose counts are not all zero. Also **strip any process narration** an agent emitted
 despite the contract. Findings in the deliverable, never the process.
 
 **How FRESHNESS affects the verdict.** Being whole-project and always-on, a
@@ -860,8 +855,9 @@ unrelated commit:
   Applied updates appear in the report and the `deps:` commit instruction;
   fix-and-take-now items are work the session does right after the review.
   Dev-tooling majors held back are one informational line, not backlog.
-  Decision blocks are asked interactively or marked NEEDS-DECISION, and a GO
-  stays a GO while they wait.
+  FRESHNESS decision blocks (a major held back) are asked interactively or
+  marked NEEDS-DECISION and are informational: they are not counted. A
+  NEEDS-DECISION finding about the diff itself is counted until decided.
 
 ## After the report: fix prompt
 
@@ -871,10 +867,10 @@ Offer a copyable **fix prompt** when the verdict is NO-GO or CONDITIONAL. Keep i
 2. **Describe the outcome of each fix**, not the implementation ("ghost.go should
    use Eastern time for the race date, matching how live races work").
 3. **Point at existing patterns** in this codebase that already do it right.
-4. **Separate blocking from non-blocking, but fix all of them.** CRITICAL and
-   HIGH block this commit; MEDIUM and LOW are fixed in the same change or an
-   immediate fast-follow, never deferred to a backlog. The split is only about
-   what blocks the merge. One exception: a FRESHNESS CRITICAL the diff did not
+4. **Fix all of them, in this change.** Every counted finding blocks the merge
+   at every severity; order the list by severity so the worst is fixed first.
+   A finding the author thinks is wrong is dismissed only with a quoted
+   `file:line` or a command and its output, carried into the re-review. One exception: a FRESHNESS CRITICAL the diff did not
    touch is listed under required fixes labeled "schedule now, does not block
    this commit".
 5. **End with the loop that closes it**: apply the fixes, then run
@@ -899,7 +895,7 @@ question: the fix prompt is already in the report body.
   Sub-agents hold Bash, Edit, and Write, and the review runs the project's own
   gate, tests, and codegen, all of which write to disk. A `git stash -u`,
   `git clean`, or `git checkout` from any of those destroys untracked files under
-  review. That is why pre-flight step 2 backs them up and step 5 verifies they
+  review. That is why pre-flight step 2 backs them up and Phase 2 step 6 verifies they
   survived: the guard exists precisely because the guarantee does not.
 - **Run checks, not actions.** Every command this skill triggers must be one that
   inspects: build, test, lint, typecheck, generate-and-diff, scan. Never run a
@@ -915,11 +911,10 @@ question: the fix prompt is already in the report body.
 - ALWAYS pass an explicit `model` on every Agent launch, per §"Model tiering".
   Haiku is correct for LOOKUP and wrong above it; never fable.
 - **The prescribed agents are the entire budget**: one reviewer per routing
-  block (language blocks and the status-bearing docs block alike), and
-  the single batched confidence scorer in Phase 2 step 4. That scorer is the one
-  sanctioned exception to "no agent checks another agent": it is LOOKUP tier, it
-  handles every finding in one call, and independence from the author is the
-  whole point of it. Never spawn a second agent for work one can finish.
+  block (language blocks and the status-bearing docs block alike), and the
+  Phase 2 step 4 verifiers. The verifiers are the one sanctioned exception to
+  "no agent checks another agent": they are JUDGE tier, batched up to 5
+  findings each, and independence from the author is the whole point of them. Never spawn a second agent for work one can finish.
 - **Never spawn an agent to find out whether there is work.** Sub-agents do
   bounded work whose shape is already known. If a deterministic command in the
   parent answers the question, the parent answers it and passes the result down.

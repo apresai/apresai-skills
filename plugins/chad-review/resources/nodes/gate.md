@@ -20,5 +20,5 @@ Quote the tool. Never paraphrase a compiler.
 
 No gate at all is a Built finding, MEDIUM, with a ready-to-paste target assembled
 from `pass-reference.md` § GATE for the ecosystems present. Recommend it, do not
-create it. It does not by itself fail Built for an unrelated typo (leaf), but
+create it. It is a repo-level gap: it does not fail Built and is not counted, but
 report it.

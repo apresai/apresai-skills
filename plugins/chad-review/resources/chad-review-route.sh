@@ -7,10 +7,11 @@
 # the REVIEW tier (sonnet), with that language's codegen / spec-lint hint and
 # Context7 docs for the frameworks the diff actually imports (CDK blocks also
 # fold IaC observability into the brief). Every block uses `general-purpose`: a
-# reviewer that reports every finding with a confidence, because filtering
-# belongs to the separate scoring step. Persona or self-filtering reviewer
-# agents (one that drops findings below 80 on its own) lose recall before the
-# scorer ever sees the finding.
+# reviewer that reports every finding with a confidence, because ruling on
+# findings belongs to the separate adversarial verify step. Persona or
+# self-filtering reviewer agents (one that drops findings on its own) lose
+# recall before the verifier ever sees the finding. /ultra-audit ignores the
+# REVIEW-tier model hint below and runs every reviewer on opus.
 #
 # PROJECT-AGNOSTIC BY DESIGN
 # This script does NOT assume fixed directory names. It adapts to whatever the
@@ -506,10 +507,10 @@ fi
 
 echo "==========================================="
 echo "Notes:"
-echo "  - Model tiering (chad-review \"Model tiering\"), three tiers: the reviewers"
-echo "    below ride REVIEW=sonnet; confidence scoring and version lookup ride"
-echo "    LOOKUP=haiku; JUDGE=opus covers only the parent's attack probes and"
-echo "    CRITICAL re-verification. Never spawn fable."
+echo "  - Model tiering (chad-review \"Model tiering\"): the reviewers below ride"
+echo "    REVIEW=sonnet under /chad-review; /ultra-audit runs them on opus at"
+echo "    effort high. Version lookup rides LOOKUP=haiku. JUDGE=opus covers the"
+echo "    attack probes and the per-finding verifiers. Never spawn fable."
 echo "  - FRESHNESS runs freshness.sh in the parent; it launches an agent only to"
 echo "    resolve versions for DEP records, at LOOKUP tier, and not from the routing above."
 echo "  - Status-bearing docs ride their own general-purpose reviewer at REVIEW tier,"
@@ -517,11 +518,11 @@ echo "    reading COMPLETE files plus docs-drift.sh records. The DOCS-DRIFT-TASK
 echo "    above is the parent's own DRIFT step whenever markdown changed; run it, do"
 echo "    not just note it. Trivial prose keeps the no-reviewer light path."
 echo "  - Phase 2 is the parent: run the affected tests, run the attack probes,"
-echo "    filter every finding once, re-verify CRITICALs, confirm the untracked"
+echo "    verify every finding (refute only with evidence), confirm the untracked"
 echo "    files survived, then write the verdict."
 echo "  - Context7 hints are framework names. The agent resolves each to a library"
 echo "    ID and fetches docs at audit start, then reasons against current"
 echo "    semantics rather than pre-training knowledge that may be stale."
 echo "  - Mixed-language diffs: one reviewer per block above, each scoped to ONLY"
 echo "    that block's hunks. The parent merges every finding into one report,"
-echo "    after a single batched scorer drops everything under confidence 80."
+echo "    after the verifiers rule on each one. Only an evidence-backed REFUTED drops."

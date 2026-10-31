@@ -164,7 +164,7 @@ store_of(){ echo "$1/.git/chad-review/receipts"; }
 
 # --- 1. emit on a clean tree, verify the exact head ---------------------------
 r=$(newrepo)
-out=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=1,low=0)
+out=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0)
 check "emit prints an absolute receipt path" "$r/.git/chad-review/receipts/" "$out"
 f=$(grep -o '/.*\.json' <<<"$out" | head -1)
 if jq -e . "$f" >/dev/null 2>&1; then ok "the receipt is valid JSON"; else bad "the receipt is valid JSON"; fi
@@ -490,20 +490,25 @@ v=$(verify "$r")
 check "tied timestamps let the NO-GO win" "verdict NO-GO" "$v"
 check "tied-timestamp verify fails closed" "code=1" "$v"
 
-# --- 30. a GO recording critical/high findings fails the gate mechanically --------
+# --- 30. a GO recording any open finding fails the gate mechanically -------------
 r=$(newrepo)
 emit "$r" --verdict GO --counts critical=1,high=0,medium=0,low=0 >/dev/null
 v=$(verify "$r")
-check "GO with a critical count fails" "records 1 critical/high finding" "$v"
+check "GO with a critical count fails" "records 1 open finding" "$v"
 check "contradicted GO exits 1" "code=1" "$v"
 r=$(newrepo)
 emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=2,medium=3,low=0 >/dev/null
 v=$(verify "$r")
-check "ultra-audit GO with high counts fails" "records 2 critical/high finding" "$v"
+check "ultra-audit GO with high and medium counts fails" "records 5 open finding" "$v"
 r=$(newrepo)
 emit "$r" --verdict GO --counts critical=0,high=0,medium=5,low=2 >/dev/null
 v=$(verify "$r")
-check "GO with only medium/low counts still passes" "PASS: GO receipt" "$v"
+check "GO with only medium/low counts fails" "records 7 open finding" "$v"
+check "medium/low GO exits 1" "code=1" "$v"
+r=$(newrepo)
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+v=$(verify "$r")
+check "GO with all-zero counts passes" "PASS: GO receipt" "$v"
 
 echo
 echo "receipt.sh: $pass passed, $fail failed"
