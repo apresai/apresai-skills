@@ -233,6 +233,7 @@ echo "Files detected:"
 [[ -n "$web_files" ]]   && echo "  Next.js / React          : $(cnt "$web_files")"
 [[ -n "$ts_files" ]]    && echo "  TypeScript / JS (generic): $(cnt "$ts_files")"
 [[ -n "$swift_files" ]] && echo "  iOS / Apple Swift        : $(cnt "$swift_files")"
+# pipeline.sh matches this exact line for RISK=api; keep the spacing.
 [[ -n "$yaml_specs" ]]  && echo "  OpenAPI spec             : $(cnt "$yaml_specs")"
 [[ -n "$md_files" ]]    && echo "  Markdown docs            : $(cnt "$md_files")"
 [[ -n "$other_files" ]] && echo "  Other / unclassified     : $(cnt "$other_files")"
@@ -463,14 +464,15 @@ if [[ -n "$exec_md" ]]; then
     ""
 fi
 
-# Status-bearing docs get their own reviewer at REVIEW tier: the whole file is
-# its evidence (a stale "Status: Active" line is rarely inside the diff hunks),
-# so the reviewer reads complete files plus the docs-drift.sh records, not just
-# the changed lines. Emitted even alongside code blocks in a mixed diff.
+# Status-bearing docs get their own reviewer: the whole file is its evidence
+# (a stale "Status: Active" line is rarely inside the diff hunks), so the
+# reviewer reads complete files plus the docs-drift.sh records, not just the
+# changed lines. Emitted even alongside code blocks in a mixed diff. pipeline.sh
+# keys deep depth off this block's header line; keep the wording.
 if [[ -n "$status_md" ]]; then
   emit_block "Docs / status-bearing ($(cnt "$status_md") file(s), $(first_dir "$status_md" || echo .))" \
     "general-purpose" \
-    "run docs-drift.sh: CONTRA and STALE rows are findings, MARKER and INDEXED rows are evidence" \
+    "read each flagged doc IN FULL; run docs-drift.sh: CONTRA and STALE rows are findings, MARKER and INDEXED rows are evidence" \
     ""
 fi
 
@@ -511,17 +513,21 @@ fi
 
 echo "==========================================="
 echo "Notes:"
-echo "  - Model tiering (chad-review \"Model tiering\"): the reviewers below ride"
-echo "    REVIEW=sonnet under /chad-review; /ultra-audit runs them on opus at"
-echo "    effort high. Version lookup rides LOOKUP=haiku. JUDGE=opus covers the"
-echo "    attack probes and the per-finding verifiers. Never spawn fable."
-echo "  - FRESHNESS runs freshness.sh in the parent; it launches an agent only to"
-echo "    resolve versions for DEP records, at LOOKUP tier, and not from the routing above."
-echo "  - Status-bearing docs ride their own general-purpose reviewer at REVIEW tier,"
-echo "    reading COMPLETE files plus docs-drift.sh records. The DOCS-DRIFT-TASK line"
-echo "    above is the parent's own DRIFT step whenever markdown changed; run it, do"
-echo "    not just note it. Under /chad-review trivial prose keeps the no-reviewer"
-echo "    light path; /ultra-audit always reviews prose (see nodes/impl-review.md)."
+echo "  - Models and effort. /chad-review: the reviewers below ride its session-"
+echo "    relative tiering (\"Model tiering\"; the [REVIEW tier, sonnet] hint)."
+echo "    /ultra-audit ignores that hint: every agent runs on opus, finders at"
+echo "    effort medium at fast depth and high at deep depth; verifiers,"
+echo "    challenger, sweep and spec-vs-diff always at high. Never spawn fable."
+echo "  - FRESHNESS runs freshness.sh in the parent and spawns no agent; version"
+echo "    resolution is mechanical (the update commands, npm outdated, go list -m -u)."
+echo "  - Status-bearing docs: under /ultra-audit the block forces deep depth, and"
+echo "    its own finder reads each flagged doc IN FULL plus the docs-drift.sh"
+echo "    records, not just the hunks. Under /chad-review the block gets its own"
+echo "    general-purpose reviewer at REVIEW tier, reading complete files the same"
+echo "    way. The DOCS-DRIFT-TASK line above is the parent's own DRIFT step"
+echo "    whenever markdown changed; run it, do not just note it. Under"
+echo "    /chad-review trivial prose keeps the no-reviewer light path; /ultra-audit"
+echo "    always reviews prose (see nodes/impl-review.md)."
 echo "  - Phase 2 is the parent: run the affected tests, run the attack probes,"
 echo "    verify every finding (refute only with evidence), confirm the untracked"
 echo "    files survived, then write the verdict."

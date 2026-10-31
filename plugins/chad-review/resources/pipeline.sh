@@ -7,45 +7,70 @@
 #
 #   fast (default): gate, deterministic scans, tests, freshness audit, skim,
 #     one Opus finder over the whole diff, verify.
-#   deep: fast plus one finder per routing block (prose blocks included), a
-#     fresh-context challenger, and one gap sweep. Chosen when a high-risk
-#     path is touched (auth, billing, crypto, migrations, OpenAPI), when the
-#     diff carries executable prompt content, when it passes 15 files or 400
-#     production lines, when routing failed, or with --full.
+#   deep: the whole-diff finder is REPLACED by one finder per routing block
+#     (prose blocks included), plus a fresh-context challenger and one gap
+#     sweep. Chosen when a high-risk path is touched (auth, billing, crypto,
+#     migrations, OpenAPI), when the diff carries executable prompt content,
+#     when it carries status-bearing docs (route's "Docs / status-bearing"
+#     block; that block's finder reads each flagged doc in full, since a stale
+#     "Status: Active" line is rarely inside the hunks), when it passes 15
+#     files or 400 production lines, when routing failed, or with --full.
 #
 # Dependency UPDATES are not part of review. /deps-update does them as their
 # own PR. Review only audits (freshness-audit).
 #
 # Input-driven omissions, not depth: spec-vs-diff needs a changed PLAN.md;
-# simplify needs code and a working route (so prompt files are known and
-# excluded); untracked-backup needs untracked files.
+# simplify needs production code and a working route (so prompt files are
+# known and excluded). Test files, manifests, config and docs are not
+# production code here, so a test-only diff skips simplify by design.
+# untracked-backup needs untracked files in the REAL worktree.
 #
-# A multi-commit PR branch is reviewed whole by running this inside the
-# worktree pr-stage.sh creates, never with --last-commit on a fix commit.
+# STAGED REVIEW. A multi-commit PR branch is reviewed whole by running this
+# inside the worktree pr-stage.sh creates, never with --last-commit on a fix
+# commit. Pass --staged <real-worktree> there. In the staged worktree every
+# file the branch added shows as untracked (pr-stage leaves nothing staged),
+# so its untracked list is the diff, not uncommitted work. With --staged the
+# staged dir's files and line counts still drive the plan, but UNTRACKED and
+# the untracked-backup node come from <real-worktree>, where the backup, the
+# apply nodes and untracked-guard verify --restore run.
 #
 # USAGE
 #   bash pipeline.sh [--last-commit] [--full]
+#   bash pipeline.sh --staged <real-worktree> [--full]   # inside a pr-stage.sh dir
 #
 # OUTPUT
 # One KEY=value block on stdout, then a REASON line. MODE is fast, deep, or
 # none. Exit 0 when a plan was produced, including MODE=none. Exit 2 for
-# usage. Exit 1 only when the script itself cannot run.
+# usage (including --staged without a git worktree, or with --last-commit).
+# Exit 1 only when the script itself cannot run.
 #
 # BASH 3.2. No associative arrays, no mapfile. Grep-no-match is normal:
 # every command substitution that can match nothing ends in || true.
 set -euo pipefail
 
+usage() { echo "usage: pipeline.sh [--last-commit] [--full] | --staged <real-worktree> [--full]" >&2; exit 2; }
 full=0
 mode="working-tree"
-for arg in "$@"; do
-  case "$arg" in
-    --full) full=1 ;;
-    --last-commit) mode="last-commit" ;;
-    *) echo "usage: pipeline.sh [--last-commit] [--full]" >&2; exit 2 ;;
+staged_real=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --full) full=1; shift ;;
+    --last-commit) mode="last-commit"; shift ;;
+    --staged) [[ $# -ge 2 && -n "$2" ]] || usage; staged_real="$2"; shift 2 ;;
+    *) usage ;;
   esac
 done
+if [[ -n "$staged_real" ]]; then
+  [[ "$mode" == "last-commit" ]] && usage
+  staged_real=$(git -C "$staged_real" rev-parse --show-toplevel 2>/dev/null) || {
+    echo "pipeline.sh: --staged needs the real git worktree" >&2; usage; }
+  # Passing the staged dir itself would bring back the miscount --staged exists to fix.
+  if [[ "$staged_real" == "$(git rev-parse --show-toplevel 2>/dev/null || true)" ]]; then
+    echo "pipeline.sh: --staged takes the REAL worktree, not the staged dir" >&2; usage
+  fi
+fi
 
-ALL_NODES="untracked-backup,gate,docs-drift,contract-mirror,tests,freshness-audit,spec-vs-diff,simplify,docs-apply,skim,impl-review,challenger,verify,sweep,receipt"
+ALL_NODES="untracked-backup,gate,tests,freshness-audit,spec-vs-diff,simplify,docs-apply,docs-drift,contract-mirror,skim,impl-review,challenger,verify,sweep,receipt"
 
 empty_plan() {
   echo "MODE=none"
@@ -78,7 +103,11 @@ else
              git -C "$repo_root" -c core.quotepath=false ls-files --others --exclude-standard 2>/dev/null; } | sort -u || true )
 fi
 
-untracked=$(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null | grep -c . || true)
+# The backup protects the REAL worktree's untracked files. In a staged
+# worktree (--staged) the local untracked list is the branch diff itself.
+untracked_root="$repo_root"
+[[ -n "$staged_real" ]] && untracked_root="$staged_real"
+untracked=$(git -C "$untracked_root" ls-files --others --exclude-standard 2>/dev/null | grep -c . || true)
 [[ -n "$untracked" ]] || untracked=0
 
 file_count=$(printf '%s' "$files" | grep -c . || true)
@@ -220,6 +249,7 @@ route_rc=0
 route_out=$(bash "$here/chad-review-route.sh" "${route_args[@]+"${route_args[@]}"}" 2>/dev/null) || route_rc=$?
 
 has_exec=0
+has_status=0
 lang_blocks=0
 prose_blocks=0
 has_openapi=0
@@ -228,11 +258,14 @@ route_failed=0
 while IFS= read -r line; do
   case "$line" in
     "--- Routing: Executable prompt content"*) has_exec=1; lang_blocks=$((lang_blocks+1)) ;;
-    "--- Routing: Docs / status-bearing"*) lang_blocks=$((lang_blocks+1)) ;;
+    "--- Routing: Docs / status-bearing"*) has_status=1; lang_blocks=$((lang_blocks+1)) ;;
     "--- Routing: Docs / spec"*) prose_blocks=$((prose_blocks+1)) ;;
     "--- Routing: Other"*) lang_blocks=$((lang_blocks+1)) ;;
     "--- Routing:"*) lang_blocks=$((lang_blocks+1)) ;;
-    *"OpenAPI spec"*) has_openapi=1 ;;
+    # Only route's "Files detected" count line. A bare *"OpenAPI spec"* also
+    # matched the Swift codegen hint ("... vs the OpenAPI spec"), so every
+    # Swift diff went RISK=api.
+    "  OpenAPI spec             : "*) has_openapi=1 ;;
   esac
 done <<< "$route_out"
 
@@ -262,16 +295,19 @@ add_why() { if [[ -z "$why" ]]; then why="$1"; else why="$why, $1"; fi; }
 [[ "$full" -eq 1 ]] && add_why "--full"
 [[ "$risk" != "none" ]] && add_why "risk: $risk"
 [[ "$has_exec" -eq 1 ]] && add_why "executable prompt content"
+[[ "$has_status" -eq 1 ]] && add_why "status-bearing docs"
 [[ "$file_count" -gt 15 ]] && add_why "$file_count files"
 [[ "$n_prod_lines" -gt 400 ]] && add_why "$n_prod_lines production lines"
 [[ "$route_failed" -eq 1 ]] && add_why "routing failed"
 [[ -n "$why" ]] && depth="deep"
 
 # --- nodes --------------------------------------------------------------------
-# Order is load-bearing: backup and gate first, deterministic scans and tests
-# on the user's tree, spec before apply (a spec FAIL vetoes docs-apply), apply
-# nodes, then every review node sees the post-apply diff, verify after every
-# finder, receipt last.
+# Order is load-bearing. backup, gate, tests and freshness-audit run in the
+# REAL worktree; spec-vs-diff before apply (a spec FAIL vetoes docs-apply);
+# the apply nodes (simplify, docs-apply) edit the real worktree and the gate
+# re-runs there. Then the parent stages (pr-stage.sh stage) for a branch
+# review, and the scans (docs-drift, contract-mirror), skim, every finder and
+# verify read the post-apply content. receipt last.
 
 nodes=""
 skip=""
@@ -280,15 +316,16 @@ add_skip() { if [[ -z "$skip" ]]; then skip="$1"; else skip="$skip,$1"; fi; }
 
 if [[ "$untracked" -gt 0 ]]; then add_node "untracked-backup"; else add_skip "untracked-backup"; fi
 add_node "gate"
-add_node "docs-drift"
-add_node "contract-mirror"
 add_node "tests"
 add_node "freshness-audit"
 if [[ "$spec" == "yes" ]]; then add_node "spec-vs-diff"; else add_skip "spec-vs-diff"; fi
-# simplify needs code, and a working route so prompt files are known and
-# excluded from it. Mixed prompt-plus-code diffs simplify the code files only.
+# simplify needs production code (n_code excludes tests, manifests, config and
+# docs), and a working route so prompt files are known and excluded from it.
+# Mixed prompt-plus-code diffs simplify the code files only.
 if [[ "$n_code" -gt 0 && "$route_failed" -eq 0 ]]; then add_node "simplify"; else add_skip "simplify"; fi
 add_node "docs-apply"
+add_node "docs-drift"
+add_node "contract-mirror"
 add_node "skim"
 add_node "impl-review"
 if [[ "$depth" == "deep" ]]; then add_node "challenger"; else add_skip "challenger"; fi
@@ -298,8 +335,8 @@ add_node "receipt"
 [[ -z "$skip" ]] && skip="none"
 
 # Finder agents before verification. fast: one reviewer over the whole diff.
-# deep: one per routing block, prose blocks included, plus challenger and
-# sweep, plus spec-vs-diff when listed. Verifiers scale with the finding
+# deep: one per routing block in place of it, prose blocks included, plus
+# challenger and sweep, plus spec-vs-diff when listed. Verifiers scale with the finding
 # count (nodes/verify.md) and are not counted here.
 if [[ "$depth" == "fast" ]]; then
   agents=1
@@ -310,7 +347,7 @@ else
 fi
 [[ "$spec" == "yes" ]] && agents=$((agents + 1))
 
-if [[ "$depth" == "fast" ]]; then reason="fast: no high-risk path, no prompt content, small diff"
+if [[ "$depth" == "fast" ]]; then reason="fast: no high-risk path, no prompt content, no status-bearing docs, small diff"
 else reason="deep: $why"; fi
 [[ "$scope_ask" -eq 1 ]] && reason="$reason; diff exceeds size ask line"
 

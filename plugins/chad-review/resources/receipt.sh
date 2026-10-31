@@ -25,15 +25,30 @@
 # merely looks like a review. A generic reviewer cannot satisfy the gate by
 # accident, because a candidate must carry one of the two schema/tool pairs
 # (chad-review-receipt with chad-review, or ultra-audit-receipt with
-# ultra-audit) and a fingerprint that matches the diff being merged. Either
-# tool's receipt satisfies the gate; the newest ruling for the current
-# content wins across both. `verify --require-tool ultra-audit` (what the
-# merge gate passes) considers ultra-audit receipts only.
+# ultra-audit) and a fingerprint that matches the diff being merged. A plain
+# `verify` accepts either tool's receipt, and the newest ruling for the
+# current content wins across both. The merge gate does not use the plain
+# form: since chad-review 3.0.0 it passes `verify --require-tool ultra-audit`,
+# which considers ultra-audit receipts only, so a /chad-review receipt no
+# longer satisfies the merge gate.
 #
-# Since 3.0.0 a GO must record zero open findings at every severity, and
-# `emit --verdict GO` requires --counts so the zero is a stated fact rather
-# than a default. verify fails closed on a GO whose counts are nonzero,
-# missing, or malformed, and on a same-second tie a GO with counts loses.
+# Since 3.0.0 a GO must record zero open findings at every severity.
+# `emit --verdict GO` requires --counts naming all four severities
+# (critical, high, medium, low), each 1 to 9 digits, so every zero is a
+# stated fact rather than a default; a partial or empty --counts is refused,
+# and so is a count longer than 9 digits (refused so shell arithmetic cannot
+# wrap it to a false zero). A non-GO verdict may carry partial counts;
+# the keys it omits are written as 0. verify fails closed on a GO whose counts
+# are nonzero, missing, or malformed: a count that is absent, not a number,
+# negative, or fractional counts as 1. On a same-second tie, a GO with
+# nonzero or malformed counts loses to it rather than winning by sort order.
+# `verify --require-tool ultra-audit` also fails a GO whose plugin_version
+# major is below 3 or unparseable ("unknown" included): a 2.x GO wrote zeros
+# after a confidence filter, so its zeros are not the 3.0.0 statement.
+#
+# A non-GO receipt that lost its fingerprint still counts against the head it
+# names (fail closed: it can only block). A GO without a fingerprint never
+# counts.
 #
 # THE FINGERPRINT
 # `git patch-id --stable` over the merge-base diff, with every diff knob
@@ -61,10 +76,18 @@
 # a NO-GO re-review of unchanged content out-ranks an older GO on it.
 #
 # USAGE
-#   receipt.sh emit    --verdict GO|NO-GO|CONDITIONAL [--base <ref>] [--pr <n>]
-#                      [--counts critical=0,high=0,medium=0,low=0]   (required with GO)
+#   receipt.sh emit    --verdict GO|NO-GO|CONDITIONAL [--tool chad-review|ultra-audit]
+#                      [--base <ref>] [--pr <n>]
+#                      [--counts critical=0,high=0,medium=0,low=0]
+#                      (with GO, all four keys are required; any count is 1-9 digits)
 #   receipt.sh publish [--pr <n>] [--file <receipt.json>]
-#   receipt.sh verify  [--base <ref>] [--pr <n>] [--require-tool ultra-audit] [--worktree]
+#   receipt.sh verify  [--base <ref>] [--pr <n>] [--require-tool chad-review|ultra-audit]
+#                      [--worktree]
+#
+# The base, when --base is absent, is origin/HEAD's symbolic ref, then the
+# first of origin/main, origin/master, main, master that resolves. With
+# nothing ahead of the base (the diff is empty) there is nothing to gate, and
+# emit exits 2 without writing a receipt.
 #
 # emit writes the receipt and prints its absolute path; with --pr and a
 # working gh it also publishes. publish posts or updates the PR comment.
@@ -198,20 +221,34 @@ do_emit() {
   case "$tool" in chad-review|ultra-audit) ;; *) usage ;; esac
   [[ -n "$pr" && ! "$pr" =~ ^[0-9]+$ ]] && usage
 
-  local c_critical=0 c_high=0 c_medium=0 c_low=0 part
-  if [[ -n "$counts" ]]; then
-    while IFS= read -r part; do
-      [[ -z "$part" ]] && continue
-      case "$part" in
-        critical=*|high=*|medium=*|low=*)
-          [[ "${part#*=}" =~ ^[0-9]+$ ]] || usage
-          # 10# strips leading zeros so "00" is written as the JSON number 0.
-          eval "c_${part%%=*}=$((10#${part#*=}))" ;;
-        *) usage ;;
-      esac
-    done < <(printf '%s\n' "$counts" | tr ',' '\n')
-  elif [[ "$verdict" == "GO" ]]; then
-    echo "emit: --verdict GO requires --counts (a GO must state its zero open findings)" >&2
+  # Per-key "seen" flags (bash 3.2 has no associative arrays). A GO must name
+  # all four keys; counting parts would accept `critical=0,critical=0,...`
+  # with one key missing.
+  local c_critical=0 c_high=0 c_medium=0 c_low=0 part key val seen
+  local s_critical=0 s_high=0 s_medium=0 s_low=0
+  while IFS= read -r part; do
+    [[ -z "$part" ]] && continue
+    key="${part%%=*}"; val="${part#*=}"
+    case "$part" in
+      critical=*|high=*|medium=*|low=*) ;;
+      *) echo "emit: unknown --counts entry '$part'" >&2; usage ;;
+    esac
+    # 1 to 9 digits: 10# arithmetic then cannot wrap to a false zero (bash
+    # arithmetic is 64-bit and wraps silently), and no real review counts
+    # a billion findings.
+    if [[ ! "$val" =~ ^[0-9]{1,9}$ ]]; then
+      echo "emit: --counts $key must be 1 to 9 digits, got '$val'" >&2; usage
+    fi
+    seen="s_$key"
+    if [[ "${!seen}" == 1 ]]; then
+      echo "emit: --counts names $key twice" >&2; usage
+    fi
+    # 10# strips leading zeros so "00" is written as the JSON number 0.
+    eval "c_$key=$((10#$val)); s_$key=1"
+  done < <(printf '%s\n' "$counts" | tr ',' '\n')
+  if [[ "$verdict" == "GO" ]] \
+     && [[ "$s_critical$s_high$s_medium$s_low" != "1111" ]]; then
+    echo "emit: --verdict GO requires --counts naming critical, high, medium, and low (a GO must state each zero, not default it)" >&2
     exit 2
   fi
 
@@ -386,16 +423,25 @@ candidate_row() {
     | select(.schema_version == 1)
     | select((.schema == "chad-review-receipt" and .tool == "chad-review")
              or (.schema == "ultra-audit-receipt" and .tool == "ultra-audit"))
-    | select(((.fingerprint // "") != "") and ((.head_sha // "") != "") and ((.verdict // "") != ""))
+    | select(((.head_sha // "") != "") and ((.verdict // "") != ""))
+    # A GO needs its fingerprint to count. A non-GO without one still counts
+    # against the head it names (fingerprint "-" never matches a patch-id), so
+    # deleting the field cannot un-block a newer NO-GO.
+    | select(.verdict != "GO" or ((.fingerprint // "") != ""))
     | [(.emitted_at // "0"), $src, .verdict, .head_sha, (.tree_state // "clean"),
-       .fingerprint, (.repo // "-"), (.base_ref // "-"),
+       (if (.fingerprint // "") == "" then "-" else .fingerprint end),
+       (.repo // "-"), (.base_ref // "-"),
        # Open findings. Fail closed: a missing findings object, or a count that
-       # is absent or not a number, counts as 1 rather than erroring (an error
-       # would drop the row and let an older GO win).
+       # is absent, not a number, negative, or fractional, counts as 1 rather
+       # than erroring (an error would drop the row and let an older GO win)
+       # and rather than summing away (critical -3 plus high 3 is not zero).
        ((if (.findings | type) != "object" then 1
          else ([.findings.critical, .findings.high, .findings.medium, .findings.low]
-               | map(if type == "number" then . else 1 end) | add) end) | tostring),
-       (.tool // "-")]
+               | map(if type == "number" and . >= 0 and . == floor then . else 1 end)
+               | add) end) | tostring),
+       (.tool // "-"),
+       (if (.plugin_version | type) == "string" and .plugin_version != ""
+        then .plugin_version else "unknown" end)]
     | @tsv' 2>/dev/null
   return 0
 }
@@ -493,23 +539,28 @@ do_verify() {
   fi
 
   local matches best verdict src how
+  # A fingerprint-less non-GO row ($6 == "-") matches on its head alone,
+  # whatever its tree state: it can only block, never pass.
   matches=$(printf '%s\n' "$scoped" | awk -F'\t' -v h="$cur_head" -v fph="$cur_fp_head" -v fpw="$cur_fp_wt" \
-    '($5 == "clean" && $4 == h) || (fph != "" && $6 == fph) || (fpw != "" && $6 == fpw)')
+    '($5 == "clean" && $4 == h) || ($6 == "-" && $4 == h) || (fph != "" && $6 == fph) || (fpw != "" && $6 == fpw)')
   if [[ -z "$matches" ]]; then
     echo "FAIL: receipt(s) found but stale: the diff changed since the review"
     return 1
   fi
 
   # Newest ruling for THIS content wins. On an emitted_at tie, fail closed: a
-  # non-GO ruling at the newest timestamp out-ranks a GO at the same instant
-  # (with two tool stores merged, same-second emits are reachable, and the
-  # bare whole-line sort fallback would otherwise let GO win by lexical
-  # accident). Among tied rows of the same verdict, the GitHub copy wins
-  # (github < local sorts first).
-  local newest_ts tie_nogo blockers
+  # non-GO ruling, a GO with nonzero or malformed counts, or (under
+  # --require-tool ultra-audit) a GO from a plugin major below 3 at the newest
+  # timestamp out-ranks a clean GO at the same instant (with two tool stores
+  # merged, same-second emits are reachable, and the bare whole-line sort
+  # fallback would otherwise let GO win by lexical accident). Among tied rows
+  # of the same verdict, the GitHub copy wins (github < local sorts first).
+  local newest_ts tie_nogo blockers pv_major
   best=$(printf '%s\n' "$matches" | LC_ALL=C sort -t"$(printf '\t')" -k1,1r -k2,2 | head -1)
   newest_ts=$(printf '%s' "$best" | cut -f1)
-  tie_nogo=$(printf '%s\n' "$matches" | awk -F'\t' -v t="$newest_ts" '$1 == t && ($3 != "GO" || $9 != "0")' \
+  tie_nogo=$(printf '%s\n' "$matches" | awk -F'\t' -v t="$newest_ts" -v rt="$require_tool" '
+      function old(v) { return (v !~ /^[0-9]+(\.|$)/ || v + 0 < 3) }
+      $1 == t && ($3 != "GO" || $9 != "0" || (rt == "ultra-audit" && old($11)))' \
     | LC_ALL=C sort -t"$(printf '\t')" -k2,2 | head -1)
   [[ -n "$tie_nogo" ]] && best="$tie_nogo"
   verdict=$(printf '%s' "$best" | cut -f3)
@@ -526,6 +577,18 @@ do_verify() {
   if [[ -n "$blockers" && "$blockers" != "0" ]]; then
     echo "FAIL: newest receipt is GO but records $blockers open finding(s); since chad-review 3.0.0 a GO needs zero open findings at every severity: fix them and re-review"
     return 1
+  fi
+  # The merge gate's 3.0.0 contract: a GO written by a 2.x plugin recorded
+  # zeros after a confidence-80 filter, so it does not state zero open
+  # findings. plugin_version is the only marker (schema_version stayed 1);
+  # an unparseable one ("unknown") fails closed.
+  if [[ "$require_tool" == "ultra-audit" ]]; then
+    pv_major=$(printf '%s' "$best" | cut -f11)
+    pv_major=${pv_major%%.*}
+    if [[ ! "$pv_major" =~ ^[0-9]+$ ]] || [[ ${#pv_major} -gt 6 ]] || (( 10#$pv_major < 3 )); then
+      echo "FAIL: newest receipt is a GO from chad-review $(printf '%s' "$best" | cut -f11), not 3.0.0+; re-review with 3.0.0 (/ultra-audit) to emit a receipt the merge gate accepts"
+      return 1
+    fi
   fi
   if [[ "$(printf '%s' "$best" | cut -f5)" == "clean" && "$(printf '%s' "$best" | cut -f4)" == "$cur_head" ]]; then
     how=exact-head

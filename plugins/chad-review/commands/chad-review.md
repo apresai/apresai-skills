@@ -59,6 +59,25 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    and a clean tree means say "Nothing to review" and STOP. Either way, build the
    **changed files list**.
 
+   **Whole-branch review (a PR branch after fix commits).** Stage it with
+   `bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pr-stage.sh" stage`,
+   which prints `DIR=` (a throwaway worktree holding the whole branch diff
+   plus uncommitted work as working-tree changes), `HEAD=`, `BRANCH=`, and
+   more. `DIR` is a read lens only: routing, `docs-drift.sh`,
+   `contract-mirror.sh`, and the reviewer and verifier agents read it, and
+   nothing is edited there. Everything that executes the project or edits
+   files runs in the real worktree (it has `node_modules`, `.env`, and build
+   caches): the untracked backup, the gate, the tests, `freshness.sh`, pass
+   5's update, `untracked-guard.sh verify --restore`, and the receipt. Order:
+   routing (step 5) inside `DIR`, the gate (step 7) and the tests in the real
+   worktree, the fan-out and verify over `DIR`, then `pr-stage.sh check <dir>`
+   in the real worktree (exit 1 means the real
+   tree changed during the review: list the paths and the verdict is
+   CONDITIONAL), then `pr-stage.sh remove <dir>`, and only then pass 5's
+   update in the real worktree (Phase 2 step 2), the untracked verify, and
+   the receipt. The update runs after `check` on purpose: it is the one edit
+   this skill makes, and it is not part of the content the reviewers read.
+
    **Back up untracked files first.** The skill's no-edit rule is enforced by
    prompt wording, not by tool restriction: the reviewer agents are
    `general-purpose`, holding Bash, Edit, and Write, and
@@ -139,9 +158,12 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
      **config-only** (`.github/**`, `.gitignore`, `.editorconfig`, linter
      configs; not manifests, not IaC), or **tiny** (at most 4 files AND at most
      40 changed lines of non-test production code).
-     **Forced to `standard` regardless**: `CLAUDE.md`, any `*/SKILL.md`,
-     anything under `.claude/`, a `prompts/` dir, or a plugin's `commands/`,
-     `agents/`, or `skills/` dir. Here those are executable behavior, not prose.
+     **Forced to `standard` regardless**: `CLAUDE.md`, `AGENTS.md`, any
+     `*/SKILL.md`, anything under `.claude/`, a `prompts/` dir, a plugin's
+     `commands/`, `agents/`, or `skills/` dir, or a plugin's `resources/*.md`;
+     in short, anything routing put in an `Executable prompt content` block
+     (`is_exec_md` in `chad-review-route.sh` is authoritative). Here those are
+     executable behavior, not prose.
      **Docs-only qualifies as `light` ONLY when routing emitted no
      `Docs / status-bearing` block.** A status-bearing doc forces `standard`,
      which naturally fans out to just that one sonnet reviewer plus the parent;
@@ -153,7 +175,7 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0 reviewers (step 4 verifiers still run) | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is the author, so its findings still go to the Phase 2 step 4 verifier (one JUDGE-tier agent) and the report carries the `Verified:` line as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
+   | `light` | 0 reviewers (step 4 verifiers still run) | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is the author, so its findings still go to the Phase 2 step 4 verifiers (JUDGE tier, up to 5 findings each) and the report carries the `Verified:` line as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
    | `deps` | 0 reviewers (step 4 verifiers still run) | FRESHNESS runs in the parent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
@@ -183,10 +205,19 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
      (`go build ./... && go vet ./...`, `tsc --noEmit`, `cargo check`,
      `swift build`)
 
-   Print `Gate: <command> (<green | N failures | none detected>)` in the report
-   header beside `Diff shape:`. Cap it around 60s: past that report
-   `Gate: <command> (over budget, not run)` and carry on rather than blocking a
-   review on someone's full build.
+   **Read the recipe before running it.** A target's name is not evidence of
+   what it does: one real repo's `make validate` runs a post-deploy script that
+   probes the production API and needs a cloud login. Read the recipe (and
+   every script it calls); if it deploys, publishes, migrates, pushes, or
+   probes a live or production endpoint (`curl` or an HTTP client against a
+   non-localhost URL, a cloud CLI), it is not a gate: print
+   `Gate: skipped <target> (<what it does>)` and fall to the next rule above.
+
+   Print `Gate: <command> (<green | N failures | none detected | not run>)` in
+   the report header beside `Diff shape:`. Run it to completion, in the
+   foreground, before any update or agent: no time cap. It is `not run` only
+   when it cannot be launched at all (say why), which makes the verdict
+   CONDITIONAL.
 
    Failures are findings under the pass that owns them: compile, type, lint, and
    schema errors under DRIFT, failing tests under TESTS. Quote the tool's own
@@ -473,17 +504,13 @@ Prefer `FIX` records over raw `SCAN` lines when writing the report. They are
 already grouped by the upgrade that closes them, so one row can carry nine
 advisories and becomes one line rather than nine.
 
-**Then update the dependencies.** Not classify, not offer: update. The native
-tools stay in range on their own: `npm update` moves only within the ranges
-`package.json` declares, and `go get -u` never crosses a major (a Go major is a
-different import path). Take the newest in-range releases, CVE fixes
-included (`resources/nodes/apply-deps.md`). For each manifest the script
-discovered:
-
-- Go module: `go get -u ./... && go mod tidy`
-- npm package: `npm update`
-- Another ecosystem with a native in-range updater: use it. None: skip it and
-  say so in the report.
+**Then update the dependencies.** Not classify, not offer: update. Follow
+`${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/nodes/apply-deps.md`,
+the same procedure `/deps-update` uses, for each manifest the script
+discovered: the newest stable release within each current major, CVE fixes
+included, never a new major. It names the per-ecosystem commands (exact pins
+included, which a plain `npm update` never moves) and says to skip, and say so,
+an ecosystem with no in-range updater.
 
 The update runs in Phase 2, after the tests have run on the user's change alone
 (so a failure attributes cleanly), and before the receipt is emitted (so the
@@ -599,9 +626,11 @@ score findings here, and that score decided what got dropped.
 
 **The reviewer is `sonnet` here, `opus` in `/ultra-audit`.** `/chad-review` is
 the cheaper explicit fan-out. The default pre-merge review, `/ultra-audit`, runs
-every reviewer on opus at `effort: high`; Anthropic's current code-review plugin
-also moved its bug finders and validators to opus. Both tools verify every
-finding at JUDGE tier.
+every finder on opus, at `effort: medium` at fast depth and `high` at deep
+depth, and its verifiers, challenger, sweep, and spec check at `high`;
+Anthropic's current code-review plugin also moved its bug finders and
+validators to opus. Both tools verify every finding at JUDGE tier, except
+direct tool evidence (a red gate, a failing test).
 
 **Never spawn fable**: at 2.5 times the Opus rate it buys no review
 advantage here. `opus`, `sonnet`, and `haiku` are aliases resolved at spawn time;
@@ -615,8 +644,9 @@ The Agent tool once exposed `model` but no `effort` parameter (verified on Claud
 Code 2.1.220). That is no longer true: the Agent tool now takes `effort`, and
 may use it when a skill explicitly asks. This skill asks for `effort: high` on
 every JUDGE-tier verifier launch, since Opus 5.5 defaults to `medium`.
-Reviewers inherit the session effort. `/ultra-audit` sets `high` on every agent
-it launches.
+Reviewers inherit the session effort. `/ultra-audit` sets effort on every agent
+it launches: finders `medium` at fast depth and `high` at deep depth,
+everything else `high`.
 
 ### Phase 1: fan out
 
@@ -666,16 +696,24 @@ One pass, holding every finding at once:
    findings, grouped by file up to 5 per verifier, all launched in one message.
    Each finding is CONFIRMED, PLAUSIBLE (the default when the verifier cannot
    construct the state), or REFUTED, and REFUTED only with quoted code or a
-   command and its output that disproves it. Script-sourced findings skip
-   verification: they are already evidence.
+   command and its output that disproves it (or the other refutations
+   `verify.md` § The rule lists). Only direct tool evidence skips
+   verification: a red gate (compiler, linter, typechecker output) and a
+   failing test, each quoted. The heuristic scan records (`docs-drift.sh`,
+   `contract-mirror.sh`, `freshness.sh`) are ruled like any finding, so a
+   `MIRROR` false positive cannot count unverified. Reconcile what was sent
+   against what came back (`verify.md` § Output): a finding with no ruling is
+   re-sent once, then PLAUSIBLE. The ledger is `/ultra-audit`'s; this skill
+   does not write it.
 
    This replaced a confidence-80 filter in 3.0.0. That filter put the burden on
    keeping a finding, scored by haiku, and it dropped real defects that nobody
    had disproved; self-reported confidence is not calibrated well enough to cut
    on. Disproving now carries the burden.
 
-   Emit one `Verified: N raised, C confirmed, P plausible, R refuted` line, and
-   list each REFUTED finding with its evidence.
+   Emit the verify node's line,
+   `Verified: N ruled (S scan, F finder), C confirmed, P plausible, R refuted; T tool-evidence findings; U re-sent`,
+   and list each REFUTED finding with its evidence.
 5. **Place every finding** exactly as
    `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/nodes/receipt.md`
    § "Where each finding goes" says: Fix now (counted), Follow-up (listed, not
@@ -721,17 +759,20 @@ One pass, holding every finding at once:
    It prints the receipt path; put that path on the report's `Receipt:` line.
    If a PR for this branch already exists (`gh pr view --json number`
    succeeds), add `--pr <n>` so it publishes to the PR immediately; otherwise
-   state in the report: after `gh pr create`, run `receipt.sh publish`, and
-   before `gh pr merge`, run `receipt.sh verify --pr <n>`.
+   state in the report: after `gh pr create`, run `receipt.sh publish`. This
+   receipt does not open the merge gate: with chad-review 3.0.0+ the gate runs
+   `receipt.sh verify --pr <n> --require-tool ultra-audit`, which only an
+   `/ultra-audit` GO passes, so run `/ultra-audit` before `gh pr merge`.
 
    The receipt binds the verdict to the exact content reviewed: head SHA plus
    a stable diff fingerprint (`git patch-id --stable` over the merge-base
    diff, untracked files folded in). At the merge gate the exact reviewed
    head passes, a clean rebase with an unchanged diff converges on the
    fingerprint, and any substantive diff change fails closed. After fix
-   commits, re-review the whole branch, staged with `resources/pr-stage.sh`,
-   never only the fix commit, and re-emit the receipt for the new head and
-   fingerprint;
+   commits, re-review the whole branch, staged as pre-flight step 2
+   describes (`pr-stage.sh` as a read lens, everything that runs or edits in
+   the real worktree), never only the fix commit, and re-emit the receipt
+   from the real worktree for the new head and fingerprint;
    `verify` trusts the newest ruling for the current content, so a stale GO
    can never outlive the diff it reviewed.
 
@@ -845,7 +886,8 @@ PLAUSIBLE finding states what would confirm it.
 finding remains at any severity. Any counted finding is NO-GO: severity decides
 fix order, never whether a fix happens. CONDITIONAL only when nothing is
 counted but the review could not vouch for the whole diff (scoped by the user,
-or the gate could not finish). `receipt.sh verify` fails a GO whose counts are
+the gate could not be launched, or `pr-stage.sh check` found the real tree
+changed during a staged review). `receipt.sh verify` fails a GO whose counts are
 not all zero. Also **strip any process narration** an agent emitted
 despite the contract. Findings in the deliverable, never the process.
 
@@ -889,9 +931,10 @@ Offer a copyable **fix prompt** when the verdict is NO-GO or CONDITIONAL. Keep i
 4. **Fix all of them, in this change.** Every counted finding blocks the merge
    at every severity; order the list by severity so the worst is fixed first.
    A finding the author thinks is wrong is dismissed only with a quoted
-   `file:line` or a command and its output, carried into the re-review. One exception: a FRESHNESS CRITICAL the diff did not
-   touch is listed under required fixes labeled "schedule now, does not block
-   this commit".
+   `file:line` or a command and its output, carried into the re-review.
+   Follow-up items (a FRESHNESS CRITICAL the diff did not touch included) are
+   not required fixes: list them separately, under the report's Follow-up
+   heading, for the one follow-up PR after merge.
 5. **End with the loop that closes it**: apply the fixes, then run
    `/chad-review` again to confirm. Any cleanup pass (`/simplify`) runs before
    that re-review, never after it, per §"Choosing between review tools".

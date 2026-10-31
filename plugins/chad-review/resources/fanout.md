@@ -73,7 +73,8 @@ You are reviewing a pre-commit diff on the <project> repo. You own passes
 1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS (coverage only, do not run tests),
 and 4 OBSERVABILITY.
 
-The diff under review (from `git diff HEAD` + untracked files):
+The diff under review (`git diff HEAD` + untracked files; for /ultra-audit,
+taken inside the pr-stage.sh worktree, which holds the whole branch):
 <paste diff>
 
 Project context (detected during pre-flight):
@@ -82,7 +83,9 @@ Project context (detected during pre-flight):
 - Route-parity test: <command or "not present">
 - Data-model doc: <path or "not present">
 - docs-drift records: <paste the CONTRA/STALE/MARKER/INDEXED rows, or "none">
-  (status-bearing docs reviewer only; read each flagged doc IN FULL)
+  (for the reviewer that owns a status-bearing doc: the status-bearing block's
+  reviewer, or the single reviewer of a fast-depth run; read each flagged doc
+  IN FULL, not just its hunks)
 
 Pass rubrics. Read these BEFORE you start; they are required, not background:
   file: <RESOLVED absolute path, see below>
@@ -97,9 +100,10 @@ build, tests, linters, and generators IS expected and they do write to disk.
 
 Agent call. `model` is REQUIRED and so is the effort the node file names.
 The skill asks for both explicitly, which is what permits setting them.
-`/ultra-audit`: `opus` everywhere; finders `medium` (fast) or `high` (deep),
-verifiers, challenger, sweep, and spec-vs-diff `high`. `/chad-review`: its
-§"Model tiering" for reviewers (effort inherited); verifiers `opus`, `high`:
+`/ultra-audit`: `opus` everywhere; finders `medium` at fast depth and `high`
+at deep depth; verifiers, challenger, sweep, and spec-vs-diff always `high`.
+`/chad-review`: its §"Model tiering" for reviewers (session-relative tier,
+effort inherited); verifiers `opus`, `high`:
 
 ```json
 {

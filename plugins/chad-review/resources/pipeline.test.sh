@@ -2,7 +2,10 @@
 # pipeline.test.sh: suite for pipeline.sh.
 #
 # Locks the 3.0.0 contract: two depths (fast, deep) that change how many
-# agents look, never which findings are kept. Every non-empty diff runs gate,
+# agents look, never which findings are kept. Also locks the node order the
+# shared design fixes (real-tree gate, tests and apply before the scans) and
+# --staged, which keeps a pr-stage.sh worktree's branch files out of the
+# untracked-backup decision. Every non-empty diff runs gate,
 # scans, tests, freshness-audit, skim, impl-review, verify, and receipt. Deep
 # adds challenger and sweep. Dependency updates are never a review node.
 set -uo pipefail
@@ -190,6 +193,11 @@ case "$(nodes_of "$out")" in
   *freshness-audit,spec-vs-diff,simplify,docs-apply*) ok "spec-vs-diff precedes every apply node" ;;
   *) bad "spec-vs-diff precedes every apply node"; printf '       got: %s\n' "$(nodes_of "$out")" ;;
 esac
+# Scans read the post-apply (staged) content, so they follow the apply nodes.
+case "$(nodes_of "$out")" in
+  NODES=untracked-backup,gate,tests,freshness-audit,spec-vs-diff,simplify,docs-apply,docs-drift,contract-mirror,skim,impl-review,*) ok "real-tree nodes, then apply, then scans" ;;
+  *) bad "real-tree nodes, then apply, then scans"; printf '       got: %s\n' "$(nodes_of "$out")" ;;
+esac
 line_is "spec adds an agent" "AGENTS=2" "$out"
 rm -rf "$r"
 
@@ -264,6 +272,80 @@ for node in $(nodes_of "$out" | sed 's/^NODES=//' | tr ',' ' '); do
   if [[ -f "$HERE/nodes/$node.md" ]]; then ok "node file exists: $node"; else bad "node file exists: $node"; fi
 done
 rm -rf "$r"
+
+# --- 22. exact SKIP=none when every node runs ---------------------------------
+r=$(newrepo)
+printf 'package auth\n\nfunc Login() {}\n' > "$r/auth.go"
+printf '# Plan\n' > "$r/PLAN.md"
+out=$(run "$r")
+line_is "every node listed gives SKIP=none" "SKIP=none" "$out"
+rm -rf "$r"
+
+# --- 23. Swift codegen hint is not an OpenAPI spec ----------------------------
+r=$(newrepo)
+mkdir -p "$r/App"
+printf 'import Foundation\n\nlet x = 1\n' > "$r/App/Main.swift"
+out=$(run "$r")
+line_is "swift-only is RISK=none" "RISK=none" "$out"
+line_is "swift-only is fast" "MODE=fast" "$out"
+rm -rf "$r"
+
+# --- 24. an OpenAPI spec found by content, not path, is still RISK=api --------
+r=$(newrepo)
+mkdir -p "$r/api"
+printf 'openapi: 3.0.0\ninfo:\n  title: t\n  version: 0.0.1\n' > "$r/api/spec.yaml"
+out=$(run "$r")
+check "content-detected spec is RISK=api" "api" "$(grep '^RISK=' <<<"$out")"
+line_is "content-detected spec is deep" "MODE=deep" "$out"
+rm -rf "$r"
+
+# --- 25. status-bearing docs force deep ---------------------------------------
+r=$(newrepo)
+mkdir -p "$r/docs"
+printf '# Feature\n\n**Status:** Active\n\n## History\n\nRetired 2025.\n' > "$r/docs/feature.md"
+out=$(run "$r")
+deep "status-bearing" "$out"
+check "status-bearing reason" "status-bearing docs" "$(grep '^REASON=' <<<"$out")"
+line_is "status-bearing block is a finder" "AGENTS=3" "$out"
+rm -rf "$r"
+r=$(newrepo)
+printf 'A readme.\n' > "$r/README.md"
+out=$(run "$r")
+check "fast reason names status docs" "no status-bearing docs" "$(grep '^REASON=' <<<"$out")"
+rm -rf "$r"
+
+# --- 26. --staged: branch-added files are the diff, not untracked work --------
+staged=$(newrepo); real=$(newrepo)
+printf 'package p\n\nfunc F() {}\n' > "$staged/f.go"
+( cd "$staged" && git add -A && git commit -qm base && git -C "$real" commit -q --allow-empty -m base ) >/dev/null
+{ printf 'package p\n\nfunc G() {\n'; n=0; while [[ $n -lt 420 ]]; do echo "	_ = $n"; n=$((n+1)); done; printf '}\n'; } > "$staged/new.go"
+out=$(run "$staged")
+line_is "unstaged run counts the branch file as untracked" "UNTRACKED=1" "$out"
+has_node "unstaged run lists untracked-backup" "untracked-backup" "$out"
+out=$(run "$staged" --staged "$real")
+line_is "--staged takes UNTRACKED from the real tree" "UNTRACKED=0" "$out"
+no_node "--staged with a clean real tree has no backup" "untracked-backup" "$out"
+check "--staged skips the backup" "untracked-backup" "$(skip_of "$out")"
+check "--staged still counts branch-added lines" "deep" "$(grep '^MODE=' <<<"$out")"
+check "--staged reason names production lines" "production lines" "$(grep '^REASON=' <<<"$out")"
+line_is "--staged keeps the branch files" "FILES=1" "$out"
+printf 'wip\n' > "$real/notes.txt"
+out=$(run "$staged" --staged "$real")
+line_is "--staged counts real untracked work" "UNTRACKED=1" "$out"
+has_node "--staged backs up the real tree's untracked work" "untracked-backup" "$out"
+for args in "--staged" "--staged $real --last-commit" "--staged $staged"; do
+  # shellcheck disable=SC2086
+  ( cd "$staged" && bash "$SCRIPT" $args >/dev/null 2>&1 ); rc=$?
+  if [[ "$rc" -eq 2 ]]; then ok "usage exit 2: $args"; else bad "usage exit 2: $args (got $rc)"; fi
+done
+nr=$(mktemp -d /private/tmp/pipeline-nonrepo.XXXXXX 2>/dev/null || mktemp -d); TMPS+=("$nr")
+if git -C "$nr" rev-parse --git-dir >/dev/null 2>&1; then
+  ok "--staged non-repo case skipped: temp dir is inside a git work tree"
+else
+  ( cd "$staged" && bash "$SCRIPT" --staged "$nr" >/dev/null 2>&1 ); rc=$?
+  if [[ "$rc" -eq 2 ]]; then ok "--staged on a non-repo exits 2"; else bad "--staged on a non-repo exits 2 (got $rc)"; fi
+fi
+rm -rf "$staged" "$real"
 
 echo "pipeline.sh: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

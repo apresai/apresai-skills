@@ -36,7 +36,7 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 ok()   { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 check(){ # check <desc> <expected-substring> <actual>
-  if grep -qF "$2" <<<"$3"; then ok "$1"; else
+  if grep -qF -- "$2" <<<"$3"; then ok "$1"; else
     bad "$1"; printf '       wanted: %s\n       got:\n%s\n' "$2" "$(sed 's/^/         /' <<<"$3")"
   fi
 }
@@ -568,6 +568,159 @@ v=$(verify "$r" --require-tool ultra-audit)
 check "newer chad-review GO cannot override an ultra-audit NO-GO" "verdict NO-GO" "$v"
 v=$(verify "$r" --require-tool bogus)
 check "unknown --require-tool is usage" "code=2" "$v"
+
+# --- 32. --counts parsing: all four keys with GO, 1 to 9 digits each ----------
+r=$(newrepo)
+out=$(emit "$r" --verdict GO --counts critical=0); rc=$?
+check "partial --counts with GO is refused" "requires --counts naming critical, high, medium, and low" "$out"
+expect_code "partial --counts with GO exits 2" "2" "$rc"
+out=$(emit "$r" --verdict GO --counts ','); rc=$?
+check "empty --counts ',' with GO is refused" "requires --counts naming" "$out"
+expect_code "empty --counts with GO exits 2" "2" "$rc"
+out=$(emit "$r" --verdict GO --counts critical=0,critical=0,high=0,medium=0); rc=$?
+check "a duplicate key with one key missing is refused" "names critical twice" "$out"
+expect_code "duplicate key exits 2" "2" "$rc"
+out=$(emit "$r" --verdict GO --counts critical=-1,high=0,medium=0,low=0); rc=$?
+check "a negative count is refused" "must be 1 to 9 digits" "$out"
+expect_code "negative count exits 2" "2" "$rc"
+out=$(emit "$r" --verdict GO --counts critical=18446744073709551616,high=0,medium=0,low=0); rc=$?
+check "a 2^64 count is refused, never wrapped to 0" "must be 1 to 9 digits" "$out"
+expect_code "overflowing count exits 2" "2" "$rc"
+out=$(emit "$r" --verdict GO --counts critical=0000000000,high=0,medium=0,low=0); rc=$?
+check "ten zero digits are refused" "must be 1 to 9 digits" "$out"
+expect_code "ten-digit count exits 2" "2" "$rc"
+out=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0,bogus=0); rc=$?
+expect_code "an unknown --counts key exits 2" "2" "$rc"
+v=$(verify "$r")
+check "every refused emit left no receipt" "no valid review receipt" "$v"
+f=$(emit "$r" --verdict GO --counts critical=000000000,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+check "nine zero digits are accepted as 0" '"critical": 0,' "$(cat "$f")"
+r=$(newrepo)
+f=$(emit "$r" --verdict NO-GO --counts critical=999999999,high=2 | grep -o '/.*\.json' | head -1)
+check "a non-GO may carry partial counts; a nine-digit count is written verbatim" '"critical": 999999999, "high": 2, "medium": 0, "low": 0' "$(cat "$f")"
+v=$(verify "$r")
+check "the partial-count NO-GO fails the gate" "verdict NO-GO" "$v"
+
+# --- 33. verify: negative and fractional counts are malformed, never summed ----
+r=$(newrepo)
+f=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+jqedit "$f" '.findings.critical = -3 | .findings.high = 3'
+v=$(verify "$r")
+check "critical -3 plus high 3 does not sum to zero" "records 4 open finding" "$v"
+check "negative-count GO exits 1" "code=1" "$v"
+jqedit "$f" '.findings = {critical: 0, high: 0, medium: 0.5, low: 0}'
+v=$(verify "$r")
+check "a fractional count counts as 1" "records 1 open finding" "$v"
+jqedit "$f" '.findings = {critical: -9223372036854775808, high: 9223372036854775807, medium: 0, low: 0}'
+v=$(verify "$r")
+if grep -q '^PASS' <<<"$v"; then bad "a huge negative plus huge positive pair cannot pass"; else ok "a huge negative plus huge positive pair cannot pass"; fi
+
+# --- 34. --require-tool ultra-audit refuses a GO from a plugin major below 3 --
+r=$(newrepo)
+f=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+check "a 3.x emit records a 3+ plugin_version" "\"plugin_version\": \"$pv\"" "$(cat "$f")"
+jqedit "$f" '.plugin_version = "2.10.0"'
+v=$(verify "$r" --require-tool ultra-audit)
+check "a 2.10.0 ultra-audit GO fails the merge gate" "re-review with 3.0.0" "$v"
+check "the 2.x refusal names the version" "chad-review 2.10.0" "$v"
+check "the 2.x refusal exits 1" "code=1" "$v"
+v=$(verify "$r")
+check "a 2.10.0 GO still passes a plain verify" "PASS: GO receipt" "$v"
+jqedit "$f" '.plugin_version = "unknown"'
+v=$(verify "$r" --require-tool ultra-audit)
+check "an unknown plugin_version fails closed under --require-tool" "re-review with 3.0.0" "$v"
+jqedit "$f" 'del(.plugin_version)'
+v=$(verify "$r" --require-tool ultra-audit)
+check "a missing plugin_version fails closed under --require-tool" "re-review with 3.0.0" "$v"
+jqedit "$f" '.plugin_version = "10.0.0"'
+v=$(verify "$r" --require-tool ultra-audit)
+check "a two-digit major passes --require-tool" "PASS: GO receipt" "$v"
+# A newer 3.x GO out-ranks an older 2.x GO; a newer 2.x GO does not inherit
+# an older 3.x pass.
+r=$(newrepo)
+f1=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+jqedit "$f1" '.plugin_version = "2.10.0"'
+emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+v=$(verify "$r" --require-tool ultra-audit)
+check "a newer 3.x GO supersedes an older 2.x GO" "PASS: GO receipt" "$v"
+f3=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+jqedit "$f3" '.plugin_version = "2.9.1"'
+v=$(verify "$r" --require-tool ultra-audit)
+check "a newer 2.x GO is refused even over an older 3.x GO" "re-review with 3.0.0" "$v"
+# Same-second tie: a 2.x GO loses to nothing but out-ranks a clean 3.x GO.
+r=$(newrepo)
+f1=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+f2=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+ts=$(jq -r .emitted_at "$f2")
+jqedit "$f1" --arg t "$ts" '.emitted_at = $t | .plugin_version = "2.10.0"'
+v=$(verify "$r" --require-tool ultra-audit)
+check "a tied 2.x GO fails closed under --require-tool" "re-review with 3.0.0" "$v"
+
+# --- 35. a newer NO-GO that lost its fingerprint still blocks (R0) ------------
+r=$(newrepo)
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+f=$(emit "$r" --verdict NO-GO | grep -o '/.*\.json' | head -1)
+jqedit "$f" 'del(.fingerprint)'
+v=$(verify "$r")
+check "a fingerprint-less newer NO-GO shadows the GO" "verdict NO-GO" "$v"
+check "the fingerprint-less NO-GO exits 1" "code=1" "$v"
+jqedit "$f" '.fingerprint = ""'
+v=$(verify "$r")
+check "an empty-fingerprint newer NO-GO shadows the GO" "verdict NO-GO" "$v"
+( cd "$r" && printf 'more\n' >> feat.txt && git add -A && git commit -qm more ) >/dev/null 2>&1
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+v=$(verify "$r")
+check "a fingerprint-less NO-GO for another head does not block" "PASS: GO receipt" "$v"
+# A dirty-tree NO-GO without its fingerprint still blocks a dirty-tree GO
+# on the same head (the GO matches on the worktree fingerprint).
+r=$(newrepo)
+( cd "$r" && printf 'wip\n' > wip.txt ) >/dev/null 2>&1
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+f=$(emit "$r" --verdict NO-GO | grep -o '/.*\.json' | head -1)
+check "the dirty NO-GO records a dirty tree" '"tree_state": "dirty"' "$(cat "$f")"
+jqedit "$f" 'del(.fingerprint)'
+v=$(verify "$r")
+check "a fingerprint-less dirty-tree NO-GO shadows the dirty GO" "verdict NO-GO" "$v"
+
+# --- 36. --require-tool filters PR-comment receipts too ------------------------
+r=$(newrepo)
+h=$(cd "$r" && git rev-parse HEAD)
+reset_gh "$h"
+out=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0)
+fcr=$(grep -o '/.*\.json' <<<"$out" | head -1)
+GH_STUB_FAIL=0
+publish "$r" --pr 7 --file "$fcr" >/dev/null
+GH_STUB_FAIL=1
+rm -f "$r/.git/ultra-audit/receipts/"*.json "$r/.git/chad-review/receipts/"*.json 2>/dev/null
+GH_STUB_FAIL=0
+v=$(verify "$r" --pr 7 --require-tool ultra-audit)
+GH_STUB_FAIL=1
+check "a published chad-review GO does not satisfy --require-tool ultra-audit" "no ultra-audit receipt found" "$v"
+check "the PR-comment require-tool miss exits 1" "code=1" "$v"
+out=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0)
+fua=$(grep -o '/.*\.json' <<<"$out" | head -1)
+GH_STUB_FAIL=0
+publish "$r" --pr 7 --file "$fua" >/dev/null
+GH_STUB_FAIL=1
+rm -f "$r/.git/ultra-audit/receipts/"*.json "$r/.git/chad-review/receipts/"*.json 2>/dev/null
+GH_STUB_FAIL=0
+v=$(verify "$r" --pr 7 --require-tool ultra-audit)
+GH_STUB_FAIL=1
+check "a published ultra-audit GO satisfies --require-tool ultra-audit" "PASS: GO receipt (github)" "$v"
+
+# --- 37. the no-args usage names --require-tool (merge-gate.sh detects it) ----
+v=$( ( bash "$SCRIPT" 2>&1 ); echo "code=$?" )
+check "usage names --require-tool" "--require-tool" "$v"
+check "no-args usage exits 2" "code=2" "$v"
+
+# --- 38. nothing ahead of the base: emit refuses, writes no receipt -----------
+r=$(newrepo)
+( cd "$r" && git checkout -q main ) >/dev/null 2>&1
+out=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0); rc=$?
+check "an empty diff has nothing to gate" "the diff against" "$out"
+expect_code "empty-diff emit exits 2" "2" "$rc"
+n=$(ls -1 "$r/.git/ultra-audit/receipts" 2>/dev/null | grep -c '\.json$' || true)
+expect_code "empty-diff emit wrote no receipt" "0" "$n"
 
 echo
 echo "receipt.sh: $pass passed, $fail failed"

@@ -1,8 +1,11 @@
 # Node: sweep
 
-Deep depth only. One fresh gap-finder after verify, looking only for what
-everyone missed. Run it once: in published measurements a second round
-roughly doubled false positives, and every false positive now costs a change.
+Deep depth only, and only on the first run of a branch. One fresh gap-finder
+after verify, looking only for what everyone missed. Run it once per branch:
+in published measurements a second round roughly doubled false positives, and
+every false positive now costs a change. So a re-run (the ledger already holds
+an earlier run for this branch) and the two fast-depth runs skip it, and say
+`Sweep: skipped (ran in run <n>)` in the report.
 
 - `subagent_type: general-purpose`, `model: opus`, `effort: high`.
 - Input: the post-apply diff, every CONFIRMED and PLAUSIBLE finding (do not
@@ -16,5 +19,5 @@ roughly doubled false positives, and every false positive now costs a change.
 - Output contract from `fanout.md`, verbatim. "Clean" when nothing new. Do
   not pad.
 
-Its findings go through `verify` (one more batch), then into the verdict. No
-second sweep.
+Its findings go through `verify` (one more batch, reconciled the same way),
+then into the verdict. No second sweep, within a run or across fix rounds.
