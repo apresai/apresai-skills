@@ -77,14 +77,19 @@ The ledger makes re-runs converge without letting anyone grade their own
 work. It is persisted, so a fresh session sees it:
 `$(git rev-parse --git-common-dir)/ultra-audit/ledger/<branch>.jsonl`, one
 JSON object per finding per run:
-`{"run": <n>, "head": "<sha>", "file": "...", "line": N, "finding": "...", "ruling": "...", "outcome": "fixed|dismissed|accepted-by-user|open", "evidence": "..."}`.
+`{"run": <n>, "head": "<sha>", "file": "...", "line": N, "finding": "...", "ruling": "...", "outcome": "fixed|dismissed|refuted|accepted-by-user|open", "evidence": "..."}`.
 
 - The parent appends every ruled finding after verify, and updates outcomes
   as fixes land.
-- `dismissed` is an author's claim that a finding is wrong, with evidence. It
-  is not a ruling. The next run's verifier re-checks that evidence against
-  the current code and rules REFUTED only if it still holds. Otherwise the
-  finding is CONFIRMED or PLAUSIBLE again.
+- `fixed` and `dismissed` are author claims, not rulings. On a re-run the
+  parent hands every prior `fixed` and `dismissed` entry to a verifier batch
+  of its own, which re-checks each one against the current code: does the fix
+  hold, or does the dismissal's evidence still hold? A claim that does not
+  hold becomes a finding again (CONFIRMED or PLAUSIBLE). This is how a re-run
+  proves the fix round, rather than trusting it.
+- `refuted` records a verifier's REFUTED ruling with its evidence. A re-run
+  re-raising it must defeat that evidence.
 - `accepted-by-user` is recorded only when the user explicitly decided to
   leave the finding as is. It is listed, never counted.
-- An entry about code changed since that run's head is ignored.
+- A `refuted` or `accepted-by-user` entry about code changed since that run's
+  head no longer applies; the finding is ruled fresh.
