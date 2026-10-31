@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --last-commit) mode_args+=(--last-commit); shift ;;
     --) shift; [[ $# -gt 0 ]] || { echo "usage: docs-apply.sh [--last-commit] [-- <file>...]" >&2; exit 2; }
-        mode_args+=(--); mode_args+=("$@"); break ;;
+        mode_args+=(-- "$@"); break ;;
     *) echo "usage: docs-apply.sh [--last-commit] [-- <file>...]" >&2; exit 2 ;;
   esac
 done

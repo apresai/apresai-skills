@@ -537,8 +537,8 @@ v=$(verify "$r")
 check "GO missing medium/low fails" "records 2 open finding" "$v"
 # A newer NO-GO with a non-numeric count still shadows the older GO.
 r=$(newrepo)
-emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
-sleep 1
+f0=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+jqedit "$f0" '.emitted_at = "2000-01-01T00:00:00Z"'
 f=$(emit "$r" --verdict NO-GO --counts critical=0,high=0,medium=1,low=0 | grep -o '/.*\.json' | head -1)
 jqedit "$f" '.findings.medium = "1"'
 v=$(verify "$r")
@@ -561,8 +561,8 @@ emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,lo
 v=$(verify "$r" --require-tool ultra-audit)
 check "ultra-audit GO satisfies --require-tool ultra-audit" "PASS: GO receipt" "$v"
 r=$(newrepo)
-emit "$r" --tool ultra-audit --verdict NO-GO --counts critical=0,high=1,medium=0,low=0 >/dev/null
-sleep 1
+f0=$(emit "$r" --tool ultra-audit --verdict NO-GO --counts critical=0,high=1,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+jqedit "$f0" '.emitted_at = "2000-01-01T00:00:00Z"'
 emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 v=$(verify "$r" --require-tool ultra-audit)
 check "newer chad-review GO cannot override an ultra-audit NO-GO" "verdict NO-GO" "$v"
@@ -632,6 +632,12 @@ check "an unknown plugin_version fails closed under --require-tool" "re-review w
 jqedit "$f" 'del(.plugin_version)'
 v=$(verify "$r" --require-tool ultra-audit)
 check "a missing plugin_version fails closed under --require-tool" "re-review with 3.0.0" "$v"
+jqedit "$f" '.plugin_version = ""'
+v=$(verify "$r" --require-tool ultra-audit)
+check "an empty plugin_version fails closed under --require-tool" "re-review with 3.0.0" "$v"
+jqedit "$f" '.plugin_version = "1234567.0.0"'
+v=$(verify "$r" --require-tool ultra-audit)
+check "a major longer than 6 digits fails closed under --require-tool" "re-review with 3.0.0" "$v"
 jqedit "$f" '.plugin_version = "10.0.0"'
 v=$(verify "$r" --require-tool ultra-audit)
 check "a two-digit major passes --require-tool" "PASS: GO receipt" "$v"
@@ -639,7 +645,7 @@ check "a two-digit major passes --require-tool" "PASS: GO receipt" "$v"
 # an older 3.x pass.
 r=$(newrepo)
 f1=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
-jqedit "$f1" '.plugin_version = "2.10.0"'
+jqedit "$f1" '.plugin_version = "2.10.0" | .emitted_at = "2000-01-01T00:00:00Z"'
 emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 v=$(verify "$r" --require-tool ultra-audit)
 check "a newer 3.x GO supersedes an older 2.x GO" "PASS: GO receipt" "$v"
@@ -721,6 +727,22 @@ check "an empty diff has nothing to gate" "the diff against" "$out"
 expect_code "empty-diff emit exits 2" "2" "$rc"
 n=$(ls -1 "$r/.git/ultra-audit/receipts" 2>/dev/null | grep -c '\.json$' || true)
 expect_code "empty-diff emit wrote no receipt" "0" "$n"
+
+# --- 39. the pinned diff knobs are unchanged (fingerprints depend on them) ---
+# receipt.sh builds GITDIFF from git-common.sh. Any change to this argument
+# list changes every patch-id and re-arms every outstanding receipt, so the
+# exact list is locked here.
+want='git -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ -c diff.relative=false diff --no-color --no-ext-diff --no-textconv --no-renames --full-index --diff-algorithm=myers'
+got=$( . "$(dirname "$SCRIPT")/git-common.sh"; a=(git "${GIT_DIFF_CONFIG[@]}" "${GIT_DIFF_ARGS[@]}"); printf '%s' "${a[*]}" )
+expect_code "receipt.sh diff knobs are exactly the pinned set" "$want" "$got"
+r=$(newrepo)
+f=$(emit "$r" --verdict NO-GO | grep -o '/.*\.json' | head -1)
+mb=$(cd "$r" && git merge-base origin/main HEAD)
+fp=$(cd "$r" && git -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false \
+       -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ -c diff.relative=false \
+       diff --no-color --no-ext-diff --no-textconv --no-renames --full-index --diff-algorithm=myers "$mb" HEAD \
+     | git patch-id --stable | cut -d' ' -f1)
+check "the receipt fingerprint is the patch-id of the pinned diff" "\"fingerprint\": \"patchid-v1:$fp\"" "$(cat "$f")"
 
 echo
 echo "receipt.sh: $pass passed, $fail failed"

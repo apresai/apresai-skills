@@ -16,7 +16,6 @@
 # USAGE
 #   bash pr-stage.sh stage  [--base <ref>]
 #   bash pr-stage.sh check  <dir>
-#   bash pr-stage.sh export <dir>
 #   bash pr-stage.sh remove <dir>
 #
 # stage: creates a detached worktree at the merge base under $TMPDIR (made
@@ -34,11 +33,13 @@
 #     SUBMODULES=<count>  submodule pointer changes, listed on stderr. A
 #       gitlink cannot be staged into an uninitialized checkout, so these are
 #       not visible in DIR; review them explicitly.
-#   Base defaults exactly like receipt.sh resolve_base: the origin/HEAD
-#   symbolic ref, then origin/main, origin/master, main, master.
-#   The diff is pinned like receipt.sh GITDIFF (core.quotepath=false,
-#   diff.noprefix=false, no external diff, no textconv, no color) and applied
-#   with --whitespace=nowarn, so user config cannot break or skew the stage.
+#   Base defaults through the resolver receipt.sh uses (git-common.sh
+#   resolve_base_ref): the origin/HEAD symbolic ref, then origin/main,
+#   origin/master, main, master.
+#   The diff is pinned with receipt.sh's knobs from git-common.sh
+#   (core.quotepath=false, diff.noprefix=false, no external diff, no textconv,
+#   no color) plus diff.submodule=short, and applied with
+#   --whitespace=nowarn, so user config cannot break or skew the stage.
 #   Untracked files are enumerated with ls-files -z (non-ASCII names safe);
 #   symlinks are copied as symlinks (cp -P), dangling ones included; nested
 #   repositories are skipped with a note on stderr. A cleanup trap removes the
@@ -51,11 +52,6 @@
 #   stdout. Submodule and nested-repository entries are not compared (see
 #   SUBMODULES). A stray file written into DIR after staging (a verifier
 #   repro, coverage output) also reads as a difference: write those elsewhere.
-#
-# export <dir>: prints a patch of edits made in <dir> since staging, limited
-#   to paths present in the staged tree (edits and deletions; files created
-#   after staging are never emitted). No longer part of the ultra-audit flow,
-#   since apply nodes run in the real tree; kept for manual use.
 #
 # remove <dir>: deletes the staged worktree and its registration. Refuses a
 #   directory that pr-stage.sh did not create.
@@ -73,13 +69,12 @@
 # BASH 3.2. No associative arrays, no mapfile.
 set -euo pipefail
 
-GITDIFF=(git -c core.quotepath=false -c diff.noprefix=false
-         -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/
-         -c diff.relative=false -c diff.submodule=short
-         diff --no-color --no-ext-diff --no-textconv --no-renames
-              --full-index --diff-algorithm=myers)
+# shellcheck source=git-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-common.sh" \
+  || { echo "pr-stage: git-common.sh not found beside pr-stage.sh" >&2; exit 2; }
+GITDIFF=(git "${GIT_DIFF_CONFIG[@]}" -c diff.submodule=short "${GIT_DIFF_ARGS[@]}")
 
-usage() { echo "usage: pr-stage.sh stage [--base <ref>] | check <dir> | export <dir> | remove <dir>" >&2; exit 2; }
+usage() { echo "usage: pr-stage.sh stage [--base <ref>] | check <dir> | remove <dir>" >&2; exit 2; }
 
 # --- exit handling: temp cleanup, failed-stage rollback, rc mapping ----------
 TMPFILES=()
@@ -135,6 +130,18 @@ marker_dir() { # per-worktree admin dir of a pr-stage worktree, or exit 2
   printf '%s\n' "$g"
 }
 
+staged_tree() { # staged_tree <admin dir> <dir>: the recorded staged tree, or exit 2
+  local t
+  t=$(cat "$1/pr-stage-tree")
+  [[ "$t" != pending ]] || die "staging never finished in $2; remove it"
+  printf '%s\n' "$t"
+}
+
+is_gitlink() { # is_gitlink <raw meta>: true when either side is mode 160000
+  case "$1" in :160000\ *|:*\ 160000\ *) return 0 ;; esac
+  return 1
+}
+
 # snapshot_tree <worktree> <tmproot>: sets SNAP to a tree object holding
 # <worktree>'s content (its index, then add -A), recorded through a temporary
 # index so the worktree's own index is never touched.
@@ -158,7 +165,7 @@ paths_between() {
   local meta path
   git -C "$3" -c core.quotepath=false diff-tree -r -z --no-renames --raw "$1" "$2" \
   | while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
-      case "$meta" in :160000\ *|:*\ 160000\ *) continue ;; esac
+      is_gitlink "$meta" && continue
       printf '%s\n' "$path"
     done
 }
@@ -180,15 +187,8 @@ case "$cmd" in
     top=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)
     root=$(tmproot)
     cd "$top"
-    if [[ -z "$base" ]]; then
-      base=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)
-      if [[ -z "$base" ]]; then
-        for b in origin/main origin/master main master; do
-          if git rev-parse -q --verify "$b^{commit}" >/dev/null 2>&1; then base="$b"; break; fi
-        done
-      fi
-      [[ -n "$base" ]] || die "no base ref (origin/HEAD, origin/main, origin/master, main, master); pass --base"
-    fi
+    base=$(resolve_base_ref "$base") \
+      || die "no base ref (origin/HEAD, origin/main, origin/master, main, master); pass --base"
     mb=$(git merge-base "$base" HEAD 2>/dev/null) || die "no merge base with $base"
     head=$(git rev-parse HEAD)
     branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo detached)
@@ -208,16 +208,26 @@ case "$cmd" in
       printf '%s\0' "$f" >> "$ucopy"; n_untracked=$((n_untracked + 1))
     done < "$ulist"
 
-    rc=0; "${GITDIFF[@]}" --quiet "$mb" >/dev/null 2>&1 || rc=$?
-    [[ "$rc" -le 1 ]] || die "git diff against $mb failed"
-    if [[ "$rc" -eq 0 && "$n_untracked" -eq 0 ]]; then
+    # One --raw pass answers three questions: is anything tracked changed,
+    # which changed paths still exist (for the ignore check), and which rows
+    # are submodule pointer changes. The --binary patch is the only other diff.
+    newtmp raw "$root" pr-stage-raw
+    "${GITDIFF[@]}" --raw -z "$mb" > "$raw" 2>/dev/null || die "git diff against $mb failed"
+    if [[ ! -s "$raw" && "$n_untracked" -eq 0 ]]; then
       echo "nothing to stage: HEAD and worktree match $base" >&2
       deliberate=1; exit 1
     fi
+    newtmp changed "$root" pr-stage-changed
+    n_sub=0; sub_notes=""
+    while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+      [[ "${meta##* }" == D ]] || printf '%s\0' "$path" >> "$changed"
+      if is_gitlink "$meta"; then
+        sub_notes+="pr-stage: submodule pointer change (not visible in DIR, review explicitly): $path ${meta}"$'\n'
+        n_sub=$((n_sub + 1))
+      fi
+    done < "$raw"
 
     # Ignored-forced: changed, still-present tracked paths matching ignore rules.
-    newtmp changed "$root" pr-stage-changed
-    "${GITDIFF[@]}" --name-only -z --diff-filter=d "$mb" > "$changed"
     newtmp ignored "$root" pr-stage-ignored
     rc=0; git check-ignore --no-index -z --stdin < "$changed" > "$ignored" || rc=$?
     [[ "$rc" -le 1 ]] || die "git check-ignore failed"
@@ -226,17 +236,9 @@ case "$cmd" in
       echo "pr-stage: ignored-forced path (review explicitly): $f" >&2; n_ignored=$((n_ignored + 1))
     done < "$ignored"
 
-    # Submodule pointer changes (mode 160000 on either side).
-    newtmp raw "$root" pr-stage-raw
-    "${GITDIFF[@]}" --raw -z "$mb" > "$raw"
-    n_sub=0
-    while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
-      case "$meta" in
-        :160000\ *|:*\ 160000\ *)
-          echo "pr-stage: submodule pointer change (not visible in DIR, review explicitly): $path ${meta}" >&2
-          n_sub=$((n_sub + 1)) ;;
-      esac
-    done < "$raw"
+    # Submodule pointer changes (mode 160000 on either side), after the
+    # ignored-forced notes as before.
+    printf '%s' "$sub_notes" >&2
 
     newtmp patch "$root" pr-stage-patch
     "${GITDIFF[@]}" --binary "$mb" > "$patch"
@@ -254,8 +256,8 @@ case "$cmd" in
       git -C "$dir" apply --binary --whitespace=nowarn "$patch"
     fi
     while IFS= read -r -d '' f; do
-      mkdir -p "$dir/$(dirname "$f")"
-      cp -pP "$top/$f" "$dir/$f"
+      [[ "$f" == */* ]] && mkdir -p -- "$dir/${f%/*}"
+      cp -pP -- "$top/$f" "$dir/$f"
     done < "$ucopy"
     if [[ -s "$ignored" ]]; then
       git -C "$dir" --literal-pathspecs add -N -f --pathspec-from-file="$ignored" --pathspec-file-nul
@@ -276,8 +278,7 @@ case "$cmd" in
     ;;
   check)
     dir="${1:-}"; admin=$(marker_dir "$dir")
-    staged=$(cat "$admin/pr-stage-tree")
-    [[ "$staged" != pending ]] || die "staging never finished in $dir; remove it"
+    staged_tree "$admin" "$dir" >/dev/null
     src=$(cat "$admin/pr-stage-source" 2>/dev/null || true)
     [[ -n "$src" && -d "$src" ]] || die "real worktree for $dir not recorded or missing"
     root=$(tmproot)
@@ -291,17 +292,6 @@ case "$cmd" in
     printf '%s\n' "$diffs"
     echo "pr-stage: $src differs from the staged content in $dir (paths above)" >&2
     deliberate=1; exit 1
-    ;;
-  export)
-    dir="${1:-}"; admin=$(marker_dir "$dir")
-    tree=$(cat "$admin/pr-stage-tree")
-    [[ "$tree" != pending ]] || die "staging never finished in $dir; remove it"
-    root=$(tmproot)
-    newtmp idx "$root" pr-stage-index; rm -f "$idx"
-    GIT_INDEX_FILE="$idx" git -C "$dir" read-tree "$tree"
-    # add -u touches only paths already in the staged tree: no stray new files.
-    GIT_INDEX_FILE="$idx" git -C "$dir" add -u
-    ( cd "$dir" && GIT_INDEX_FILE="$idx" "${GITDIFF[@]}" --cached --binary "$tree" )
     ;;
   remove)
     dir="${1:-}"; marker_dir "$dir" >/dev/null

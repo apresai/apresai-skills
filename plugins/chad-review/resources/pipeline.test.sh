@@ -46,13 +46,20 @@ has_node(){ check "$1" ",$2," ",$(nodes_of "$3" | sed 's/^NODES=//'),"; }
 no_node(){ absent "$1" ",$2," ",$(nodes_of "$3" | sed 's/^NODES=//'),"; }
 
 core(){ # nodes every non-empty diff runs, at either depth
-  local label="$1" out="$2" node
+  # NODES is pulled out once, then every membership test is pure bash.
+  local label="$1" out="$2" node line list=",,"
+  while IFS= read -r line; do
+    case "$line" in NODES=*) list=",${line#NODES=},"; break ;; esac
+  done <<<"$out"
   for node in gate docs-drift contract-mirror tests freshness-audit docs-apply skim impl-review verify receipt; do
-    has_node "$label: runs $node" "$node" "$out"
+    if [[ "$list" == *",$node,"* ]]; then ok "$label: runs $node"; else
+      bad "$label: runs $node"; printf '       wanted: ,%s,\n       got: %s\n' "$node" "$list"; fi
   done
-  no_node "$label: no freshness-update in review" "freshness-update" "$out"
-  no_node "$label: no score node" "score" "$out"
-  absent "$label: no TIER key" "TIER=" "$out"
+  if [[ "$list" == *",freshness-update,"* ]]; then bad "$label: no freshness-update in review"
+  else ok "$label: no freshness-update in review"; fi
+  if [[ "$list" == *",score,"* ]]; then bad "$label: no score node"; else ok "$label: no score node"; fi
+  if [[ "$out" == *"TIER="* ]]; then bad "$label: no TIER key"; printf '       must NOT contain: TIER=\n'
+  else ok "$label: no TIER key"; fi
 }
 fast(){ core "$1" "$2"; line_is "$1: MODE=fast" "MODE=fast" "$2"
   no_node "$1: fast has no challenger" "challenger" "$2"; no_node "$1: fast has no sweep" "sweep" "$2"; }
@@ -271,13 +278,7 @@ done
 for node in $(nodes_of "$out" | sed 's/^NODES=//' | tr ',' ' '); do
   if [[ -f "$HERE/nodes/$node.md" ]]; then ok "node file exists: $node"; else bad "node file exists: $node"; fi
 done
-rm -rf "$r"
-
-# --- 22. exact SKIP=none when every node runs ---------------------------------
-r=$(newrepo)
-printf 'package auth\n\nfunc Login() {}\n' > "$r/auth.go"
-printf '# Plan\n' > "$r/PLAN.md"
-out=$(run "$r")
+# --- 22. exact SKIP=none when every node runs (same repo and run as 21) -------
 line_is "every node listed gives SKIP=none" "SKIP=none" "$out"
 rm -rf "$r"
 

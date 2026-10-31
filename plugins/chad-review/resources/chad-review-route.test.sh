@@ -210,9 +210,7 @@ check "plugin resources markdown routes as executable prompt" "Routing: Executab
 printf 'echo hi\n' > "$r/p/resources/x.sh"
 rm -f "$r/p/resources/nodes/verify.md"
 out=$(run "$r")
-if grep -qF "Routing: Executable prompt content" <<<"$out"; then
-  bad "plugin resources shell is not prompt content"
-else ok "plugin resources shell is not prompt content"; fi
+absent "plugin resources shell is not prompt content" "Routing: Executable prompt content" "$out"
 rm -rf "$r"
 
 # --- 16. deleted plugin: resources/*.md found through the HEAD manifest -----

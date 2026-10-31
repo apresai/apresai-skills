@@ -421,6 +421,8 @@ is_exec_md() {
   # instead of guessing: walk the path's `commands|agents|skills` segments and
   # test whether the directory above one held a plugin manifest. Precise in both
   # directions, and it only runs for files that are gone, which are rare.
+  # The last candidate's answer is cached: a deleted plugin's files share one
+  # root, so a large deletion costs one cat-file per root, not one per file.
   if [[ ! -e "$repo_root/$f" ]]; then
     local p="$f" seg cand
     while [[ "$p" == */* ]]; do
@@ -429,7 +431,11 @@ is_exec_md() {
       case "$seg" in
         commands|agents|skills|resources)
           if [[ "$p" == */* ]]; then cand="${p%/*}/"; else cand=""; fi
-          git -C "$repo_root" cat-file -e "HEAD:${cand}.claude-plugin/plugin.json" 2>/dev/null && return 0
+          if [[ "$cand" != "$headmf_cand" || -z "$headmf_rc" ]]; then
+            headmf_cand="$cand"; headmf_rc=1
+            git -C "$repo_root" cat-file -e "HEAD:${cand}.claude-plugin/plugin.json" 2>/dev/null && headmf_rc=0
+          fi
+          [[ "$headmf_rc" -eq 0 ]] && return 0
           ;;
       esac
     done
@@ -442,6 +448,7 @@ is_exec_md() {
 # Exec wins first; then status-bearing markdown (never yaml specs, which stay
 # with prose/spec); trivial prose keeps the no-reviewer path.
 exec_md=""; status_md=""; prose_md=""
+headmf_cand=""; headmf_rc=""   # is_exec_md's cache of the last HEAD manifest probe
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   if is_exec_md "$f"; then

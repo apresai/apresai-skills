@@ -117,14 +117,14 @@ usage() {
 
 cannot() { echo "CANNOT-RUN: $*"; exit 2; }
 
-# Every diff knob pinned. User config (diff.noprefix, mnemonicPrefix,
-# external drivers, algorithm) must not be able to make emit and verify
+# The pinned diff knobs and the base resolver live in git-common.sh, shared
+# with pr-stage.sh. Every knob is pinned so user config (diff.noprefix,
+# mnemonicPrefix, external drivers, algorithm) cannot make emit and verify
 # disagree about the same content.
-GITDIFF=(git -c core.quotepath=false -c diff.noprefix=false
-         -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/
-         -c diff.relative=false
-         diff --no-color --no-ext-diff --no-textconv --no-renames
-              --full-index --diff-algorithm=myers)
+# shellcheck source=git-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-common.sh" \
+  || { echo "CANNOT-RUN: git-common.sh not found beside receipt.sh"; exit 2; }
+GITDIFF=(git "${GIT_DIFF_CONFIG[@]}" "${GIT_DIFF_ARGS[@]}")
 
 json_str() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
@@ -141,18 +141,7 @@ repo_identity() {
   printf '%s\n' "$u"
 }
 
-resolve_base() { # uses $base_flag; prints the ref or returns 1
-  local b
-  if [[ -n "$base_flag" ]]; then printf '%s\n' "$base_flag"; return 0; fi
-  b=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)
-  if [[ -n "$b" ]]; then printf '%s\n' "$b"; return 0; fi
-  for b in origin/main origin/master main master; do
-    if git rev-parse -q --verify "$b^{commit}" >/dev/null 2>&1; then
-      printf '%s\n' "$b"; return 0
-    fi
-  done
-  return 1
-}
+resolve_base() { resolve_base_ref "$base_flag"; } # git-common.sh; uses $base_flag
 
 store_dir() {
   local d
@@ -441,7 +430,14 @@ candidate_row() {
                | add) end) | tostring),
        (.tool // "-"),
        (if (.plugin_version | type) == "string" and .plugin_version != ""
-        then .plugin_version else "unknown" end)]
+        then .plugin_version else "unknown" end),
+       # Plugin major below 3: "1" or "0", decided once here for both the
+       # tie-break and the final --require-tool ultra-audit check. Fail
+       # closed: a missing, non-numeric, or longer-than-6-digit major is old.
+       ((if (.plugin_version | type) == "string"
+         then (.plugin_version | split(".")[0] // "") else "" end) as $maj
+        | if ($maj | test("^[0-9]{1,6}$")) and (($maj | tonumber) >= 3)
+          then "0" else "1" end)]
     | @tsv' 2>/dev/null
   return 0
 }
@@ -555,12 +551,11 @@ do_verify() {
   # merged, same-second emits are reachable, and the bare whole-line sort
   # fallback would otherwise let GO win by lexical accident). Among tied rows
   # of the same verdict, the GitHub copy wins (github < local sorts first).
-  local newest_ts tie_nogo blockers pv_major
+  local newest_ts tie_nogo blockers
   best=$(printf '%s\n' "$matches" | LC_ALL=C sort -t"$(printf '\t')" -k1,1r -k2,2 | head -1)
   newest_ts=$(printf '%s' "$best" | cut -f1)
   tie_nogo=$(printf '%s\n' "$matches" | awk -F'\t' -v t="$newest_ts" -v rt="$require_tool" '
-      function old(v) { return (v !~ /^[0-9]+(\.|$)/ || v + 0 < 3) }
-      $1 == t && ($3 != "GO" || $9 != "0" || (rt == "ultra-audit" && old($11)))' \
+      $1 == t && ($3 != "GO" || $9 != "0" || (rt == "ultra-audit" && $12 != "0"))' \
     | LC_ALL=C sort -t"$(printf '\t')" -k2,2 | head -1)
   [[ -n "$tie_nogo" ]] && best="$tie_nogo"
   verdict=$(printf '%s' "$best" | cut -f3)
@@ -581,11 +576,9 @@ do_verify() {
   # The merge gate's 3.0.0 contract: a GO written by a 2.x plugin recorded
   # zeros after a confidence-80 filter, so it does not state zero open
   # findings. plugin_version is the only marker (schema_version stayed 1);
-  # an unparseable one ("unknown") fails closed.
+  # an unparseable one ("unknown") fails closed. candidate_row field 12.
   if [[ "$require_tool" == "ultra-audit" ]]; then
-    pv_major=$(printf '%s' "$best" | cut -f11)
-    pv_major=${pv_major%%.*}
-    if [[ ! "$pv_major" =~ ^[0-9]+$ ]] || [[ ${#pv_major} -gt 6 ]] || (( 10#$pv_major < 3 )); then
+    if [[ "$(printf '%s' "$best" | cut -f12)" != "0" ]]; then
       echo "FAIL: newest receipt is a GO from chad-review $(printf '%s' "$best" | cut -f11), not 3.0.0+; re-review with 3.0.0 (/ultra-audit) to emit a receipt the merge gate accepts"
       return 1
     fi

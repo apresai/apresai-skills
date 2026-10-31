@@ -6,11 +6,12 @@
 # staged worktree; base resolution matches receipt.sh; odd names, symlinks,
 # nested repos, ignored-forced files and submodule bumps are handled or
 # reported; user diff/apply config cannot break staging; a failed stage
-# cleans up and exits 2; check compares real and staged content; export is
-# limited to staged paths; remove cleans up.
+# cleans up and exits 2; check compares real and staged content; remove
+# cleans up.
 set -uo pipefail
 
 SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pr-stage.sh"
+RECEIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/receipt.sh"
 PIPE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pipeline.sh"
 pass=0; fail=0
 TMPS=()
@@ -31,6 +32,13 @@ newrepo(){
   echo "$d"
 }
 val(){ printf '%s\n' "$2" | sed -n "s/^$1=//p"; }
+# receipt_base <repo>: the base_ref receipt.sh resolves there (emits a NO-GO
+# receipt into that repo's own store, which the temp repo discards).
+receipt_base(){ local f; f=$( cd "$1" && bash "$RECEIPT" emit --verdict NO-GO 2>/dev/null | head -1 )
+  [[ -n "$f" && -f "$f" ]] && sed -n 's/.*"base_ref": "\(.*\)",/\1/p' "$f"; }
+same_base(){ # same_base <desc> <repo> <stage output>
+  local want got; want=$(val BASE "$3"); got=$(receipt_base "$2")
+  if [[ -n "$want" && "$want" == "$got" ]]; then ok "$1"; else bad "$1 (pr-stage '$want', receipt.sh '$got')"; fi; }
 
 # --- 1. two commits plus a dirty edit plus an untracked file all stage --------
 r=$(newrepo)
@@ -56,18 +64,6 @@ if [[ -z "$(git -C "$dir" diff --cached --name-only)" ]]; then ok "nothing left 
 pl=$( cd "$dir" && bash "$PIPE" 2>&1 )
 check "pipeline sees all four files" "FILES=4" "$pl"
 
-# --- 2. export isolates edits made after staging ------------------------------
-printf 'package p\n\nfunc A() { _ = 1 }\n' > "$dir/a.go"
-patch=$(bash "$SCRIPT" export "$dir")
-check "export carries the later edit" "func A() { _ = 1 }" "$patch"
-if grep -qF "func B()" <<<"$patch"; then bad "export omits the staged content"; else ok "export omits the staged content"; fi
-if ( cd "$r" && git apply --check - <<<"$patch" ); then ok "export patch applies to the real branch"; else bad "export patch applies to the real branch"; fi
-printf 'stray\n' > "$dir/repro_test.go"; printf 'log\n' > "$dir/build.log"
-rm "$dir/b.go"
-patch=$(bash "$SCRIPT" export "$dir")
-if grep -qF "repro_test.go" <<<"$patch" || grep -qF "build.log" <<<"$patch"; then bad "export omits files created after staging"; else ok "export omits files created after staging"; fi
-check "export carries a deletion of a staged path" "deleted file mode" "$patch"
-
 # --- 3. remove deletes the worktree -------------------------------------------
 bash "$SCRIPT" remove "$dir"
 if [[ ! -d "$dir" ]]; then ok "remove deletes the staged worktree"; else bad "remove deletes the staged worktree"; fi
@@ -80,8 +76,8 @@ if [[ "$rc" -eq 1 ]]; then ok "nothing to stage exits 1"; else bad "nothing to s
 # --- 5. usage errors exit 2 ---------------------------------------------------
 ( bash "$SCRIPT" >/dev/null 2>&1 ); rc=$?
 if [[ "$rc" -eq 2 ]]; then ok "no subcommand exits 2"; else bad "no subcommand exits 2 (got $rc)"; fi
-( bash "$SCRIPT" export /nonexistent >/dev/null 2>&1 ); rc=$?
-if [[ "$rc" -eq 2 ]]; then ok "export on a missing dir exits 2"; else bad "export on a missing dir exits 2 (got $rc)"; fi
+( bash "$SCRIPT" export "$r" >/dev/null 2>&1 ); rc=$?
+if [[ "$rc" -eq 2 ]]; then ok "the retired export subcommand is usage (exit 2)"; else bad "the retired export subcommand is usage (exit 2) (got $rc)"; fi
 d=$(mktemp -d); TMPS+=("$d")
 ( cd "$d" && git init -q . ) >/dev/null
 ( bash "$SCRIPT" remove "$d" >/dev/null 2>&1 ); rc=$?
@@ -98,11 +94,13 @@ git clone -q "$up" "$cl" >/dev/null 2>&1
   && printf 'f\n' > f.txt && git add -A && git commit -qm f ) >/dev/null 2>&1
 out=$( cd "$cl" && bash "$SCRIPT" stage 2>/dev/null ); dir=$(val DIR "$out"); TMPS+=("$dir")
 check "default base follows origin/HEAD" "BASE=origin/develop" "$out"
+same_base "receipt.sh resolves the same origin/HEAD base" "$cl" "$out"
 check "origin/HEAD base stages only the branch's own file" "FILES=1" "$out"
 [[ -n "$dir" ]] && bash "$SCRIPT" remove "$dir"
 ( cd "$cl" && git remote set-head origin -d ) >/dev/null 2>&1
 out=$( cd "$cl" && bash "$SCRIPT" stage 2>/dev/null ); dir=$(val DIR "$out"); TMPS+=("$dir")
 check "without origin/HEAD, origin/main comes next" "BASE=origin/main" "$out"
+same_base "receipt.sh resolves the same origin/main base" "$cl" "$out"
 [[ -n "$dir" ]] && bash "$SCRIPT" remove "$dir"
 m=$(mktemp -d); TMPS+=("$m")
 ( cd "$m" && git init -q -b master . && printf 'base\n' > base.txt && git add -A && git commit -qm base \
@@ -110,6 +108,7 @@ m=$(mktemp -d); TMPS+=("$m")
 out=$( cd "$m" && bash "$SCRIPT" stage 2>&1 ); rc=$?; dir=$(val DIR "$out"); TMPS+=("$dir")
 if [[ "$rc" -eq 0 ]]; then ok "master-default repo stages (rc 0)"; else bad "master-default repo stages (rc $rc): $out"; fi
 check "master-default repo resolves master" "BASE=master" "$out"
+same_base "receipt.sh resolves the same master base" "$m" "$out"
 [[ -n "$dir" ]] && bash "$SCRIPT" remove "$dir"
 ( cd "$m" && bash "$SCRIPT" stage --base nosuch >/dev/null 2>&1 ); rc=$?
 if [[ "$rc" -eq 2 ]]; then ok "unknown base exits 2"; else bad "unknown base exits 2 (got $rc)"; fi
@@ -145,9 +144,6 @@ pl=$( cd "$dir" && bash "$PIPE" 2>&1 )
 check "pipeline sees the ignored-forced file" "FILES=3" "$pl"
 ( bash "$SCRIPT" check "$dir" >/dev/null 2>&1 ); rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "check: ignored-forced file matches its intent-to-add copy"; else bad "check: ignored-forced file matches its intent-to-add copy (rc $rc)"; fi
-printf 'gen2\n' > "$dir/build/gen.txt"
-patch=$(bash "$SCRIPT" export "$dir")
-check "export carries an edit to an ignored-forced file" "+gen2" "$patch"
 [[ -n "$dir" ]] && bash "$SCRIPT" remove "$dir"
 
 # --- 9. submodule pointer bump is reported, not dropped -----------------------

@@ -60,12 +60,14 @@ while [[ $# -gt 0 ]]; do
     *) usage ;;
   esac
 done
+# Resolved once: the --staged same-dir check and the scans below both use it.
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [[ -n "$staged_real" ]]; then
   [[ "$mode" == "last-commit" ]] && usage
   staged_real=$(git -C "$staged_real" rev-parse --show-toplevel 2>/dev/null) || {
     echo "pipeline.sh: --staged needs the real git worktree" >&2; usage; }
   # Passing the staged dir itself would bring back the miscount --staged exists to fix.
-  if [[ "$staged_real" == "$(git rev-parse --show-toplevel 2>/dev/null || true)" ]]; then
+  if [[ "$staged_real" == "$repo_root" ]]; then
     echo "pipeline.sh: --staged takes the REAL worktree, not the staged dir" >&2; usage
   fi
 fi
@@ -92,7 +94,7 @@ empty_plan() {
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   empty_plan 0 "not a git repository"
 fi
-repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+[[ -n "$repo_root" ]] || repo_root="."
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 if [[ "$mode" == "last-commit" ]]; then
@@ -175,13 +177,6 @@ is_code() {
   return 1
 }
 
-is_openapi_path() {
-  case "$1" in
-    *openapi*|*swagger*) return 0 ;;
-  esac
-  return 1
-}
-
 # --- counts -------------------------------------------------------------------
 
 n_code=0
@@ -206,39 +201,37 @@ file_lines() {
   echo "${n:-0}"
 }
 
+# risk_from_path <path>: prints auth, migration, api, or nothing. Matching
+# "/$f" lets one */dir/* pattern cover a top-level dir and a nested one.
 risk_from_path() {
-  local f="$1" b
-  b=$(basename "$1")
-  case "$f" in
-    auth/*|oauth/*|session/*|middleware/*|*/auth/*|*/oauth/*|*/session/*|*/middleware/*) echo "auth"; return ;;
-    billing/*|payment/*|payments/*|stripe/*|crypto/*) echo "auth"; return ;;
+  case "/$1" in
+    */auth/*|*/oauth/*|*/session/*|*/middleware/*) echo "auth"; return ;;
     */billing/*|*/payment/*|*/payments/*|*/stripe/*|*/crypto/*) echo "auth"; return ;;
-    migrations/*|*/migrations/*|*schema.prisma*|dynamodb*|*/dynamodb*) echo "migration"; return ;;
+    */migrations/*|*schema.prisma*|*/dynamodb*) echo "migration"; return ;;
     *openapi*|*swagger*) echo "api"; return ;;
   esac
-  case "$b" in
+  local b="${1%/}"
+  case "${b##*/}" in
     auth.go|auth.ts|auth.tsx|auth.js|auth.py|auth.swift|auth.rs) echo "auth"; return ;;
     *oauth*|*jwt*) echo "auth"; return ;;
   esac
-  echo ""
 }
 
+# Manifests, config, docs and tests carry no path risk and no production
+# lines. Everything else is risk-checked; code also counts toward size. A
+# non-code openapi/swagger path is api even when an earlier rule (auth/,
+# migrations/) claims it first in risk_from_path.
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
-  if is_manifest "$f" || is_config "$f" || is_docs "$f" || is_test "$f"; then
-    :
-  elif is_code "$f"; then
+  if is_manifest "$f" || is_config "$f" || is_docs "$f" || is_test "$f"; then continue; fi
+  if is_code "$f"; then
     n_code=$((n_code+1))
     n_prod_lines=$((n_prod_lines + $(file_lines "$f")))
-    rh=$(risk_from_path "$f")
-    [[ -n "$rh" ]] && risk_hits+="$rh"$'\n'
   else
-    if is_openapi_path "$f"; then
-      risk_hits+="api"$'\n'
-    fi
-    rh=$(risk_from_path "$f")
-    [[ -n "$rh" ]] && risk_hits+="$rh"$'\n'
+    case "$f" in *openapi*|*swagger*) risk_hits+="api"$'\n' ;; esac
   fi
+  rh=$(risk_from_path "$f")
+  [[ -n "$rh" ]] && risk_hits+="$rh"$'\n'
 done <<< "$files"
 
 # --- route.sh: exec-md, status-bearing, language blocks -----------------------
@@ -260,7 +253,6 @@ while IFS= read -r line; do
     "--- Routing: Executable prompt content"*) has_exec=1; lang_blocks=$((lang_blocks+1)) ;;
     "--- Routing: Docs / status-bearing"*) has_status=1; lang_blocks=$((lang_blocks+1)) ;;
     "--- Routing: Docs / spec"*) prose_blocks=$((prose_blocks+1)) ;;
-    "--- Routing: Other"*) lang_blocks=$((lang_blocks+1)) ;;
     "--- Routing:"*) lang_blocks=$((lang_blocks+1)) ;;
     # Only route's "Files detected" count line. A bare *"OpenAPI spec"* also
     # matched the Swift codegen hint ("... vs the OpenAPI spec"), so every
@@ -278,9 +270,8 @@ fi
 
 # --- spec presence ------------------------------------------------------------
 
-spec=no
-printf '%s\n' "$files" | grep -qxF 'PLAN.md' && spec=yes
-printf '%s\n' "$files" | grep -qxF 'plan.md' && spec=yes
+spec=no; spec_on=0
+if grep -qxF -e 'PLAN.md' -e 'plan.md' <<< "$files"; then spec=yes; spec_on=1; fi
 
 # --- size ask and depth --------------------------------------------------------
 
@@ -289,17 +280,37 @@ if [[ "$file_count" -gt 50 || "$n_prod_lines" -gt 3000 ]]; then
   scope_ask=1
 fi
 
+# append <var> <separator> <item>: add item to the list held in var.
+append() { if [[ -z "${!1}" ]]; then printf -v "$1" '%s' "$3"; else printf -v "$1" '%s%s%s' "${!1}" "$2" "$3"; fi; }
+
 depth="fast"
 why=""
-add_why() { if [[ -z "$why" ]]; then why="$1"; else why="$why, $1"; fi; }
-[[ "$full" -eq 1 ]] && add_why "--full"
-[[ "$risk" != "none" ]] && add_why "risk: $risk"
-[[ "$has_exec" -eq 1 ]] && add_why "executable prompt content"
-[[ "$has_status" -eq 1 ]] && add_why "status-bearing docs"
-[[ "$file_count" -gt 15 ]] && add_why "$file_count files"
-[[ "$n_prod_lines" -gt 400 ]] && add_why "$n_prod_lines production lines"
-[[ "$route_failed" -eq 1 ]] && add_why "routing failed"
+[[ "$full" -eq 1 ]] && append why ", " "--full"
+[[ "$risk" != "none" ]] && append why ", " "risk: $risk"
+[[ "$has_exec" -eq 1 ]] && append why ", " "executable prompt content"
+[[ "$has_status" -eq 1 ]] && append why ", " "status-bearing docs"
+[[ "$file_count" -gt 15 ]] && append why ", " "$file_count files"
+[[ "$n_prod_lines" -gt 400 ]] && append why ", " "$n_prod_lines production lines"
+[[ "$route_failed" -eq 1 ]] && append why ", " "routing failed"
 [[ -n "$why" ]] && depth="deep"
+
+# Finder agents before verification. fast: one reviewer over the whole diff.
+# deep: one per routing block in place of it, prose blocks included, plus
+# challenger and sweep, plus spec-vs-diff when listed. Verifiers scale with the finding
+# count (nodes/verify.md) and are not counted here.
+if [[ "$depth" == "deep" ]]; then
+  deep=1
+  agents=$((lang_blocks + prose_blocks))
+  [[ "$agents" -lt 1 ]] && agents=1
+  agents=$((agents + 2))
+  reason="deep: $why"
+else
+  deep=0
+  agents=1
+  reason="fast: no high-risk path, no prompt content, no status-bearing docs, small diff"
+fi
+[[ "$spec" == "yes" ]] && agents=$((agents + 1))
+[[ "$scope_ask" -eq 1 ]] && reason="$reason; diff exceeds size ask line"
 
 # --- nodes --------------------------------------------------------------------
 # Order is load-bearing. backup, gate, tests and freshness-audit run in the
@@ -311,45 +322,28 @@ add_why() { if [[ -z "$why" ]]; then why="$1"; else why="$why, $1"; fi; }
 
 nodes=""
 skip=""
-add_node() { if [[ -z "$nodes" ]]; then nodes="$1"; else nodes="$nodes,$1"; fi; }
-add_skip() { if [[ -z "$skip" ]]; then skip="$1"; else skip="$skip,$1"; fi; }
+# plan_node <name> [0|1]: list the node (flag 1 or absent), else record it skipped.
+plan_node() { if [[ "${2:-1}" -eq 1 ]]; then append nodes "," "$1"; else append skip "," "$1"; fi; }
 
-if [[ "$untracked" -gt 0 ]]; then add_node "untracked-backup"; else add_skip "untracked-backup"; fi
-add_node "gate"
-add_node "tests"
-add_node "freshness-audit"
-if [[ "$spec" == "yes" ]]; then add_node "spec-vs-diff"; else add_skip "spec-vs-diff"; fi
+plan_node untracked-backup "$(( untracked > 0 ))"
+plan_node gate
+plan_node tests
+plan_node freshness-audit
+plan_node spec-vs-diff "$spec_on"
 # simplify needs production code (n_code excludes tests, manifests, config and
 # docs), and a working route so prompt files are known and excluded from it.
 # Mixed prompt-plus-code diffs simplify the code files only.
-if [[ "$n_code" -gt 0 && "$route_failed" -eq 0 ]]; then add_node "simplify"; else add_skip "simplify"; fi
-add_node "docs-apply"
-add_node "docs-drift"
-add_node "contract-mirror"
-add_node "skim"
-add_node "impl-review"
-if [[ "$depth" == "deep" ]]; then add_node "challenger"; else add_skip "challenger"; fi
-add_node "verify"
-if [[ "$depth" == "deep" ]]; then add_node "sweep"; else add_skip "sweep"; fi
-add_node "receipt"
+plan_node simplify "$(( n_code > 0 && route_failed == 0 ))"
+plan_node docs-apply
+plan_node docs-drift
+plan_node contract-mirror
+plan_node skim
+plan_node impl-review
+plan_node challenger "$deep"
+plan_node verify
+plan_node sweep "$deep"
+plan_node receipt
 [[ -z "$skip" ]] && skip="none"
-
-# Finder agents before verification. fast: one reviewer over the whole diff.
-# deep: one per routing block in place of it, prose blocks included, plus
-# challenger and sweep, plus spec-vs-diff when listed. Verifiers scale with the finding
-# count (nodes/verify.md) and are not counted here.
-if [[ "$depth" == "fast" ]]; then
-  agents=1
-else
-  agents=$((lang_blocks + prose_blocks))
-  [[ "$agents" -lt 1 ]] && agents=1
-  agents=$((agents + 2))
-fi
-[[ "$spec" == "yes" ]] && agents=$((agents + 1))
-
-if [[ "$depth" == "fast" ]]; then reason="fast: no high-risk path, no prompt content, no status-bearing docs, small diff"
-else reason="deep: $why"; fi
-[[ "$scope_ask" -eq 1 ]] && reason="$reason; diff exceeds size ask line"
 
 echo "MODE=$depth"
 echo "RISK=$risk"
