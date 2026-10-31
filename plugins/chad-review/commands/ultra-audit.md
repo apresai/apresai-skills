@@ -16,6 +16,12 @@ quote code or command output that disproves it, and every surviving finding
 on the change is fixed. (3.0.0 removed the old tiers and the confidence-80
 filter, which were how real findings got skipped.)
 
+**Cost.** Deep depth is expensive: its first full run, on a 600-line prompt
+and shell diff, took 50 Opus agents, about 4.1M subagent tokens, and 26
+minutes (2026-10-31). Fast depth launches one finder plus verifiers. Every
+deep trigger is a reason the extra cost buys something; do not force deep
+with `--full` by habit.
+
 **Dependencies are not updated here.** Review audits them. `/deps-update`
 brings a repo to the newest in-range releases as its own PR.
 
