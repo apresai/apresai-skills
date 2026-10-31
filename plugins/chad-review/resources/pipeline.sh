@@ -1,52 +1,100 @@
 #!/usr/bin/env bash
 # pipeline.sh: emit the ultra-audit execution plan for this diff.
 #
-# A decision DAG, not a prompt. The parent executes NODES= literally and
-# does not re-derive the tier. Ambiguity goes up a tier, never down.
-# --full is the only override and it only goes up.
+# Two depths, one rule. Depth decides how many agents LOOK; it never decides
+# which findings are KEPT. Every finding from either depth goes through
+# evidence-required verification and, unless refuted, gets fixed (3.0.0).
+#
+#   fast (default): gate, deterministic scans, tests, freshness audit, skim,
+#     one Opus finder over the whole diff, verify.
+#   deep: the whole-diff finder is REPLACED by one finder per routing block
+#     (prose blocks included), plus a fresh-context challenger and one gap
+#     sweep. Chosen when a high-risk path is touched (auth, billing, crypto,
+#     migrations, OpenAPI), when the diff carries executable prompt content,
+#     when it carries status-bearing docs (route's "Docs / status-bearing"
+#     block; that block's finder reads each flagged doc in full, since a stale
+#     "Status: Active" line is rarely inside the hunks), when it passes 15
+#     files or 400 production lines, when routing failed, or with --full.
+#
+# Dependency UPDATES are not part of review. /deps-update does them as their
+# own PR. Review only audits (freshness-audit).
+#
+# Input-driven omissions, not depth: spec-vs-diff needs a changed PLAN.md;
+# simplify needs production code and a working route (so prompt files are
+# known and excluded). Test files, manifests, config and docs are not
+# production code here, so a test-only diff skips simplify by design.
+# untracked-backup needs untracked files in the REAL worktree.
+#
+# STAGED REVIEW. A multi-commit PR branch is reviewed whole by running this
+# inside the worktree pr-stage.sh creates, never with --last-commit on a fix
+# commit. Pass --staged <real-worktree> there. In the staged worktree every
+# file the branch added shows as untracked (pr-stage leaves nothing staged),
+# so its untracked list is the diff, not uncommitted work. With --staged the
+# staged dir's files and line counts still drive the plan, but UNTRACKED and
+# the untracked-backup node come from <real-worktree>, where the backup, the
+# apply nodes and untracked-guard verify --restore run.
 #
 # USAGE
 #   bash pipeline.sh [--last-commit] [--full]
+#   bash pipeline.sh --staged <real-worktree> [--full]   # inside a pr-stage.sh dir
 #
 # OUTPUT
-# One KEY=value block on stdout, then a REASON line. Always prints TIER
-# (none|leaf|deps|small|standard|audit). Exit 0 when a plan was produced,
-# including TIER=none. Exit 2 for usage. Exit 1 only when the script itself
-# cannot run.
+# One KEY=value block on stdout, then a REASON line. MODE is fast, deep, or
+# none. Exit 0 when a plan was produced, including MODE=none. Exit 2 for
+# usage (including --staged without a git worktree, or with --last-commit).
+# Exit 1 only when the script itself cannot run.
 #
 # BASH 3.2. No associative arrays, no mapfile. Grep-no-match is normal:
 # every command substitution that can match nothing ends in || true.
 set -euo pipefail
 
+usage() { echo "usage: pipeline.sh [--last-commit] [--full] | --staged <real-worktree> [--full]" >&2; exit 2; }
 full=0
 mode="working-tree"
-for arg in "$@"; do
-  case "$arg" in
-    --full) full=1 ;;
-    --last-commit) mode="last-commit" ;;
-    *) echo "usage: pipeline.sh [--last-commit] [--full]" >&2; exit 2 ;;
+staged_real=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --full) full=1; shift ;;
+    --last-commit) mode="last-commit"; shift ;;
+    --staged) [[ $# -ge 2 && -n "$2" ]] || usage; staged_real="$2"; shift 2 ;;
+    *) usage ;;
   esac
 done
+# Resolved once: the --staged same-dir check and the scans below both use it.
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [[ -n "$staged_real" ]]; then
+  [[ "$mode" == "last-commit" ]] && usage
+  staged_real=$(git -C "$staged_real" rev-parse --show-toplevel 2>/dev/null) || {
+    echo "pipeline.sh: --staged needs the real git worktree" >&2; usage; }
+  # Passing the staged dir itself would bring back the miscount --staged exists to fix.
+  if [[ "$staged_real" == "$repo_root" ]]; then
+    echo "pipeline.sh: --staged takes the REAL worktree, not the staged dir" >&2; usage
+  fi
+fi
 
-if ! git rev-parse --git-dir >/dev/null 2>&1; then
-  echo "TIER=none"
+ALL_NODES="untracked-backup,gate,tests,freshness-audit,spec-vs-diff,simplify,docs-apply,docs-drift,contract-mirror,skim,impl-review,challenger,verify,sweep,receipt"
+
+empty_plan() {
+  echo "MODE=none"
   echo "RISK=none"
-  echo "FLOORS=none"
   echo "AGENTS=0"
-  echo "APPLY=none"
   echo "SPEC=no"
   echo "SCOPE_ASK=0"
-  echo "UNTRACKED=0"
+  echo "UNTRACKED=$1"
   echo "FILES=0"
   echo "LINES=0"
   echo "LANG_BLOCKS=0"
+  echo "PROSE_BLOCKS=0"
   echo "NODES="
-  echo "SKIP=gate,untracked-backup,freshness-audit,freshness-update,docs-drift,contract-mirror,tests,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score,skim,receipt"
-  echo "REASON=not a git repository"
+  echo "SKIP=$ALL_NODES"
+  echo "REASON=$2"
   exit 0
-fi
+}
 
-repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  empty_plan 0 "not a git repository"
+fi
+[[ -n "$repo_root" ]] || repo_root="."
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 if [[ "$mode" == "last-commit" ]]; then
@@ -57,28 +105,18 @@ else
              git -C "$repo_root" -c core.quotepath=false ls-files --others --exclude-standard 2>/dev/null; } | sort -u || true )
 fi
 
-untracked=$(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null | grep -c . || true)
+# The backup protects the REAL worktree's untracked files. In a staged
+# worktree (--staged) the local untracked list is the branch diff itself.
+untracked_root="$repo_root"
+[[ -n "$staged_real" ]] && untracked_root="$staged_real"
+untracked=$(git -C "$untracked_root" ls-files --others --exclude-standard 2>/dev/null | grep -c . || true)
 [[ -n "$untracked" ]] || untracked=0
 
 file_count=$(printf '%s' "$files" | grep -c . || true)
 [[ -n "$file_count" ]] || file_count=0
 
 if [[ "$file_count" -eq 0 ]]; then
-  echo "TIER=none"
-  echo "RISK=none"
-  echo "FLOORS=none"
-  echo "AGENTS=0"
-  echo "APPLY=none"
-  echo "SPEC=no"
-  echo "SCOPE_ASK=0"
-  echo "UNTRACKED=$untracked"
-  echo "FILES=0"
-  echo "LINES=0"
-  echo "LANG_BLOCKS=0"
-  echo "NODES="
-  echo "SKIP=gate,untracked-backup,freshness-audit,freshness-update,docs-drift,contract-mirror,tests,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score,skim,receipt"
-  echo "REASON=nothing to review"
-  exit 0
+  empty_plan "$untracked" "nothing to review"
 fi
 
 # --- kind predicates ----------------------------------------------------------
@@ -132,22 +170,16 @@ is_code() {
     Makefile|Dockerfile|Justfile|Taskfile.yml) return 0 ;;
   esac
   case "$1" in
-    *.go|*.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.swift|*.py|*.rs|*.kt|*.java|*.rb|*.c|*.h|*.m|*.mm) return 0 ;;
+    *.go|*.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.swift|*.py|*.rs|*.kt|*.kts|*.java|*.rb|*.c|*.h|*.cc|*.cpp|*.hpp|*.m|*.mm) return 0 ;;
+    *.dart|*.vue|*.svelte|*.cs|*.php|*.scala|*.ex|*.exs|*.lua|*.pl|*.r|*.R) return 0 ;;
     *.sh|*.bash|*.zsh|*.tf|*.tfvars|*.sql) return 0 ;;
-  esac
-  return 1
-}
-
-is_openapi_path() {
-  case "$1" in
-    *openapi*|*swagger*) return 0 ;;
   esac
   return 1
 }
 
 # --- counts -------------------------------------------------------------------
 
-n_docs=0; n_config=0; n_manifest=0; n_code=0; n_test=0; n_other=0
+n_code=0
 n_prod_lines=0
 risk_hits=""
 
@@ -169,41 +201,37 @@ file_lines() {
   echo "${n:-0}"
 }
 
+# risk_from_path <path>: prints auth, migration, api, or nothing. Matching
+# "/$f" lets one */dir/* pattern cover a top-level dir and a nested one.
 risk_from_path() {
-  local f="$1" b
-  b=$(basename "$1")
-  case "$f" in
+  case "/$1" in
     */auth/*|*/oauth/*|*/session/*|*/middleware/*) echo "auth"; return ;;
     */billing/*|*/payment/*|*/payments/*|*/stripe/*|*/crypto/*) echo "auth"; return ;;
     */migrations/*|*schema.prisma*|*/dynamodb*) echo "migration"; return ;;
     *openapi*|*swagger*) echo "api"; return ;;
   esac
-  case "$b" in
+  local b="${1%/}"
+  case "${b##*/}" in
     auth.go|auth.ts|auth.tsx|auth.js|auth.py|auth.swift|auth.rs) echo "auth"; return ;;
     *oauth*|*jwt*) echo "auth"; return ;;
   esac
-  echo ""
 }
 
+# Manifests, config, docs and tests carry no path risk and no production
+# lines. Everything else is risk-checked; code also counts toward size. A
+# non-code openapi/swagger path is api even when an earlier rule (auth/,
+# migrations/) claims it first in risk_from_path.
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
-  if is_manifest "$f"; then n_manifest=$((n_manifest+1))
-  elif is_config "$f"; then n_config=$((n_config+1))
-  elif is_docs "$f"; then n_docs=$((n_docs+1))
-  elif is_test "$f"; then n_test=$((n_test+1))
-  elif is_code "$f"; then
+  if is_manifest "$f" || is_config "$f" || is_docs "$f" || is_test "$f"; then continue; fi
+  if is_code "$f"; then
     n_code=$((n_code+1))
     n_prod_lines=$((n_prod_lines + $(file_lines "$f")))
-    rh=$(risk_from_path "$f")
-    [[ -n "$rh" ]] && risk_hits+="$rh"$'\n'
   else
-    n_other=$((n_other+1))
-    if is_openapi_path "$f"; then
-      risk_hits+="api"$'\n'
-    fi
-    rh=$(risk_from_path "$f")
-    [[ -n "$rh" ]] && risk_hits+="$rh"$'\n'
+    case "$f" in *openapi*|*swagger*) risk_hits+="api"$'\n' ;; esac
   fi
+  rh=$(risk_from_path "$f")
+  [[ -n "$rh" ]] && risk_hits+="$rh"$'\n'
 done <<< "$files"
 
 # --- route.sh: exec-md, status-bearing, language blocks -----------------------
@@ -216,6 +244,7 @@ route_out=$(bash "$here/chad-review-route.sh" "${route_args[@]+"${route_args[@]}
 has_exec=0
 has_status=0
 lang_blocks=0
+prose_blocks=0
 has_openapi=0
 route_failed=0
 [[ "$route_rc" -ne 0 ]] && route_failed=1
@@ -223,10 +252,12 @@ while IFS= read -r line; do
   case "$line" in
     "--- Routing: Executable prompt content"*) has_exec=1; lang_blocks=$((lang_blocks+1)) ;;
     "--- Routing: Docs / status-bearing"*) has_status=1; lang_blocks=$((lang_blocks+1)) ;;
-    "--- Routing: Docs / spec"*) ;;
-    "--- Routing: Other"*) lang_blocks=$((lang_blocks+1)) ;;
+    "--- Routing: Docs / spec"*) prose_blocks=$((prose_blocks+1)) ;;
     "--- Routing:"*) lang_blocks=$((lang_blocks+1)) ;;
-    *"OpenAPI spec"*) has_openapi=1 ;;
+    # Only route's "Files detected" count line. A bare *"OpenAPI spec"* also
+    # matched the Swift codegen hint ("... vs the OpenAPI spec"), so every
+    # Swift diff went RISK=api.
+    "  OpenAPI spec             : "*) has_openapi=1 ;;
   esac
 done <<< "$route_out"
 
@@ -239,237 +270,91 @@ fi
 
 # --- spec presence ------------------------------------------------------------
 
-spec=no
-printf '%s\n' "$files" | grep -qxF 'PLAN.md' && spec=yes
-printf '%s\n' "$files" | grep -qxF 'plan.md' && spec=yes
+spec=no; spec_on=0
+if grep -qxF -e 'PLAN.md' -e 'plan.md' <<< "$files"; then spec=yes; spec_on=1; fi
 
-# --- floors and tier ----------------------------------------------------------
+# --- size ask and depth --------------------------------------------------------
 
-floors=""
-add_floor() {
-  if [[ -z "$floors" ]]; then floors="$1"; else floors="$floors,$1"; fi
-}
-
-tier=""
 scope_ask=0
-
-if [[ "$full" -eq 1 ]]; then
-  add_floor "full"
-  tier="audit"
-fi
-
-if [[ "$risk" != "none" ]]; then
-  add_floor "$risk"
-  tier="audit"
-fi
-
 if [[ "$file_count" -gt 50 || "$n_prod_lines" -gt 3000 ]]; then
-  add_floor "size"
   scope_ask=1
-  tier="audit"
 fi
 
-if [[ "$has_exec" -eq 1 ]]; then
-  add_floor "exec-md"
-  if [[ -z "$tier" || "$tier" == "leaf" || "$tier" == "deps" || "$tier" == "small" ]]; then
-    tier="standard"
-  fi
+# append <var> <separator> <item>: add item to the list held in var.
+append() { if [[ -z "${!1}" ]]; then printf -v "$1" '%s' "$3"; else printf -v "$1" '%s%s%s' "${!1}" "$2" "$3"; fi; }
+
+depth="fast"
+why=""
+[[ "$full" -eq 1 ]] && append why ", " "--full"
+[[ "$risk" != "none" ]] && append why ", " "risk: $risk"
+[[ "$has_exec" -eq 1 ]] && append why ", " "executable prompt content"
+[[ "$has_status" -eq 1 ]] && append why ", " "status-bearing docs"
+[[ "$file_count" -gt 15 ]] && append why ", " "$file_count files"
+[[ "$n_prod_lines" -gt 400 ]] && append why ", " "$n_prod_lines production lines"
+[[ "$route_failed" -eq 1 ]] && append why ", " "routing failed"
+[[ -n "$why" ]] && depth="deep"
+
+# Finder agents before verification. fast: one reviewer over the whole diff.
+# deep: one per routing block in place of it, prose blocks included, plus
+# challenger and sweep, plus spec-vs-diff when listed. Verifiers scale with the finding
+# count (nodes/verify.md) and are not counted here.
+if [[ "$depth" == "deep" ]]; then
+  deep=1
+  agents=$((lang_blocks + prose_blocks))
+  [[ "$agents" -lt 1 ]] && agents=1
+  agents=$((agents + 2))
+  reason="deep: $why"
+else
+  deep=0
+  agents=1
+  reason="fast: no high-risk path, no prompt content, no status-bearing docs, small diff"
 fi
-
-if [[ "$route_failed" -eq 1 ]]; then
-  add_floor "route-failed"
-  if [[ -z "$tier" || "$tier" == "leaf" || "$tier" == "deps" || "$tier" == "small" ]]; then
-    tier="standard"
-  fi
-fi
-
-if [[ "$has_status" -eq 1 ]]; then
-  add_floor "status-docs"
-  if [[ -z "$tier" || "$tier" == "leaf" || "$tier" == "deps" || "$tier" == "small" ]]; then
-    tier="standard"
-  fi
-fi
-
-tiny=0
-[[ "$file_count" -le 4 && "$n_prod_lines" -le 40 ]] && tiny=1
-
-n_md=$(printf '%s\n' "$files" | grep -c -E '\.(md|mdx)$' || true)
-[[ -n "$n_md" ]] || n_md=0
-
-# Manifests plus docs or config is still a deps review: the update node
-# is the point. Docs-only / config-only (no code, no tests, no manifests)
-# is the only leaf.
-deps_only=0
-[[ "$n_manifest" -gt 0 && "$n_code" -eq 0 && "$n_test" -eq 0 && "$has_exec" -eq 0 ]] && deps_only=1
-
-no_code=0
-[[ "$n_code" -eq 0 && "$n_test" -eq 0 && "$n_manifest" -eq 0 && "$n_other" -eq 0 && "$has_exec" -eq 0 ]] && no_code=1
-
-if [[ -z "$tier" ]]; then
-  if [[ "$deps_only" -eq 1 ]]; then
-    tier="deps"
-  elif [[ "$no_code" -eq 1 ]]; then
-    tier="leaf"
-  elif [[ "$lang_blocks" -le 1 && "$file_count" -le 15 && "$n_prod_lines" -le 200 ]]; then
-    tier="small"
-  else
-    tier="standard"
-  fi
-fi
-
-[[ -z "$floors" ]] && floors="none"
+[[ "$spec" == "yes" ]] && agents=$((agents + 1))
+[[ "$scope_ask" -eq 1 ]] && reason="$reason; diff exceeds size ask line"
 
 # --- nodes --------------------------------------------------------------------
+# Order is load-bearing. backup, gate, tests and freshness-audit run in the
+# REAL worktree; spec-vs-diff before apply (a spec FAIL vetoes docs-apply);
+# the apply nodes (simplify, docs-apply) edit the real worktree and the gate
+# re-runs there. Then the parent stages (pr-stage.sh stage) for a branch
+# review, and the scans (docs-drift, contract-mirror), skim, every finder and
+# verify read the post-apply content. receipt last.
 
 nodes=""
-add_node() {
-  if [[ -z "$nodes" ]]; then nodes="$1"; else nodes="$nodes,$1"; fi
-}
-
-if [[ "$untracked" -gt 0 ]]; then
-  add_node "untracked-backup"
-fi
-add_node "gate"
-
-agents=0
 skip=""
+# plan_node <name> [0|1]: list the node (flag 1 or absent), else record it skipped.
+plan_node() { if [[ "${2:-1}" -eq 1 ]]; then append nodes "," "$1"; else append skip "," "$1"; fi; }
 
-case "$tier" in
-  leaf)
-    # docs-drift is the one deterministic scan a docs-only diff actually
-    # needs; skipping it on leaf was a gate regression once ultra-audit
-    # receipts began satisfying the merge gate (prune_skip drops it from
-    # SKIP when added). Config-only leaves have no markdown and skip it.
-    if [[ "$n_md" -gt 0 ]]; then
-      add_node "docs-drift"
-    fi
-    add_node "freshness-audit"
-    add_node "skim"
-    add_node "receipt"
-    agents=0
-    skip="freshness-update,docs-drift,contract-mirror,tests,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score"
-    ;;
-  deps)
-    add_node "tests"
-    add_node "freshness-audit"
-    add_node "freshness-update"
-    add_node "receipt"
-    agents=0
-    skip="docs-drift,contract-mirror,simplify,impl-review,docs-apply,spec-vs-diff,challenger,score,skim"
-    ;;
-  small)
-    add_node "docs-drift"
-    add_node "contract-mirror"
-    add_node "tests"
-    add_node "freshness-audit"
-    add_node "freshness-update"
-    if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
-      add_node "simplify"
-    fi
-    add_node "docs-apply"
-    add_node "impl-review"
-    add_node "receipt"
-    if [[ "$n_code" -eq 0 || "$tiny" -eq 1 ]]; then
-      agents=0
-    else
-      agents=1
-    fi
-    skip="spec-vs-diff,challenger,score,skim"
-    [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
-    ;;
-  standard)
-    add_node "docs-drift"
-    add_node "contract-mirror"
-    add_node "tests"
-    add_node "freshness-audit"
-    add_node "freshness-update"
-    if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
-      add_node "simplify"
-    fi
-    add_node "docs-apply"
-    add_node "impl-review"
-    add_node "score"
-    add_node "receipt"
-    agents=$lang_blocks
-    [[ "$agents" -lt 1 ]] && agents=1
-    skip="spec-vs-diff,challenger,skim"
-    [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
-    ;;
-  audit)
-    add_node "docs-drift"
-    add_node "contract-mirror"
-    add_node "tests"
-    add_node "freshness-audit"
-    if [[ "$spec" == "yes" ]]; then
-      add_node "spec-vs-diff"
-    fi
-    add_node "freshness-update"
-    if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then
-      add_node "simplify"
-    fi
-    add_node "docs-apply"
-    add_node "impl-review"
-    add_node "challenger"
-    add_node "score"
-    add_node "receipt"
-    agents=$((lang_blocks + 1))
-    [[ "$agents" -lt 2 ]] && agents=2
-    skip="skim"
-    [[ "$spec" == "no" ]] && skip="$skip,spec-vs-diff"
-    [[ "$has_exec" -eq 1 || "$n_code" -eq 0 ]] && skip="$skip,simplify"
-    ;;
-esac
-
-# Drop skip entries that are actually in NODES.
-prune_skip() {
-  local s="$1" item
-  printf '%s\n' "$s" | tr ',' '\n' | while IFS= read -r item || [[ -n "$item" ]]; do
-    [[ -z "$item" ]] && continue
-    printf '%s' ",$nodes," | grep -q ",$item," && continue
-    printf '%s\n' "$item"
-  done | paste -sd, - 2>/dev/null || true
-}
-
-skip=$(prune_skip "$skip")
+plan_node untracked-backup "$(( untracked > 0 ))"
+plan_node gate
+plan_node tests
+plan_node freshness-audit
+plan_node spec-vs-diff "$spec_on"
+# simplify needs production code (n_code excludes tests, manifests, config and
+# docs), and a working route so prompt files are known and excluded from it.
+# Mixed prompt-plus-code diffs simplify the code files only.
+plan_node simplify "$(( n_code > 0 && route_failed == 0 ))"
+plan_node docs-apply
+plan_node docs-drift
+plan_node contract-mirror
+plan_node skim
+plan_node impl-review
+plan_node challenger "$deep"
+plan_node verify
+plan_node sweep "$deep"
+plan_node receipt
 [[ -z "$skip" ]] && skip="none"
 
-apply=""
-printf '%s' ",$nodes," | grep -q ",simplify," && apply="${apply}simplify,"
-printf '%s' ",$nodes," | grep -q ",docs-apply," && apply="${apply}docs-stale,"
-printf '%s' ",$nodes," | grep -q ",freshness-update," && apply="${apply}deps,"
-apply=${apply%,}
-[[ -z "$apply" ]] && apply="none"
-
-reason=""
-case "$tier" in
-  none) reason="nothing to review" ;;
-  leaf)
-    reason="docs or config only, no floors"
-    ;;
-  deps) reason="manifests and lockfiles only" ;;
-  small) reason="one language, modest size, no high-risk floors" ;;
-  standard)
-    if [[ "$has_exec" -eq 1 ]]; then reason="executable prompt content floors to standard"
-    else reason="above small thresholds, not high-risk"; fi
-    ;;
-  audit)
-    if [[ "$full" -eq 1 ]]; then reason="--full"
-    elif [[ "$scope_ask" -eq 1 ]]; then reason="diff exceeds size ask line"
-    else reason="high-risk floor: $risk"; fi
-    ;;
-esac
-
-echo "TIER=$tier"
+echo "MODE=$depth"
 echo "RISK=$risk"
-echo "FLOORS=$floors"
 echo "AGENTS=$agents"
-echo "APPLY=$apply"
 echo "SPEC=$spec"
 echo "SCOPE_ASK=$scope_ask"
 echo "UNTRACKED=$untracked"
 echo "FILES=$file_count"
 echo "LINES=$n_prod_lines"
 echo "LANG_BLOCKS=$lang_blocks"
+echo "PROSE_BLOCKS=$prose_blocks"
 echo "NODES=$nodes"
 echo "SKIP=$skip"
 echo "REASON=$reason"

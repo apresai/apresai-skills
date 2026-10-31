@@ -7,10 +7,11 @@
 # the REVIEW tier (sonnet), with that language's codegen / spec-lint hint and
 # Context7 docs for the frameworks the diff actually imports (CDK blocks also
 # fold IaC observability into the brief). Every block uses `general-purpose`: a
-# reviewer that reports every finding with a confidence, because filtering
-# belongs to the separate scoring step. Persona or self-filtering reviewer
-# agents (one that drops findings below 80 on its own) lose recall before the
-# scorer ever sees the finding.
+# reviewer that reports every finding with a confidence, because ruling on
+# findings belongs to the separate adversarial verify step. Persona or
+# self-filtering reviewer agents (one that drops findings on its own) lose
+# recall before the verifier ever sees the finding. /ultra-audit ignores the
+# REVIEW-tier model hint below and runs every reviewer on opus.
 #
 # PROJECT-AGNOSTIC BY DESIGN
 # This script does NOT assume fixed directory names. It adapts to whatever the
@@ -232,6 +233,7 @@ echo "Files detected:"
 [[ -n "$web_files" ]]   && echo "  Next.js / React          : $(cnt "$web_files")"
 [[ -n "$ts_files" ]]    && echo "  TypeScript / JS (generic): $(cnt "$ts_files")"
 [[ -n "$swift_files" ]] && echo "  iOS / Apple Swift        : $(cnt "$swift_files")"
+# pipeline.sh matches this exact line for RISK=api; keep the spacing.
 [[ -n "$yaml_specs" ]]  && echo "  OpenAPI spec             : $(cnt "$yaml_specs")"
 [[ -n "$md_files" ]]    && echo "  Markdown docs            : $(cnt "$md_files")"
 [[ -n "$other_files" ]] && echo "  Other / unclassified     : $(cnt "$other_files")"
@@ -396,6 +398,7 @@ is_exec_md() {
     CLAUDE.md|*/CLAUDE.md|Claude.md|*/Claude.md|AGENTS.md|*/AGENTS.md|SKILL.md|*/SKILL.md) return 0 ;;
     .claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
     *"/commands/"*|"commands/"*|*"/agents/"*|"agents/"*|*"/skills/"*|"skills/"*) ;;
+    *"/resources/"*.md|"resources/"*.md) ;;
     *) return 1 ;;
   esac
   # A commands|agents|skills path counts only as a plugin root's OWN top-level
@@ -408,6 +411,9 @@ is_exec_md() {
     if [[ "$root" == "." ]]; then pre=""; else pre="$root/"; fi
     case "$f" in
       "$pre"commands/*|"$pre"agents/*|"$pre"skills/*) return 0 ;;
+      # A plugin's resources/ markdown (node files, rubrics, prompt contracts)
+      # is loaded and executed by its commands, so it is prompt content too.
+      "$pre"resources/*.md) return 0 ;;
     esac
   done <<< "$plugin_root_dirs"
   # A DELETED file cannot be confirmed from disk, and neither can its plugin root
@@ -415,15 +421,21 @@ is_exec_md() {
   # instead of guessing: walk the path's `commands|agents|skills` segments and
   # test whether the directory above one held a plugin manifest. Precise in both
   # directions, and it only runs for files that are gone, which are rare.
+  # The last candidate's answer is cached: a deleted plugin's files share one
+  # root, so a large deletion costs one cat-file per root, not one per file.
   if [[ ! -e "$repo_root/$f" ]]; then
     local p="$f" seg cand
     while [[ "$p" == */* ]]; do
       p=${p%/*}
       seg=${p##*/}
       case "$seg" in
-        commands|agents|skills)
+        commands|agents|skills|resources)
           if [[ "$p" == */* ]]; then cand="${p%/*}/"; else cand=""; fi
-          git -C "$repo_root" cat-file -e "HEAD:${cand}.claude-plugin/plugin.json" 2>/dev/null && return 0
+          if [[ "$cand" != "$headmf_cand" || -z "$headmf_rc" ]]; then
+            headmf_cand="$cand"; headmf_rc=1
+            git -C "$repo_root" cat-file -e "HEAD:${cand}.claude-plugin/plugin.json" 2>/dev/null && headmf_rc=0
+          fi
+          [[ "$headmf_rc" -eq 0 ]] && return 0
           ;;
       esac
     done
@@ -436,6 +448,7 @@ is_exec_md() {
 # Exec wins first; then status-bearing markdown (never yaml specs, which stay
 # with prose/spec); trivial prose keeps the no-reviewer path.
 exec_md=""; status_md=""; prose_md=""
+headmf_cand=""; headmf_rc=""   # is_exec_md's cache of the last HEAD manifest probe
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   if is_exec_md "$f"; then
@@ -458,14 +471,15 @@ if [[ -n "$exec_md" ]]; then
     ""
 fi
 
-# Status-bearing docs get their own reviewer at REVIEW tier: the whole file is
-# its evidence (a stale "Status: Active" line is rarely inside the diff hunks),
-# so the reviewer reads complete files plus the docs-drift.sh records, not just
-# the changed lines. Emitted even alongside code blocks in a mixed diff.
+# Status-bearing docs get their own reviewer: the whole file is its evidence
+# (a stale "Status: Active" line is rarely inside the diff hunks), so the
+# reviewer reads complete files plus the docs-drift.sh records, not just the
+# changed lines. Emitted even alongside code blocks in a mixed diff. pipeline.sh
+# keys deep depth off this block's header line; keep the wording.
 if [[ -n "$status_md" ]]; then
   emit_block "Docs / status-bearing ($(cnt "$status_md") file(s), $(first_dir "$status_md" || echo .))" \
     "general-purpose" \
-    "run docs-drift.sh: CONTRA and STALE rows are findings, MARKER and INDEXED rows are evidence" \
+    "read each flagged doc IN FULL; run docs-drift.sh: CONTRA and STALE rows are findings, MARKER and INDEXED rows are evidence" \
     ""
 fi
 
@@ -506,22 +520,27 @@ fi
 
 echo "==========================================="
 echo "Notes:"
-echo "  - Model tiering (chad-review \"Model tiering\"), three tiers: the reviewers"
-echo "    below ride REVIEW=sonnet; confidence scoring and version lookup ride"
-echo "    LOOKUP=haiku; JUDGE=opus covers only the parent's attack probes and"
-echo "    CRITICAL re-verification. Never spawn fable."
-echo "  - FRESHNESS runs freshness.sh in the parent; it launches an agent only to"
-echo "    resolve versions for DEP records, at LOOKUP tier, and not from the routing above."
-echo "  - Status-bearing docs ride their own general-purpose reviewer at REVIEW tier,"
-echo "    reading COMPLETE files plus docs-drift.sh records. The DOCS-DRIFT-TASK line"
-echo "    above is the parent's own DRIFT step whenever markdown changed; run it, do"
-echo "    not just note it. Trivial prose keeps the no-reviewer light path."
+echo "  - Models and effort. /chad-review: the reviewers below ride its session-"
+echo "    relative tiering (\"Model tiering\"; the [REVIEW tier, sonnet] hint)."
+echo "    /ultra-audit ignores that hint: every agent runs on opus, finders at"
+echo "    effort medium at fast depth and high at deep depth; verifiers,"
+echo "    challenger, sweep and spec-vs-diff always at high. Never spawn fable."
+echo "  - FRESHNESS runs freshness.sh in the parent and spawns no agent; version"
+echo "    resolution is mechanical (the update commands, npm outdated, go list -m -u)."
+echo "  - Status-bearing docs: under /ultra-audit the block forces deep depth, and"
+echo "    its own finder reads each flagged doc IN FULL plus the docs-drift.sh"
+echo "    records, not just the hunks. Under /chad-review the block gets its own"
+echo "    general-purpose reviewer at REVIEW tier, reading complete files the same"
+echo "    way. The DOCS-DRIFT-TASK line above is the parent's own DRIFT step"
+echo "    whenever markdown changed; run it, do not just note it. Under"
+echo "    /chad-review trivial prose keeps the no-reviewer light path; /ultra-audit"
+echo "    always reviews prose (see nodes/impl-review.md)."
 echo "  - Phase 2 is the parent: run the affected tests, run the attack probes,"
-echo "    filter every finding once, re-verify CRITICALs, confirm the untracked"
+echo "    verify every finding (refute only with evidence), confirm the untracked"
 echo "    files survived, then write the verdict."
 echo "  - Context7 hints are framework names. The agent resolves each to a library"
 echo "    ID and fetches docs at audit start, then reasons against current"
 echo "    semantics rather than pre-training knowledge that may be stale."
 echo "  - Mixed-language diffs: one reviewer per block above, each scoped to ONLY"
 echo "    that block's hunks. The parent merges every finding into one report,"
-echo "    after a single batched scorer drops everything under confidence 80."
+echo "    after the verifiers rule on each one. Only an evidence-backed REFUTED drops."

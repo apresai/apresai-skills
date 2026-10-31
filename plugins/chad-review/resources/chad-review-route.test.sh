@@ -35,7 +35,7 @@ absent(){ # absent <desc> <substring-that-must-not-appear> <actual>
   else ok "$1"; fi
 }
 
-newrepo(){ d=$(mktemp -d); ( cd "$d" && git init -q . ); echo "$d"; }
+newrepo(){ local d; d=$(mktemp -d); ( cd "$d" && git init -q . ); echo "$d"; }
 run(){ ( cd "$1" && shift && bash "$SCRIPT" "$@" 2>&1 ); }
 
 # --- 1. trivial docs typo routes to the prose block, reviewer "-" ------------
@@ -197,6 +197,87 @@ r=$(newrepo)
 printf 'package main\n' > "$r/main.go"
 out=$(run "$r")
 check "Go DRIFT hint names contract-mirror.sh" "contract-mirror.sh reverse check" "$out"
+rm -rf "$r"
+
+# --- 15b. plugin resources/*.md is executable prompt content ---------------
+r=$(newrepo)
+mkdir -p "$r/p/.claude-plugin" "$r/p/resources/nodes"
+printf '{}\n' > "$r/p/.claude-plugin/plugin.json"
+( cd "$r" && git add -A && git commit -qm base ) >/dev/null 2>&1
+printf '# Node\n' > "$r/p/resources/nodes/verify.md"
+out=$(run "$r")
+check "plugin resources markdown routes as executable prompt" "Routing: Executable prompt content" "$out"
+printf 'echo hi\n' > "$r/p/resources/x.sh"
+rm -f "$r/p/resources/nodes/verify.md"
+out=$(run "$r")
+absent "plugin resources shell is not prompt content" "Routing: Executable prompt content" "$out"
+rm -rf "$r"
+
+# --- 16. deleted plugin: resources/*.md found through the HEAD manifest -----
+r=$(newrepo)
+mkdir -p "$r/p/.claude-plugin" "$r/p/resources"
+printf '{}\n' > "$r/p/.claude-plugin/plugin.json"
+printf '# Node\n' > "$r/p/resources/n.md"
+( cd "$r" && git add -A && git commit -qm base ) >/dev/null 2>&1
+rm -rf "$r/p"
+out=$(run "$r")
+check "deleted plugin resources markdown is executable prompt" "Routing: Executable prompt content" "$out"
+absent "deleted plugin resources markdown is not prose" "Routing: Docs / spec" "$out"
+rm -rf "$r"
+
+# --- 17. root-level plugin: resources/*.md beside a root .claude-plugin ------
+r=$(newrepo)
+mkdir -p "$r/.claude-plugin" "$r/resources"
+printf '{}\n' > "$r/.claude-plugin/plugin.json"
+( cd "$r" && git add -A && git commit -qm base ) >/dev/null 2>&1
+printf '# Node\n' > "$r/resources/n.md"
+out=$(run "$r")
+check "root plugin resources markdown is executable prompt" "Routing: Executable prompt content" "$out"
+rm -rf "$r"
+
+# --- 18. resources/*.md with no plugin manifest is ordinary prose ------------
+r=$(newrepo)
+mkdir -p "$r/resources"
+printf '# Notes\n' > "$r/resources/n.md"
+out=$(run "$r")
+absent "non-plugin resources markdown is not executable prompt" "Executable prompt content" "$out"
+check "non-plugin resources markdown is prose" "Routing: Docs / spec" "$out"
+rm -rf "$r"
+r=$(newrepo)
+mkdir -p "$r/resources"
+printf '# Notes\n' > "$r/resources/n.md"
+( cd "$r" && git add -A && git commit -qm base && rm resources/n.md ) >/dev/null 2>&1
+out=$(run "$r")
+absent "deleted non-plugin resources markdown is not executable prompt" "Executable prompt content" "$out"
+rm -rf "$r"
+
+# --- 19. the OpenAPI count line pipeline.sh keys RISK=api off ----------------
+r=$(newrepo)
+mkdir -p "$r/api"
+printf 'openapi: 3.0.0\ninfo:\n  title: t\n' > "$r/api/spec.yaml"
+out=$(run "$r")
+if grep -qxF "  OpenAPI spec             : 1" <<<"$out"; then ok "OpenAPI count line keeps its exact form"
+else bad "OpenAPI count line keeps its exact form"; fi
+rm -rf "$r"
+
+# --- 20. Notes: effort split, status docs in full, no FRESHNESS agent -------
+r=$(newrepo)
+printf 'package main\n' > "$r/main.go"
+out=$(run "$r")
+check "notes give fast-depth finder effort" "effort medium at fast depth and high at deep depth" "$out"
+check "notes keep the non-finder effort at high" "challenger, sweep and spec-vs-diff always at high" "$out"
+check "notes keep chad-review on its own tiering" "/chad-review: the reviewers below ride its session-" "$out"
+check "notes: status-bearing forces deep" "the block forces deep depth" "$out"
+check "notes: status finder reads flagged docs in full" "reads each flagged doc IN FULL" "$out"
+absent "notes drop the flat ultra-audit effort high" "/ultra-audit runs them on opus at" "$out"
+absent "notes drop the LOOKUP-tier FRESHNESS agent" "at LOOKUP tier" "$out"
+absent "notes drop the haiku version-lookup line" "Version lookup rides LOOKUP=haiku" "$out"
+check "notes: FRESHNESS spawns no agent" "FRESHNESS runs freshness.sh in the parent and spawns no agent" "$out"
+rm -rf "$r"
+r=$(newrepo)
+printf '**Status:** Active plan.\n- [ ] a box\n' > "$r/plan.md"
+out=$(run "$r")
+check "status block hint says read flagged docs in full" "read each flagged doc IN FULL; run docs-drift.sh" "$out"
 rm -rf "$r"
 
 echo

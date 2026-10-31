@@ -159,8 +159,8 @@ per-schema symbols), and from `type Name struct|interface` in Go.
 
 Judgment:
 
-- A `MIRROR` in a test file is often a deliberate fixture: keep the record, let
-  confidence scoring weigh the path.
+- A `MIRROR` in a test file is often a deliberate fixture: keep the record; the
+  verifier may refute it by quoting the fixture's purpose.
 - A `MIRROR` plus a `STALECOMMENT` naming the generated file is the incident
   shape: a client hand-declaring `SearchResult` beside a comment claiming the
   committed generated types "predate that addition", while the generated file
@@ -169,8 +169,8 @@ Judgment:
 - Escalate when the generated header says "do not make direct changes": the
   project already declared the generated file authoritative.
 - Generic names (`Error`, `Config`) produce low-value mirrors; the scanner
-  deliberately has no stoplist, so drop them at the confidence filter, not by
-  editing the scanner.
+  deliberately has no stoplist. The verifier refutes an unrelated same-name
+  type by quoting both definitions; never edit the scanner to hide one.
 
 ### `[comments]` Doc-comment conventions
 
@@ -251,7 +251,7 @@ The four deterministic suppressions, in order, first match wins:
    markers. The whole file is a record; old numbers inside it are correct.
 
 Judgment: `CONTRA` and `STALE` are deterministic findings; carry them unless
-the confidence scorer can show the record misread the doc. `MARKER` and
+the verifier can quote where the record misread the doc. `MARKER` and
 `INDEXED` are evidence with the FRESHNESS `REF`-polarity discipline: a hist
 marker in a doc that consistently reads as an archive is fine, and an active
 marker alone is fine; it is the combination, or the disagreement with an
@@ -460,8 +460,12 @@ Discovery, extraction, and scanning are in `resources/freshness.sh`; run it rath
 than reimplementing them here. What stays judgment:
 
 **Pick the oracle from the evidence, not from a default.** `DEP` records need
-no oracle: the update step moves them to the top of their declared range, and
-`npm outdated` / `go list -m -u` name what stayed behind. `REF` records do need
+no outside oracle: the package manager answers what is newer within the
+current major (`npx -y npm-check-updates@23.1.1 --target minor`, read-only
+without `-u`, for npm, pnpm, and yarn, since exact pins make the manifest
+range say nothing; `go list -m -u` for Go). In a review that answer is a
+Follow-up for `/deps-update`; the updater itself (and `/chad-review` pass 5)
+follows `resources/nodes/apply-deps.md`. `REF` records do need
 one: a Lambda runtime enum resolves against the AWS runtime support table, an
 Anthropic model ID against the `claude-api` skill, a non-Anthropic model ID
 (`openai.gpt-*`, `amazon.nova-*`, `gemini-*`) against that vendor's own
@@ -476,9 +480,10 @@ surrounding line so this is decidable without opening the file.
 
 **A `COVERAGE GAP` is a finding about the review, not about the code.** It says an
 ecosystem this project depends on was never examined, so "no CVEs" does not apply
-to it. Report it under FRESHNESS with the cause the script gives, and treat it as
-CONDITIONAL: the diff is safe to commit, the project's dependency picture has a
-hole. The three causes want different recommendations.
+to it. Report it under FRESHNESS with the cause the script gives, and place it
+as Follow-up (`resources/nodes/receipt.md`), not counted and not CONDITIONAL:
+the diff is safe to commit, the project's dependency picture has a hole. The
+three causes want different recommendations.
 
 - `no scanner extractor supports this ecosystem` is permanent and not the
   project's fault. CocoaPods is the current example. Say the graph is unaudited
@@ -501,14 +506,15 @@ it is what hid a CVSS 8.7 advisory on regist.
 when writing the report: it is already grouped by the upgrade that closes the
 advisories, so 21 findings read as roughly 10 decisions. Quote `SCAN` only when a
 specific advisory needs naming. A `FIX` row carrying nine advisories is one
-line, not nine, and after the update step the only `FIX` rows left to report are
-the ones an in-range update could not close.
+line, not nine, and after an update (`/deps-update`, or `/chad-review` pass 5)
+the only `FIX` rows left to report are the ones an in-range update could not
+close.
 
 **A `FIX` row the update could not move may be bundled, and that changes its
 tier.** Check before reporting: npm marks these `"inBundle": true` in the
 lockfile entry, and a vendored dir is the same condition by hand. A bundled
 package is pinned by its parent (aws-cdk-lib bundling brace-expansion is the
-canonical case), so `npm update` cannot reach it and neither can the user
+canonical case), so no in-range update can reach it and neither can the user
 without forking. That row is tier-bundled: a warn line naming the parent and
 the parent-release condition that clears it, never a NEEDS-DECISION, never a
 verdict mover, whatever its CVSS.

@@ -1,6 +1,6 @@
 ---
 name: chad-review
-description: 5-pass pre-commit code review (drift, behavior and risk, tests, observability, dependency freshness). Use when the user asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted changes, else the last commit. Emits the receipt that receipt.sh verify checks at the merge gate.
+description: 5-pass pre-commit code review (drift, behavior and risk, tests, observability, dependency freshness). Use when the user asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted changes, else the last commit. Emits a receipt, but the merge gate requires an /ultra-audit receipt; use /ultra-audit before merging.
 ---
 
 # Chad Review: 5-Pass Code Review
@@ -58,6 +58,25 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    --format='%H %s'`, then `git show --stat HEAD` and `git show HEAD`. No commits
    and a clean tree means say "Nothing to review" and STOP. Either way, build the
    **changed files list**.
+
+   **Whole-branch review (a PR branch after fix commits).** Stage it with
+   `bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pr-stage.sh" stage`,
+   which prints `DIR=` (a throwaway worktree holding the whole branch diff
+   plus uncommitted work as working-tree changes), `HEAD=`, `BRANCH=`, and
+   more. `DIR` is a read lens only: routing, `docs-drift.sh`,
+   `contract-mirror.sh`, and the reviewer and verifier agents read it, and
+   nothing is edited there. Everything that executes the project or edits
+   files runs in the real worktree (it has `node_modules`, `.env`, and build
+   caches): the untracked backup, the gate, the tests, `freshness.sh`, pass
+   5's update, `untracked-guard.sh verify --restore`, and the receipt. Order:
+   routing (step 5) inside `DIR`, the gate (step 7) and the tests in the real
+   worktree, the fan-out and verify over `DIR`, then `pr-stage.sh check <dir>`
+   in the real worktree (exit 1 means the real
+   tree changed during the review: list the paths and the verdict is
+   CONDITIONAL), then `pr-stage.sh remove <dir>`, and only then pass 5's
+   update in the real worktree (Phase 2 step 2), the untracked verify, and
+   the receipt. The update runs after `check` on purpose: it is the one edit
+   this skill makes, and it is not part of the content the reviewers read.
 
    **Back up untracked files first.** The skill's no-edit rule is enforced by
    prompt wording, not by tool restriction: the reviewer agents are
@@ -139,9 +158,12 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
      **config-only** (`.github/**`, `.gitignore`, `.editorconfig`, linter
      configs; not manifests, not IaC), or **tiny** (at most 4 files AND at most
      40 changed lines of non-test production code).
-     **Forced to `standard` regardless**: `CLAUDE.md`, any `*/SKILL.md`,
-     anything under `.claude/`, a `prompts/` dir, or a plugin's `commands/`,
-     `agents/`, or `skills/` dir. Here those are executable behavior, not prose.
+     **Forced to `standard` regardless**: `CLAUDE.md`, `AGENTS.md`, any
+     `*/SKILL.md`, anything under `.claude/`, a `prompts/` dir, a plugin's
+     `commands/`, `agents/`, or `skills/` dir, or a plugin's `resources/*.md`;
+     in short, anything routing put in an `Executable prompt content` block
+     (`is_exec_md` in `chad-review-route.sh` is authoritative). Here those are
+     executable behavior, not prose.
      **Docs-only qualifies as `light` ONLY when routing emitted no
      `Docs / status-bearing` block.** A status-bearing doc forces `standard`,
      which naturally fans out to just that one sonnet reviewer plus the parent;
@@ -153,8 +175,8 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0 | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is both author and filter: apply the Phase 2 filter discipline to your own findings, and report `Filtered: N raised, M dropped` as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
-   | `deps` | 0 | FRESHNESS runs in the parent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
+   | `light` | 0 reviewers (step 4 verifiers still run) | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is the author, so its findings still go to the Phase 2 step 4 verifiers (JUDGE tier, up to 5 findings each) and the report carries the `Verified:` line as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
+   | `deps` | 0 reviewers (step 4 verifiers still run) | FRESHNESS runs in the parent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
    Print `Diff shape: <shape>`. When it is not `standard`, add "rerun with
@@ -183,10 +205,19 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
      (`go build ./... && go vet ./...`, `tsc --noEmit`, `cargo check`,
      `swift build`)
 
-   Print `Gate: <command> (<green | N failures | none detected>)` in the report
-   header beside `Diff shape:`. Cap it around 60s: past that report
-   `Gate: <command> (over budget, not run)` and carry on rather than blocking a
-   review on someone's full build.
+   **Read the recipe before running it.** A target's name is not evidence of
+   what it does: one real repo's `make validate` runs a post-deploy script that
+   probes the production API and needs a cloud login. Read the recipe (and
+   every script it calls); if it deploys, publishes, migrates, pushes, or
+   probes a live or production endpoint (`curl` or an HTTP client against a
+   non-localhost URL, a cloud CLI), it is not a gate: print
+   `Gate: skipped <target> (<what it does>)` and fall to the next rule above.
+
+   Print `Gate: <command> (<green | N failures | none detected | not run>)` in
+   the report header beside `Diff shape:`. Run it to completion, in the
+   foreground, before any update or agent: no time cap. It is `not run` only
+   when it cannot be launched at all (say why), which makes the verdict
+   CONDITIONAL.
 
    Failures are findings under the pass that owns them: compile, type, lint, and
    schema errors under DRIFT, failing tests under TESTS. Quote the tool's own
@@ -203,8 +234,9 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    `pass-reference.md` § GATE for the ecosystems actually present. Recommend it,
    never create it: the target belongs to the project and to whoever maintains
    it, and one this skill writes behind the maintainer's back is one nobody owns.
-   Being a repo-level gap rather than a defect in the diff, it does not move the
-   GO/NO-GO verdict, the same way a pre-existing FRESHNESS CRITICAL does not.
+   Being a repo-level gap rather than a defect in the diff, it is a Follow-up
+   item and does not move the verdict, the same as a pre-existing FRESHNESS
+   CRITICAL.
 
 ## 1. DRIFT
 
@@ -472,17 +504,13 @@ Prefer `FIX` records over raw `SCAN` lines when writing the report. They are
 already grouped by the upgrade that closes them, so one row can carry nine
 advisories and becomes one line rather than nine.
 
-**Then update the dependencies.** Not classify, not offer: update. The native
-tools stay in range on their own: `npm update` moves only within the ranges
-`package.json` declares, and `go get -u` never crosses a major (a Go major is a
-different import path). Take the newest in-range releases, CVE fixes
-included (`resources/nodes/apply-deps.md`). For each manifest the script
-discovered:
-
-- Go module: `go get -u ./... && go mod tidy`
-- npm package: `npm update`
-- Another ecosystem with a native in-range updater: use it. None: skip it and
-  say so in the report.
+**Then update the dependencies.** Not classify, not offer: update. Follow
+`${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/nodes/apply-deps.md`,
+the same procedure `/deps-update` uses, for each manifest the script
+discovered: the newest stable release within each current major, CVE fixes
+included, never a new major. It names the per-ecosystem commands (exact pins
+included, which a plain `npm update` never moves) and says to skip, and say so,
+an ecosystem with no in-range updater.
 
 The update runs in Phase 2, after the tests have run on the user's change alone
 (so a failure attributes cleanly), and before the receipt is emitted (so the
@@ -559,9 +587,9 @@ last clause is not decoration: without it the honest output for a repo whose
 Swift graph was never opened is indistinguishable from a clean one, which is the
 failure this pass shipped with.
 
-A CVE or EOL on a direct dependency the diff touched is NO-GO. Pre-existing and
-untouched on a direct dependency is CONDITIONAL: this change is safe, the
-project is not. A bundled or transitive advisory, CVE included, is advisory
+A CVE or EOL on a direct dependency the diff touched is counted (NO-GO).
+Pre-existing and untouched on a direct dependency is Follow-up: this change is
+safe, the project is not, and the follow-up PR (or `/deps-update`) fixes it. A bundled or transitive advisory, CVE included, is advisory
 only and never moves the verdict. Everything else is advisory.
 
 ## Execution strategy
@@ -576,44 +604,49 @@ Three tiers, and the expensive one is deliberately the smallest.
 
 | Tier | Steps | Model |
 |---|---|---|
-| **LOOKUP** | confidence scoring | `haiku` |
+| **LOOKUP** | a registry version lookup, only if one is ever delegated (normally the update commands answer it, no agent) | `haiku` |
 | **REVIEW** | the per-language reviewer that reads the diff and raises findings | `sonnet` |
-| **JUDGE** | the parent's attack probes, and re-verification of any CRITICAL | `opus`, or the session model when that is cheaper |
+| **JUDGE** | the parent's attack probes, and the Phase 2 step 4 verifiers | `opus`, at `effort: high` |
 
 | Session model | Parent | LOOKUP | REVIEW | JUDGE |
 |---|---|---|---|---|
 | opus | opus | haiku | sonnet | opus |
-| sonnet | sonnet | haiku | sonnet | sonnet |
+| sonnet | sonnet | haiku | sonnet | opus |
 | fable | fable | haiku | sonnet | opus |
 | unknown / haiku / other | = session | haiku | sonnet | opus |
 
-A sonnet session stays at sonnet for JUDGE, so a deliberately cheap session is
-never force-upgraded. A fable session keeps only the orchestration shell on fable.
+JUDGE is opus in every session, a sonnet one included: the verifier decides
+which findings get fixed, and a weaker verifier checking stronger work is the
+weakest arrangement measured. A fable session keeps only the orchestration shell on fable.
 
 **Haiku is correct for LOOKUP and wrong everywhere else.** The line is whether
-the step decides something about the code. Scoring a finding someone else already
-wrote against a rubric pasted verbatim, and reading a version out of a registry,
-are not decisions. Raising the finding is.
+the step decides something about the code. Reading a version out of a registry
+is not a decision. Raising a finding is, and so is ruling on one: haiku used to
+score findings here, and that score decided what got dropped.
 
-**The reviewer is `sonnet`, not `opus`.** It is the largest agent in the run, and
-Anthropic's `/code-review` runs five sonnet reviewers for the same job with no
-opus anywhere. Opus stays on the two steps where being wrong costs the most and
-the volume is smallest. If a change is high-stakes enough to want opus reviewing
-it, ask for that explicitly on that run.
+**The reviewer is `sonnet` here, `opus` in `/ultra-audit`.** `/chad-review` is
+the cheaper explicit fan-out. The default pre-merge review, `/ultra-audit`, runs
+every finder on opus, at `effort: medium` at fast depth and `high` at deep
+depth, and its verifiers, challenger, sweep, and spec check at `high`;
+Anthropic's current code-review plugin also moved its bug finders and
+validators to opus. Both tools verify every finding at JUDGE tier, except
+direct tool evidence (a red gate, a failing test).
 
-**Never spawn fable**: at roughly double the Opus rate it buys no review
+**Never spawn fable**: at 2.5 times the Opus rate it buys no review
 advantage here. `opus`, `sonnet`, and `haiku` are aliases resolved at spawn time;
-never hardcode a dated model ID. Pricing snapshot 2026-07-25: Opus 5 $5/$25 per
-MTok, Sonnet 5 $3/$15, Fable 5 $10/$50.
+never hardcode a dated model ID. Pricing snapshot 2026-10-31: Opus 5.5 $4/$20 per
+MTok, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50 (prompts up to 100K tokens),
+Fable 5.1 $10/$50.
 
 ### Effort
 
-The Agent tool exposes `model` but **no `effort` parameter** (verified on Claude
-Code 2.1.220; only the Workflow tool's `agent()` takes effort). Sub-agents inherit
-the session effort, so effort is a session-level dial this skill cannot set per
-pass. Use it deliberately: review accuracy holds well at lower effort, so run the
-everyday pre-commit pass at `medium` and reserve `high` or `xhigh` for a review
-that gates a release. It is the largest available speed lever and costs no code.
+The Agent tool once exposed `model` but no `effort` parameter (verified on Claude
+Code 2.1.220). That is no longer true: the Agent tool now takes `effort`, and
+may use it when a skill explicitly asks. This skill asks for `effort: high` on
+every JUDGE-tier verifier launch, since Opus 5.5 defaults to `medium`.
+Reviewers inherit the session effort. `/ultra-audit` sets effort on every agent
+it launches: finders `medium` at fast depth and `high` at deep depth,
+everything else `high`.
 
 ### Phase 1: fan out
 
@@ -623,7 +656,7 @@ single-language diff is 1 Agent tool use and CDK plus Go is 2.
 **Reviewer** owns passes 1, 2 (what changed), 3 (coverage only), and 4, at the
 REVIEW tier (sonnet). `subagent_type` is `general-purpose` for every block, as
 the routing script emits it: a reviewer that reports everything with a
-confidence, so the Phase 2 scorer is the only filter. Routing still decides
+confidence, so the Phase 2 verifier is the only filter. Routing still decides
 which hunks, codegen hint, and Context7 docs each block gets. It reads the diff once
 and emits each pass as its own labeled section, which is what keeps the
 five-heading invariant intact. It needs tool access to run generators, spec
@@ -655,37 +688,39 @@ One pass, holding every finding at once:
    step 8, so the receipt's fingerprint covers the updated tree.
 3. **Attack** (BEHAVIOR AND RISK, attack half) with targeted grep and file reads
    to confirm edge cases. This is JUDGE-tier work: inline when the parent is
-   already there (opus and sonnet sessions), otherwise delegate this step alone
-   to one JUDGE sub-agent.
-4. **Score, then keep only what clears 80.** Hand every raised finding, in ONE
-   batch, to a single LOOKUP-tier agent that did not write them. An author is a
-   poor judge of its own findings, and one batched scorer costs almost nothing.
-   Give it the diff, the project's own guidelines, and the 0-to-100 scale from
-   the output contract verbatim. Where a finding cites a project rule, it must
-   confirm the rule actually says that.
+   already opus, otherwise delegate this step alone to one JUDGE sub-agent
+   (`opus`, `effort: high`).
+4. **Verify every finding adversarially.** Follow
+   `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/nodes/verify.md`
+   exactly: JUDGE-tier (`opus`, `effort: high`) verifiers that did not write the
+   findings, grouped by file up to 5 per verifier, all launched in one message.
+   Each finding is CONFIRMED, PLAUSIBLE (the default when the verifier cannot
+   construct the state), or REFUTED, and REFUTED only with quoted code or a
+   command and its output that disproves it (or the other refutations
+   `verify.md` § The rule lists). Only direct tool evidence skips
+   verification: a red gate (compiler, linter, typechecker output) and a
+   failing test, each quoted. The heuristic scan records (`docs-drift.sh`,
+   `contract-mirror.sh`, `freshness.sh`) are ruled like any finding, so a
+   `MIRROR` false positive cannot count unverified. Reconcile what was sent
+   against what came back (`verify.md` § Output): a finding with no ruling is
+   re-sent once, then PLAUSIBLE. The ledger is `/ultra-audit`'s; this skill
+   does not write it.
 
-   **Keep a finding only at 80 or above. The burden of proof is on keeping it,
-   not on dropping it.** The old rule was the reverse, and it was the reason
-   these rubrics grew: disproving a vague finding is hard, so nearly everything
-   survived, so every severity band needed prose to justify what arrived.
+   This replaced a confidence-80 filter in 3.0.0. That filter put the burden on
+   keeping a finding, scored by haiku, and it dropped real defects that nobody
+   had disproved; self-reported confidence is not calibrated well enough to cut
+   on. Disproving now carries the burden.
 
-   Common sub-80 causes, for the scorer's benefit: a grep hit inside a comment,
-   string literal, test fixture, or generated file; a "missing test" already
-   covered by a differently named or integration test; a "stale doc" statement
-   that still holds; a behavior change that an adjacent comment or the commit
-   message shows was intended; anything a linter, typechecker, or the gate would
-   have caught; a pre-existing issue on a line this diff did not touch.
-
-   Emit one `Filtered: N raised, M dropped below 80` line. Dropping must stay
-   visible, because a silent filter is just backlogging with better manners. A
-   dropped CRITICAL stays listed as `[dropped: <score>, <=10-word reason]`.
-5. **Re-verify CRITICALs.** Any CRITICAL that cleared 80, and anything that
-   cleared it by a narrow margin, gets a
-   second look against the code before it enters the verdict. This step can
-   confirm a finding, or sharpen its file:line, or downgrade its severity. It
-   **cannot** drop it: failing to confirm is not evidence of absence, and only
-   step 4's rule removes a finding. An unconfirmed CRITICAL stays in the report,
-   marked `[unconfirmed]`, and still counts toward the verdict.
+   Emit the verify node's line,
+   `Verified: N ruled (S scan, F finder), C confirmed, P plausible, R refuted; T tool-evidence findings; U re-sent`,
+   and list each REFUTED finding with its evidence.
+5. **Place every finding** exactly as
+   `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/nodes/receipt.md`
+   § "Where each finding goes" says: Fix now (counted), Follow-up (listed, not
+   counted: verified PRE-EXISTING, repo-level gaps such as no gate or a
+   COVERAGE GAP, untouched dependencies), or Closed. Findings the parent wrote
+   itself (the `light` and `deps` shapes, the attack probes) go through step 4
+   like any other.
 6. **Confirm the working tree survived.** Skip this only when pre-flight step 2
    skipped the backup because there were no untracked files; there is nothing to
    verify, and the header already says so.
@@ -724,16 +759,20 @@ One pass, holding every finding at once:
    It prints the receipt path; put that path on the report's `Receipt:` line.
    If a PR for this branch already exists (`gh pr view --json number`
    succeeds), add `--pr <n>` so it publishes to the PR immediately; otherwise
-   state in the report: after `gh pr create`, run `receipt.sh publish`, and
-   before `gh pr merge`, run `receipt.sh verify --pr <n>`.
+   state in the report: after `gh pr create`, run `receipt.sh publish`. This
+   receipt does not open the merge gate: with chad-review 3.0.0+ the gate runs
+   `receipt.sh verify --pr <n> --require-tool ultra-audit`, which only an
+   `/ultra-audit` GO passes, so run `/ultra-audit` before `gh pr merge`.
 
    The receipt binds the verdict to the exact content reviewed: head SHA plus
    a stable diff fingerprint (`git patch-id --stable` over the merge-base
    diff, untracked files folded in). At the merge gate the exact reviewed
    head passes, a clean rebase with an unchanged diff converges on the
    fingerprint, and any substantive diff change fails closed. After fix
-   commits, the convergence rule reviews only the fix delta, but the receipt
-   is always re-emitted at FULL scope for the new head and fingerprint;
+   commits, re-review the whole branch, staged as pre-flight step 2
+   describes (`pr-stage.sh` as a read lens, everything that runs or edits in
+   the real worktree), never only the fix commit, and re-emit the receipt
+   from the real worktree for the new head and fingerprint;
    `verify` trusts the newest ruling for the current content, so a stale GO
    can never outlive the diff it reviewed.
 
@@ -743,14 +782,14 @@ The prompt contract (what every sub-agent prompt must contain, the verbatim
 output contract, the prompt skeleton, and the Agent call shape) lives in
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/fanout.md`.
 
-Read it when you are about to launch an agent, and only then: `standard` shape.
-`light` and `deps` spawn nothing and never need it, and `light` is the common
-case.
+Read it when you are about to launch an agent, and only then: the `standard`
+fan-out, and the step 4 verifiers on every shape.
 
 ## Performance budget
 
-Target: under ~2 minutes for a typical single-language change (5 to 10 files),
-`light` and `deps` well under a minute.
+Target: under ~3 minutes for a typical single-language change (5 to 10 files).
+`light` and `deps` launch no reviewer, but step 4 still launches verifiers for
+whatever was raised, so they take as long as that verification.
 
 The levers in order of size: the diff-shape matrix skips the fan-out entirely for
 most everyday changes; the scripts (`freshness.sh`, `chad-review-route.sh`,
@@ -781,7 +820,7 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 
 | Situation | Tool |
 |---|---|
-| About to commit or push; the default routed review whose receipt satisfies the merge gate | `/ultra-audit` |
+| About to commit or push; the default full adversarial review whose receipt satisfies the merge gate | `/ultra-audit` |
 | Want the fixed 5-pass fan-out, a GO / NO-GO / CONDITIONAL verdict, and a fix prompt | `/chad-review` |
 | Quality-only cleanup, applied, **before** the gate | `/simplify` (built-in) |
 | Quick read of one file or a change under three files | `/review` (built-in) |
@@ -790,10 +829,11 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 Both review tools run before the commit; pr-review-toolkit is for after the PR
 is open. `/simplify` runs before the review, never after: applying edits after the
 gate mutates the reviewed diff and re-arms it. The cycle is build, test,
-`/simplify`, `/ultra-audit` (or `/chad-review`), PR, then
-`receipt.sh verify --pr <n>` immediately before the merge: the merge gate
-checks the receipt, not the session's memory of a review, and either tool's
-receipt satisfies it.
+`/simplify`, PR, `/ultra-audit`, then
+`receipt.sh verify --pr <n> --require-tool ultra-audit` immediately before the
+merge: the merge gate checks the receipt, not the session's memory of a review,
+and since 3.0.0 only an ultra-audit receipt satisfies it. A `/chad-review`
+receipt still records its ruling locally and on the PR.
 
 ## Final report
 
@@ -820,7 +860,16 @@ Gate: <command> (<green | N failures | none detected>)
 ### 5. FRESHNESS
 [updated deps (old -> new) + FRESHNESS tag lines (security, eol, fix-and-take-now, decision, bundled, coverage) + decision blocks, or "Clean"/"N/A"]
 
-Filtered: N raised, M dropped
+Verified: <the verify node's line>
+
+### Fix now (counted)
+[every counted finding, ordered by severity, CONFIRMED before PLAUSIBLE]
+
+### Follow-up (after merge, one PR)
+[verified PRE-EXISTING, repo-level gaps, untouched dependencies (/deps-update)]
+
+### Closed
+[REFUTED with evidence; accepted-by-user]
 
 ### Verdict: [GO / NO-GO / CONDITIONAL]
 [1-2 sentences: commit as-is, fix something first, or stop and rethink]
@@ -828,40 +877,48 @@ Filtered: N raised, M dropped
 Receipt: <path, or "published to PR #N">
 ```
 
-Carry each finding's wording verbatim. Steps 4 and 5 may lower a severity or
+Carry each finding's wording verbatim. Step 4 may adjust a severity or
 sharpen a `file:line`, and those edits carry through; nothing else is rewritten.
-**Drop the confidence score**: it is a routing signal for the filter, not
-something the reader needs once a finding has survived it. A CRITICAL that step 5 could not confirm keeps its severity and
-gains `[unconfirmed]`. Also **strip any process narration** an agent emitted
+**Replace the confidence score with the ruling** (CONFIRMED or PLAUSIBLE). A
+PLAUSIBLE finding states what would confirm it.
+
+**Verdict mapping**, the same as `nodes/receipt.md`. GO only when no counted
+finding remains at any severity. Any counted finding is NO-GO: severity decides
+fix order, never whether a fix happens. CONDITIONAL only when nothing is
+counted but the review could not vouch for the whole diff (scoped by the user,
+the gate could not be launched, or `pr-stage.sh check` found the real tree
+changed during a staged review). `receipt.sh verify` fails a GO whose counts are
+not all zero. Also **strip any process narration** an agent emitted
 despite the contract. Findings in the deliverable, never the process.
 
 **How FRESHNESS affects the verdict.** Being whole-project and always-on, a
 pre-existing dependency issue unrelated to the diff should not hard-block an
-unrelated commit:
+unrelated commit, and it is not dropped either:
 
-- **CRITICAL on a direct dependency the diff touched or introduced: NO-GO.**
+- **CRITICAL on a direct dependency the diff touched or introduced: counted,
+  NO-GO.**
 - **CRITICAL that is pre-existing and untouched, on a direct dependency:
-  CONDITIONAL**, with a prominent callout. This change is safe to commit; the
-  project carries a CRITICAL issue to schedule now.
+  Follow-up**, with a prominent callout and a `/deps-update` recommendation.
+  This change is safe to commit; the follow-up PR fixes the project.
 - **A bundled or transitive advisory, CVE included: never moves the verdict.**
   It is a warn line in the FRESHNESS body, full stop. Escalating one of these
   to CONDITIONAL is the failure the bundled tier exists to prevent.
-- **Any `COVERAGE ... GAP`: CONDITIONAL**, never a silent GO. An unscanned
+- **Any `COVERAGE ... GAP`: Follow-up**, never a silent clean. An unscanned
   ecosystem is not a clean one, and the failure this guards against is a review
   that reads as complete over a dependency graph it never opened. It does not
-  hard-block, because the usual cause is environmental rather than a defect in
-  the diff. State the ecosystem and the cause in the verdict line itself, not
-  only in the FRESHNESS body.
-- **A reverted package's update (its gate went red): HIGH**, naming the
-  package and carrying the failing output, then judged by the tier rules: a
-  trivial mechanical fix is `fix-and-take-now`, real breaking surface is a
-  decision block.
+  block, because the usual cause is environmental rather than a defect in the
+  diff. State the ecosystem and the cause in the verdict line itself, not only
+  in the FRESHNESS body.
+- **A reverted package's update (its gate went red): HIGH Follow-up**, naming
+  the package and carrying the failing output: a trivial mechanical fix goes to
+  the follow-up PR, real breaking surface is a decision block.
 - **Applied updates and `fix-and-take-now` items: never in the verdict.**
   Applied updates appear in the report and the `deps:` commit instruction;
   fix-and-take-now items are work the session does right after the review.
   Dev-tooling majors held back are one informational line, not backlog.
-  Decision blocks are asked interactively or marked NEEDS-DECISION, and a GO
-  stays a GO while they wait.
+  FRESHNESS decision blocks (a major held back) are asked interactively or
+  marked NEEDS-DECISION and are informational: they are not counted. A
+  NEEDS-DECISION finding about the diff itself is counted until decided.
 
 ## After the report: fix prompt
 
@@ -871,12 +928,13 @@ Offer a copyable **fix prompt** when the verdict is NO-GO or CONDITIONAL. Keep i
 2. **Describe the outcome of each fix**, not the implementation ("ghost.go should
    use Eastern time for the race date, matching how live races work").
 3. **Point at existing patterns** in this codebase that already do it right.
-4. **Separate blocking from non-blocking, but fix all of them.** CRITICAL and
-   HIGH block this commit; MEDIUM and LOW are fixed in the same change or an
-   immediate fast-follow, never deferred to a backlog. The split is only about
-   what blocks the merge. One exception: a FRESHNESS CRITICAL the diff did not
-   touch is listed under required fixes labeled "schedule now, does not block
-   this commit".
+4. **Fix all of them, in this change.** Every counted finding blocks the merge
+   at every severity; order the list by severity so the worst is fixed first.
+   A finding the author thinks is wrong is dismissed only with a quoted
+   `file:line` or a command and its output, carried into the re-review.
+   Follow-up items (a FRESHNESS CRITICAL the diff did not touch included) are
+   not required fixes: list them separately, under the report's Follow-up
+   heading, for the one follow-up PR after merge.
 5. **End with the loop that closes it**: apply the fixes, then run
    `/chad-review` again to confirm. Any cleanup pass (`/simplify`) runs before
    that re-review, never after it, per §"Choosing between review tools".
@@ -899,7 +957,7 @@ question: the fix prompt is already in the report body.
   Sub-agents hold Bash, Edit, and Write, and the review runs the project's own
   gate, tests, and codegen, all of which write to disk. A `git stash -u`,
   `git clean`, or `git checkout` from any of those destroys untracked files under
-  review. That is why pre-flight step 2 backs them up and step 5 verifies they
+  review. That is why pre-flight step 2 backs them up and Phase 2 step 6 verifies they
   survived: the guard exists precisely because the guarantee does not.
 - **Run checks, not actions.** Every command this skill triggers must be one that
   inspects: build, test, lint, typecheck, generate-and-diff, scan. Never run a
@@ -915,11 +973,10 @@ question: the fix prompt is already in the report body.
 - ALWAYS pass an explicit `model` on every Agent launch, per §"Model tiering".
   Haiku is correct for LOOKUP and wrong above it; never fable.
 - **The prescribed agents are the entire budget**: one reviewer per routing
-  block (language blocks and the status-bearing docs block alike), and
-  the single batched confidence scorer in Phase 2 step 4. That scorer is the one
-  sanctioned exception to "no agent checks another agent": it is LOOKUP tier, it
-  handles every finding in one call, and independence from the author is the
-  whole point of it. Never spawn a second agent for work one can finish.
+  block (language blocks and the status-bearing docs block alike), and the
+  Phase 2 step 4 verifiers. The verifiers are the one sanctioned exception to
+  "no agent checks another agent": they are JUDGE tier, batched up to 5
+  findings each, and independence from the author is the whole point of them. Never spawn a second agent for work one can finish.
 - **Never spawn an agent to find out whether there is work.** Sub-agents do
   bounded work whose shape is already known. If a deterministic command in the
   parent answers the question, the parent answers it and passes the result down.

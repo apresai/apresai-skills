@@ -6,15 +6,22 @@
 #
 # USAGE
 #   bash docs-apply.sh [--last-commit]
+#   bash docs-apply.sh -- <file>...   # these docs only (passed to docs-drift.sh)
+#
+# ultra-audit runs it in the real worktree, where a branch's committed doc
+# changes are not uncommitted any more, so it names the branch's changed
+# markdown explicitly with the `--` form.
 #
 # EXIT 0 if the scan ran. 2 for usage. 1 if a rewrite was attempted and failed.
 set -euo pipefail
 
 mode_args=()
-for arg in "$@"; do
-  case "$arg" in
-    --last-commit) mode_args+=(--last-commit) ;;
-    *) echo "usage: docs-apply.sh [--last-commit]" >&2; exit 2 ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --last-commit) mode_args+=(--last-commit); shift ;;
+    --) shift; [[ $# -gt 0 ]] || { echo "usage: docs-apply.sh [--last-commit] [-- <file>...]" >&2; exit 2; }
+        mode_args+=(-- "$@"); break ;;
+    *) echo "usage: docs-apply.sh [--last-commit] [-- <file>...]" >&2; exit 2 ;;
   esac
 done
 
@@ -27,11 +34,16 @@ drift=$(bash "$here/docs-drift.sh" "${mode_args[@]+"${mode_args[@]}"}" 2>/dev/nu
 applied=0
 skipped=0
 
+# Executable prompt content is never rewritten. Deliberately broader than
+# chad-review-route.sh's is_exec_md (no plugin-root check): a plain doc under
+# a commands/ or resources/ dir that gets skipped costs one manual edit,
+# while a rewritten prompt changes what a model executes.
 exec_path() {
   case "$1" in
     CLAUDE.md|*/CLAUDE.md|Claude.md|*/Claude.md|AGENTS.md|*/AGENTS.md|SKILL.md|*/SKILL.md) return 0 ;;
     .claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
     */commands/*|commands/*|*/agents/*|agents/*|*/skills/*|skills/*) return 0 ;;
+    */resources/*.md|resources/*.md) return 0 ;;
   esac
   return 1
 }

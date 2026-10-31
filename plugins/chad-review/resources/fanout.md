@@ -1,8 +1,8 @@
 # chad-review: writing sub-agent prompts
 
-Read this ONLY when you are about to launch an agent: `standard` shape.
-`light` and `deps` spawn nothing, so none of this applies to them, which
-is why it lives here rather than in the always-loaded skill body.
+Read this ONLY when you are about to launch an agent: every `/ultra-audit`
+run, and any `/chad-review` run that fans out or launches a verifier. It lives
+here rather than in the always-loaded bodies so the contract is written once.
 
 Model tiering, the agent budget, and the Phase 1 / Phase 2 split stay in
 `commands/chad-review.md` §"Execution strategy"; this file is only the prompt
@@ -43,20 +43,22 @@ Output. Strict, no exceptions:
 - Zero preamble, zero restated diff, zero methodology narration.
 - One line per finding:
   SEVERITY | <confidence 0-100> | file:line | <=15-word finding
-- Report every issue you find, including low-severity ones. Do NOT filter for
-  importance: that is a later pass's job, once, with everything in view.
-  Coverage is your job, ranking is not.
-- Score confidence honestly, on this scale, and do not inflate it. A separate
-  agent re-scores every finding independently, and anything under 80 is dropped
-  rather than deferred, so a padded score costs you the finding:
-  - 0: false positive under light scrutiny, or a pre-existing issue.
-  - 25: might be real, could not verify it. Stylistic and not called out in
-    the project's own guidelines.
-  - 50: verified real, but a nitpick or rare in practice, and unimportant next
-    to the rest of the diff.
-  - 75: double-checked, very likely hit in practice, the existing approach is
-    insufficient, or the project's guidelines name it directly.
-  - 100: confirmed, will happen frequently, evidence directly supports it.
+- Report every issue you find, including ones you are uncertain about or
+  consider low-severity. Do not filter for importance or confidence: a
+  separate verification step rules on every finding, and it drops one only
+  when it can quote code or command output that disproves it. A finding you
+  hold back is a bug nobody fixes. Pass through every candidate that has a
+  nameable failure scenario. Omit only pure style or naming preferences that
+  no project rule names.
+- The confidence number is a label for ordering, never a cutoff. Score it
+  honestly:
+  - 25: might be real, could not verify it.
+  - 50: verified real, rare in practice or minor.
+  - 75: double-checked, very likely hit in practice, or a project rule names it.
+  - 100: confirmed, evidence directly supports it.
+- You may suggest PRE-EXISTING when the failing line is untouched by the diff
+  and the diff does not change whether it is reached. Still report it; the
+  verifier decides, and an unconfirmed suggestion counts as the diff's.
 - Emit one "## <PASS NAME>" heading per pass you own, findings underneath,
   in the order the passes are numbered.
 - A pass with no findings outputs exactly: Clean
@@ -71,7 +73,8 @@ You are reviewing a pre-commit diff on the <project> repo. You own passes
 1 DRIFT, 2 BEHAVIOR (what changed), 3 TESTS (coverage only, do not run tests),
 and 4 OBSERVABILITY.
 
-The diff under review (from `git diff HEAD` + untracked files):
+The diff under review (`git diff HEAD` + untracked files; for /ultra-audit,
+taken inside the pr-stage.sh worktree, which holds the whole branch):
 <paste diff>
 
 Project context (detected during pre-flight):
@@ -80,7 +83,9 @@ Project context (detected during pre-flight):
 - Route-parity test: <command or "not present">
 - Data-model doc: <path or "not present">
 - docs-drift records: <paste the CONTRA/STALE/MARKER/INDEXED rows, or "none">
-  (status-bearing docs reviewer only; read each flagged doc IN FULL)
+  (for the reviewer that owns a status-bearing doc: the status-bearing block's
+  reviewer, or the single reviewer of a fast-depth run; read each flagged doc
+  IN FULL, not just its hunks)
 
 Pass rubrics. Read these BEFORE you start; they are required, not background:
   file: <RESOLVED absolute path, see below>
@@ -93,13 +98,19 @@ command that deploys, publishes, releases, or migrates. Running the project's
 build, tests, linters, and generators IS expected and they do write to disk.
 ```
 
-Agent call. `model` is REQUIRED, from §"Model tiering":
+Agent call. `model` is REQUIRED and so is the effort the node file names.
+The skill asks for both explicitly, which is what permits setting them.
+`/ultra-audit`: `opus` everywhere; finders `medium` at fast depth and `high`
+at deep depth; verifiers, challenger, sweep, and spec-vs-diff always `high`.
+`/chad-review`: its §"Model tiering" for reviewers (session-relative tier,
+effort inherited); verifiers `opus`, `high`:
 
 ```json
 {
   "description": "Reviewer: DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY",
   "subagent_type": "general-purpose",
-  "model": "<REVIEW tier for this session, normally sonnet>",
+  "model": "<opus, or chad-review's REVIEW tier for a chad-review reviewer>",
+  "effort": "<what the node file names; omit only for a chad-review reviewer>",
   "prompt": "<self-contained prompt as above>"
 }
 ```
