@@ -475,13 +475,17 @@ advisories and becomes one line rather than nine.
 **Then update the dependencies.** Not classify, not offer: update. The native
 tools stay in range on their own: `npm update` moves only within the ranges
 `package.json` declares, and `go get -u` never crosses a major (a Go major is a
-different import path). They do not know about release age, so every update
-also applies the 14-day release-age floor, trusted-publisher exemption, and
-CVE NEEDS-DECISION rule in `resources/nodes/apply-deps.md` § Release-age floor
-(Read it before updating). For each manifest the script discovered:
+different import path). They do not know about release age, so when the
+project's or user's `CLAUDE.md` configures a release-age floor, every update
+also applies it, with the trusted-publisher exemption and CVE NEEDS-DECISION
+rule in `resources/nodes/apply-deps.md` § Release-age floor (Read it before
+updating). With no floor configured, take the newest in-range releases. For
+each manifest the script discovered:
 
-- Go module: `go get -u ./... && go mod tidy`, then the floor check
-- npm package: `npm update --before=<date 14 days ago>`
+- Go module: `go get -u ./... && go mod tidy`, then the floor check if one is
+  configured
+- npm package: `npm update`, or `npm update --before=<floor date>` when a
+  floor is configured
 - Another ecosystem with a native in-range updater: use it. None: skip it and
   say so in the report.
 
