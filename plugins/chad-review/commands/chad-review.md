@@ -1,6 +1,6 @@
 ---
 name: chad-review
-description: 5-pass pre-commit code review (drift, behavior and risk, tests, observability, dependency freshness). Use when the user asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted changes, else the last commit. Emits the receipt that receipt.sh verify checks at the merge gate.
+description: 5-pass pre-commit code review (drift, behavior and risk, tests, observability, dependency freshness). Use when the user asks for a pre-commit review, says "review before I commit" or "review the last commit", or invokes /chad-review. Reviews uncommitted changes, else the last commit. Emits a receipt, but the merge gate requires an /ultra-audit receipt; use /ultra-audit before merging.
 ---
 
 # Chad Review: 5-Pass Code Review
@@ -153,8 +153,8 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
    | Shape | Agents | Treatment |
    |---|---|---|
-   | `light` | 0 | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is the author, so its findings still go to the Phase 2 step 4 verifier (one JUDGE-tier agent) and the report carries the `Verified:` line as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
-   | `deps` | 0 | FRESHNESS runs in the parent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
+   | `light` | 0 reviewers (step 4 verifiers still run) | Every pass runs INLINE in the parent; a small or prose-only diff does not justify an agent bootstrap. Because no reviewer fans out, the parent is the author, so its findings still go to the Phase 2 step 4 verifier (one JUDGE-tier agent) and the report carries the `Verified:` line as usual. On docs-only the doc is the subject, so DRIFT leads (accuracy against the code, staleness) and BEHAVIOR AND RISK is a quick probe for secrets, PII, or wrong commands. On config-only, CI and workflow changes ARE behavior: probe them properly (a `pull_request_target` trigger running untrusted PR code with secrets, a permissions widening, a cache-poisoning path). FRESHNESS runs in the parent regardless of shape: the script, then the in-range update per §5. |
+   | `deps` | 0 reviewers (step 4 verifiers still run) | FRESHNESS runs in the parent, every dep tagged `(diff-touched)`. TESTS runs in the parent, since bumps break tests. Others: one-line inline notes or N/A. |
    | `standard` | 1 per language block + 1 | Full fan-out per §"Execution strategy". |
 
    Print `Diff shape: <shape>`. When it is not `standard`, add "rerun with
@@ -203,8 +203,9 @@ review: `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
    `pass-reference.md` § GATE for the ecosystems actually present. Recommend it,
    never create it: the target belongs to the project and to whoever maintains
    it, and one this skill writes behind the maintainer's back is one nobody owns.
-   Being a repo-level gap rather than a defect in the diff, it does not move the
-   GO/NO-GO verdict, the same way a pre-existing FRESHNESS CRITICAL does not.
+   Being a repo-level gap rather than a defect in the diff, it is a Follow-up
+   item and does not move the verdict, the same as a pre-existing FRESHNESS
+   CRITICAL.
 
 ## 1. DRIFT
 
@@ -559,9 +560,9 @@ last clause is not decoration: without it the honest output for a repo whose
 Swift graph was never opened is indistinguishable from a clean one, which is the
 failure this pass shipped with.
 
-A CVE or EOL on a direct dependency the diff touched is NO-GO. Pre-existing and
-untouched on a direct dependency is CONDITIONAL: this change is safe, the
-project is not. A bundled or transitive advisory, CVE included, is advisory
+A CVE or EOL on a direct dependency the diff touched is counted (NO-GO).
+Pre-existing and untouched on a direct dependency is Follow-up: this change is
+safe, the project is not, and the follow-up PR (or `/deps-update`) fixes it. A bundled or transitive advisory, CVE included, is advisory
 only and never moves the verdict. Everything else is advisory.
 
 ## Execution strategy
@@ -576,7 +577,7 @@ Three tiers, and the expensive one is deliberately the smallest.
 
 | Tier | Steps | Model |
 |---|---|---|
-| **LOOKUP** | version lookup for DEP records | `haiku` |
+| **LOOKUP** | a registry version lookup, only if one is ever delegated (normally the update commands answer it, no agent) | `haiku` |
 | **REVIEW** | the per-language reviewer that reads the diff and raises findings | `sonnet` |
 | **JUDGE** | the parent's attack probes, and the Phase 2 step 4 verifiers | `opus`, at `effort: high` |
 
@@ -657,8 +658,8 @@ One pass, holding every finding at once:
    step 8, so the receipt's fingerprint covers the updated tree.
 3. **Attack** (BEHAVIOR AND RISK, attack half) with targeted grep and file reads
    to confirm edge cases. This is JUDGE-tier work: inline when the parent is
-   already there (opus and sonnet sessions), otherwise delegate this step alone
-   to one JUDGE sub-agent.
+   already opus, otherwise delegate this step alone to one JUDGE sub-agent
+   (`opus`, `effort: high`).
 4. **Verify every finding adversarially.** Follow
    `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/nodes/verify.md`
    exactly: JUDGE-tier (`opus`, `effort: high`) verifiers that did not write the
@@ -675,9 +676,13 @@ One pass, holding every finding at once:
 
    Emit one `Verified: N raised, C confirmed, P plausible, R refuted` line, and
    list each REFUTED finding with its evidence.
-5. **Mark PRE-EXISTING findings.** A finding on a line the diff did not touch,
-   on behavior the diff does not reach, is reported under `Not blocking` and is
-   not counted. Everything else that survived step 4 is counted.
+5. **Place every finding** exactly as
+   `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/nodes/receipt.md`
+   § "Where each finding goes" says: Fix now (counted), Follow-up (listed, not
+   counted: verified PRE-EXISTING, repo-level gaps such as no gate or a
+   COVERAGE GAP, untouched dependencies), or Closed. Findings the parent wrote
+   itself (the `light` and `deps` shapes, the attack probes) go through step 4
+   like any other.
 6. **Confirm the working tree survived.** Skip this only when pre-flight step 2
    skipped the backup because there were no untracked files; there is nothing to
    verify, and the header already says so.
@@ -724,8 +729,9 @@ One pass, holding every finding at once:
    diff, untracked files folded in). At the merge gate the exact reviewed
    head passes, a clean rebase with an unchanged diff converges on the
    fingerprint, and any substantive diff change fails closed. After fix
-   commits, the convergence rule reviews only the fix delta, but the receipt
-   is always re-emitted at FULL scope for the new head and fingerprint;
+   commits, re-review the whole branch, staged with `resources/pr-stage.sh`,
+   never only the fix commit, and re-emit the receipt for the new head and
+   fingerprint;
    `verify` trusts the newest ruling for the current content, so a stale GO
    can never outlive the diff it reviewed.
 
@@ -735,14 +741,14 @@ The prompt contract (what every sub-agent prompt must contain, the verbatim
 output contract, the prompt skeleton, and the Agent call shape) lives in
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/fanout.md`.
 
-Read it when you are about to launch an agent, and only then: `standard` shape.
-`light` and `deps` spawn nothing and never need it, and `light` is the common
-case.
+Read it when you are about to launch an agent, and only then: the `standard`
+fan-out, and the step 4 verifiers on every shape.
 
 ## Performance budget
 
-Target: under ~2 minutes for a typical single-language change (5 to 10 files),
-`light` and `deps` well under a minute.
+Target: under ~3 minutes for a typical single-language change (5 to 10 files).
+`light` and `deps` launch no reviewer, but step 4 still launches verifiers for
+whatever was raised, so they take as long as that verification.
 
 The levers in order of size: the diff-shape matrix skips the fan-out entirely for
 most everyday changes; the scripts (`freshness.sh`, `chad-review-route.sh`,
@@ -782,10 +788,11 @@ skipped: codegen takes over 30s, run `make generate-types` and check
 Both review tools run before the commit; pr-review-toolkit is for after the PR
 is open. `/simplify` runs before the review, never after: applying edits after the
 gate mutates the reviewed diff and re-arms it. The cycle is build, test,
-`/simplify`, `/ultra-audit` (or `/chad-review`), PR, then
-`receipt.sh verify --pr <n>` immediately before the merge: the merge gate
-checks the receipt, not the session's memory of a review, and either tool's
-receipt satisfies it.
+`/simplify`, PR, `/ultra-audit`, then
+`receipt.sh verify --pr <n> --require-tool ultra-audit` immediately before the
+merge: the merge gate checks the receipt, not the session's memory of a review,
+and since 3.0.0 only an ultra-audit receipt satisfies it. A `/chad-review`
+receipt still records its ruling locally and on the PR.
 
 ## Final report
 
@@ -812,7 +819,16 @@ Gate: <command> (<green | N failures | none detected>)
 ### 5. FRESHNESS
 [updated deps (old -> new) + FRESHNESS tag lines (security, eol, fix-and-take-now, decision, bundled, coverage) + decision blocks, or "Clean"/"N/A"]
 
-Verified: N raised, C confirmed, P plausible, R refuted
+Verified: <the verify node's line>
+
+### Fix now (counted)
+[every counted finding, ordered by severity, CONFIRMED before PLAUSIBLE]
+
+### Follow-up (after merge, one PR)
+[verified PRE-EXISTING, repo-level gaps, untouched dependencies (/deps-update)]
+
+### Closed
+[REFUTED with evidence; accepted-by-user]
 
 ### Verdict: [GO / NO-GO / CONDITIONAL]
 [1-2 sentences: commit as-is, fix something first, or stop and rethink]
@@ -825,32 +841,35 @@ sharpen a `file:line`, and those edits carry through; nothing else is rewritten.
 **Replace the confidence score with the ruling** (CONFIRMED or PLAUSIBLE). A
 PLAUSIBLE finding states what would confirm it.
 
-**Verdict mapping.** GO only when no counted finding remains at any severity.
-Any counted finding is NO-GO: severity decides fix order, never whether a fix
-happens. `receipt.sh verify` fails a GO whose counts are not all zero. Also **strip any process narration** an agent emitted
+**Verdict mapping**, the same as `nodes/receipt.md`. GO only when no counted
+finding remains at any severity. Any counted finding is NO-GO: severity decides
+fix order, never whether a fix happens. CONDITIONAL only when nothing is
+counted but the review could not vouch for the whole diff (scoped by the user,
+or the gate could not finish). `receipt.sh verify` fails a GO whose counts are
+not all zero. Also **strip any process narration** an agent emitted
 despite the contract. Findings in the deliverable, never the process.
 
 **How FRESHNESS affects the verdict.** Being whole-project and always-on, a
 pre-existing dependency issue unrelated to the diff should not hard-block an
-unrelated commit:
+unrelated commit, and it is not dropped either:
 
-- **CRITICAL on a direct dependency the diff touched or introduced: NO-GO.**
+- **CRITICAL on a direct dependency the diff touched or introduced: counted,
+  NO-GO.**
 - **CRITICAL that is pre-existing and untouched, on a direct dependency:
-  CONDITIONAL**, with a prominent callout. This change is safe to commit; the
-  project carries a CRITICAL issue to schedule now.
+  Follow-up**, with a prominent callout and a `/deps-update` recommendation.
+  This change is safe to commit; the follow-up PR fixes the project.
 - **A bundled or transitive advisory, CVE included: never moves the verdict.**
   It is a warn line in the FRESHNESS body, full stop. Escalating one of these
   to CONDITIONAL is the failure the bundled tier exists to prevent.
-- **Any `COVERAGE ... GAP`: CONDITIONAL**, never a silent GO. An unscanned
+- **Any `COVERAGE ... GAP`: Follow-up**, never a silent clean. An unscanned
   ecosystem is not a clean one, and the failure this guards against is a review
   that reads as complete over a dependency graph it never opened. It does not
-  hard-block, because the usual cause is environmental rather than a defect in
-  the diff. State the ecosystem and the cause in the verdict line itself, not
-  only in the FRESHNESS body.
-- **A reverted package's update (its gate went red): HIGH**, naming the
-  package and carrying the failing output, then judged by the tier rules: a
-  trivial mechanical fix is `fix-and-take-now`, real breaking surface is a
-  decision block.
+  block, because the usual cause is environmental rather than a defect in the
+  diff. State the ecosystem and the cause in the verdict line itself, not only
+  in the FRESHNESS body.
+- **A reverted package's update (its gate went red): HIGH Follow-up**, naming
+  the package and carrying the failing output: a trivial mechanical fix goes to
+  the follow-up PR, real breaking surface is a decision block.
 - **Applied updates and `fix-and-take-now` items: never in the verdict.**
   Applied updates appear in the report and the `deps:` commit instruction;
   fix-and-take-now items are work the session does right after the review.

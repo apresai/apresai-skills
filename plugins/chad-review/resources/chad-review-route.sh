@@ -397,6 +397,7 @@ is_exec_md() {
     CLAUDE.md|*/CLAUDE.md|Claude.md|*/Claude.md|AGENTS.md|*/AGENTS.md|SKILL.md|*/SKILL.md) return 0 ;;
     .claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
     *"/commands/"*|"commands/"*|*"/agents/"*|"agents/"*|*"/skills/"*|"skills/"*) ;;
+    *"/resources/"*.md|"resources/"*.md) ;;
     *) return 1 ;;
   esac
   # A commands|agents|skills path counts only as a plugin root's OWN top-level
@@ -409,6 +410,9 @@ is_exec_md() {
     if [[ "$root" == "." ]]; then pre=""; else pre="$root/"; fi
     case "$f" in
       "$pre"commands/*|"$pre"agents/*|"$pre"skills/*) return 0 ;;
+      # A plugin's resources/ markdown (node files, rubrics, prompt contracts)
+      # is loaded and executed by its commands, so it is prompt content too.
+      "$pre"resources/*.md) return 0 ;;
     esac
   done <<< "$plugin_root_dirs"
   # A DELETED file cannot be confirmed from disk, and neither can its plugin root
@@ -422,7 +426,7 @@ is_exec_md() {
       p=${p%/*}
       seg=${p##*/}
       case "$seg" in
-        commands|agents|skills)
+        commands|agents|skills|resources)
           if [[ "$p" == */* ]]; then cand="${p%/*}/"; else cand=""; fi
           git -C "$repo_root" cat-file -e "HEAD:${cand}.claude-plugin/plugin.json" 2>/dev/null && return 0
           ;;
@@ -516,7 +520,8 @@ echo "    resolve versions for DEP records, at LOOKUP tier, and not from the rou
 echo "  - Status-bearing docs ride their own general-purpose reviewer at REVIEW tier,"
 echo "    reading COMPLETE files plus docs-drift.sh records. The DOCS-DRIFT-TASK line"
 echo "    above is the parent's own DRIFT step whenever markdown changed; run it, do"
-echo "    not just note it. Trivial prose keeps the no-reviewer light path."
+echo "    not just note it. Under /chad-review trivial prose keeps the no-reviewer"
+echo "    light path; /ultra-audit always reviews prose (see nodes/impl-review.md)."
 echo "  - Phase 2 is the parent: run the affected tests, run the attack probes,"
 echo "    verify every finding (refute only with evidence), confirm the untracked"
 echo "    files survived, then write the verdict."

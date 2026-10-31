@@ -1,8 +1,8 @@
 # chad-review: writing sub-agent prompts
 
-Read this ONLY when you are about to launch an agent. `/ultra-audit` launches
-reviewers on every run; `/chad-review`'s `light` and `deps` shapes spawn
-nothing, which is why this lives here rather than in the always-loaded body.
+Read this ONLY when you are about to launch an agent: every `/ultra-audit`
+run, and any `/chad-review` run that fans out or launches a verifier. It lives
+here rather than in the always-loaded bodies so the contract is written once.
 
 Model tiering, the agent budget, and the Phase 1 / Phase 2 split stay in
 `commands/chad-review.md` §"Execution strategy"; this file is only the prompt
@@ -56,8 +56,9 @@ Output. Strict, no exceptions:
   - 50: verified real, rare in practice or minor.
   - 75: double-checked, very likely hit in practice, or a project rule names it.
   - 100: confirmed, evidence directly supports it.
-- Mark a finding PRE-EXISTING when the failing line is untouched by the diff
-  and the diff does not change whether it is reached. Still report it.
+- You may suggest PRE-EXISTING when the failing line is untouched by the diff
+  and the diff does not change whether it is reached. Still report it; the
+  verifier decides, and an unconfirmed suggestion counts as the diff's.
 - Emit one "## <PASS NAME>" heading per pass you own, findings underneath,
   in the order the passes are numbered.
 - A pass with no findings outputs exactly: Clean
@@ -94,17 +95,18 @@ command that deploys, publishes, releases, or migrates. Running the project's
 build, tests, linters, and generators IS expected and they do write to disk.
 ```
 
-Agent call. `model` is REQUIRED. `/ultra-audit` uses `opus` with
-`effort: high` on every reviewer, verifier, challenger, and sweep (its node
-files say so explicitly, which is what permits setting effort).
-`/chad-review` uses §"Model tiering":
+Agent call. `model` is REQUIRED and so is the effort the node file names.
+The skill asks for both explicitly, which is what permits setting them.
+`/ultra-audit`: `opus` everywhere; finders `medium` (fast) or `high` (deep),
+verifiers, challenger, sweep, and spec-vs-diff `high`. `/chad-review`: its
+§"Model tiering" for reviewers (effort inherited); verifiers `opus`, `high`:
 
 ```json
 {
   "description": "Reviewer: DRIFT, BEHAVIOR, TESTS coverage, OBSERVABILITY",
   "subagent_type": "general-purpose",
-  "model": "<opus for ultra-audit; REVIEW tier for chad-review>",
-  "effort": "<high for ultra-audit; omit for chad-review>",
+  "model": "<opus, or chad-review's REVIEW tier for a chad-review reviewer>",
+  "effort": "<what the node file names; omit only for a chad-review reviewer>",
   "prompt": "<self-contained prompt as above>"
 }
 ```

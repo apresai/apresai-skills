@@ -1,6 +1,6 @@
 # Node: skim
 
-Parent only. No agents. Runs on every diff, before impl-review.
+Parent only. No agents. Every diff, before impl-review.
 
 - Secrets, credentials, tokens, or PII in the diff
 - Commands, paths, or flags in docs that the repo does not have

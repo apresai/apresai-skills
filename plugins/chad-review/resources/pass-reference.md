@@ -159,8 +159,8 @@ per-schema symbols), and from `type Name struct|interface` in Go.
 
 Judgment:
 
-- A `MIRROR` in a test file is often a deliberate fixture: keep the record, let
-  confidence scoring weigh the path.
+- A `MIRROR` in a test file is often a deliberate fixture: keep the record; the
+  verifier may refute it by quoting the fixture's purpose.
 - A `MIRROR` plus a `STALECOMMENT` naming the generated file is the incident
   shape: a client hand-declaring `SearchResult` beside a comment claiming the
   committed generated types "predate that addition", while the generated file
@@ -169,8 +169,8 @@ Judgment:
 - Escalate when the generated header says "do not make direct changes": the
   project already declared the generated file authoritative.
 - Generic names (`Error`, `Config`) produce low-value mirrors; the scanner
-  deliberately has no stoplist, so drop them at the confidence filter, not by
-  editing the scanner.
+  deliberately has no stoplist. The verifier refutes an unrelated same-name
+  type by quoting both definitions; never edit the scanner to hide one.
 
 ### `[comments]` Doc-comment conventions
 
@@ -251,7 +251,7 @@ The four deterministic suppressions, in order, first match wins:
    markers. The whole file is a record; old numbers inside it are correct.
 
 Judgment: `CONTRA` and `STALE` are deterministic findings; carry them unless
-the confidence scorer can show the record misread the doc. `MARKER` and
+the verifier can quote where the record misread the doc. `MARKER` and
 `INDEXED` are evidence with the FRESHNESS `REF`-polarity discipline: a hist
 marker in a doc that consistently reads as an archive is fine, and an active
 marker alone is fine; it is the combination, or the disagreement with an

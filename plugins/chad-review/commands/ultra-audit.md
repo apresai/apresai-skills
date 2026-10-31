@@ -1,147 +1,153 @@
 ---
 name: ultra-audit
-description: Full adversarial pre-commit audit and the default pre-merge review. Use when the user invokes /ultra-audit or wants the gate, tests, in-range dep updates, docs brought in line, an Opus implementation review, a fresh-context challenger, spec-vs-diff, per-finding adversarial verification, and a gap sweep in one pass, with every surviving finding fixed before merge. Its receipt satisfies receipt.sh verify at the merge gate, the same gate a /chad-review receipt passes.
+description: Adversarial pre-merge review and the merge gate. Use when the user invokes /ultra-audit or wants a change reviewed before merge. Reviews the whole PR branch, runs the project's gate and tests, Opus finders that report everything, and Opus verifiers that drop a finding only on quoted evidence; fast for small changes, deep (challenger plus gap sweep) for risky or large ones. Every surviving finding on the change is fixed; everything else becomes one follow-up PR. Its receipt is what the merge gate checks.
 ---
 
 # Ultra Audit
 
-Full audit of the dirty working tree, or the last commit if the tree is clean.
-There are no tiers: every diff, a one-line typo included, gets every review
-node. A script lists the nodes; this file executes that list.
+Pre-merge review of a change: the whole PR branch, or the dirty working tree,
+or the last commit on a clean main.
 
-**Why no tiers and no score threshold (3.0.0).** Routing a diff to a lighter
-tier, and dropping findings under confidence 80, were both ways a real defect
-got skipped. Anthropic's own guidance for Claude Opus is that a reviewer told
-to filter finds the bug and then declines to report it, and that self-reported
-confidence is not a reliable filter. So finders now report everything, and a
-separate Opus verifier drops a finding only when it can quote the code or the
-command output that disproves it. Uncertain findings stay, and get fixed.
+**Two depths, one rule.** Depth decides how many agents look. It never decides
+which findings are kept. A small change gets one strong finder and is fast; a
+risky or large one also gets a challenger and a gap sweep. At both depths,
+finders report everything, Opus verifiers drop a finding only when they can
+quote code or command output that disproves it, and every surviving finding
+on the change is fixed. (3.0.0 removed the old tiers and the confidence-80
+filter, which were how real findings got skipped.)
 
-**The default pre-merge review.** The receipt this run emits satisfies
-`receipt.sh verify` at the merge gate, the same as a `/chad-review` receipt.
-A GO receipt must record zero open findings.
+**Dependencies are not updated here.** Review audits them. `/deps-update`
+brings a repo to the newest in-range releases as its own PR.
 
 `resources/...` paths resolve against the skill root:
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/...`.
 
 ## Models and effort
 
-Every agent this command launches is `subagent_type: general-purpose`,
-`model: opus`, `effort: high`. This skill explicitly asks for that effort on
-every launch: Opus 5.5 defaults to `medium`, and this is the review that gates
-a merge. Never haiku or sonnet here, never fable. The parent orchestrates in
-whatever model the session runs.
+Every agent this command launches is `subagent_type: general-purpose` and
+`model: opus`, with effort set explicitly as each node file says (this skill
+asks for it): finders `medium` at fast depth and `high` at deep depth;
+verifiers, challenger, sweep, and spec-vs-diff always `high`. Never haiku,
+sonnet, or fable. The built-in `/simplify` chooses its own models.
 
-## Pre-flight
+## Pre-flight: pick the target
 
-1. `git status --porcelain`. Any uncommitted change means review the working
-   tree. A clean tree means the last commit. No commits and a clean tree: say
-   "Nothing to review" and STOP.
-2. Run the graph. Working-tree review:
+1. `git status --porcelain`, and the commits ahead of the base
+   (`git rev-list --count origin/main..HEAD`, or `main` without a remote).
+2. **Commits ahead of the base: review the whole branch.**
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pr-stage.sh" stage
+   ```
+
+   It prints `DIR=`: a throwaway worktree where the full branch diff (plus any
+   uncommitted work) shows as working-tree changes. Run every script node with
+   that directory as the working directory. Never review a branch with
+   `--last-commit`: after a fix commit that reviews only the fix while the
+   receipt covers the whole diff. Remove the worktree with
+   `pr-stage.sh remove <dir>` before the receipt.
+3. No commits ahead and a dirty tree: review the working tree in place.
+4. No commits ahead and a clean tree (on main): `--last-commit`. Nothing at
+   all: say "Nothing to review" and STOP.
+5. Run the plan:
 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/pipeline.sh"
    ```
 
-   Last-commit: add `--last-commit`. `--full` is accepted and changes nothing.
-3. Print one line:
-   `Ultra Audit: <working tree|last commit>, RISK=<risk>, AGENTS=<n>+verifiers, REASON=<reason>`
-4. `SCOPE_ASK=1` means the diff is past 50 files or 3000 production lines. Ask
-   whether to scope to specific directories. Scoping narrows the files, never
-   the nodes.
-5. `UNTRACKED` greater than 0: run `untracked-guard.sh backup` before any other
-   node (pipeline already listed `untracked-backup` in that case). A non-zero
-   backup exit: stop.
+   (`--last-commit` only in case 4; `--full` forces deep.) Print one line:
+   `Ultra Audit: <branch vs base|working tree|last commit>, MODE=<fast|deep>, RISK=<risk>, AGENTS=<n>+verifiers, REASON=<reason>`
+6. `SCOPE_ASK=1`: the diff is past 50 files or 3000 production lines. Ask
+   whether to scope to directories. A scoped run cannot emit GO (see
+   `nodes/receipt.md`).
+7. Load the ledger (`nodes/verify.md` § Ledger) for this branch, if any.
 
 ## Execute the plan
 
-Read the `NODES=` list left to right. For each name, Read
-`resources/nodes/<name>.md` and do what it says. `SKIP=` only ever holds nodes
-with no input (no changed plan, no code to simplify, no untracked files). Do
-not spawn an agent to decide whether a node has work.
-
-Order is load-bearing: gate and tests run on the user's tree, apply nodes
-mutate, then review nodes see the post-apply diff.
+Read `NODES=` left to right. For each name, Read `resources/nodes/<name>.md`
+and do what it says. `SKIP=` holds nodes that do not apply at this depth or
+have no input. Do not spawn an agent to decide whether a node has work.
 
 | Node | What it is |
 |---|---|
 | `untracked-backup` | `untracked-guard.sh backup`. Path goes in the report header. |
-| `gate` | Project validate/check/verify/ci. ~60s cap. See the node file. |
-| `docs-drift` | `docs-drift.sh` (plus `--last-commit` in that mode). |
+| `gate` | Project validate/check/verify/ci, run to completion. |
+| `docs-drift` | `docs-drift.sh`. |
 | `contract-mirror` | `contract-mirror.sh`. |
-| `tests` | Scoped tests for changed files. Quote failures. Do not edit. |
-| `freshness-audit` | `freshness.sh`. Do not update. |
-| `spec-vs-diff` | Fresh-context plan vs diff. Only when `SPEC=yes`. |
-| `freshness-update` | In-range `npm update` / `go get -u` taking the newest in-range releases, per `nodes/apply-deps.md`. |
-| `simplify` | Built-in `/simplify`, then re-run the gate. |
-| `docs-apply` | `docs-apply.sh`. Skip the whole node if spec-vs-diff returned FAIL. |
+| `tests` | Scoped tests for changed files. Quote failures. |
+| `freshness-audit` | `freshness.sh`, audit only. |
+| `spec-vs-diff` | Opus plan vs diff. Only when `SPEC=yes`. |
+| `simplify` | Built-in `/simplify` on code files only, then re-run the gate. |
+| `docs-apply` | `docs-apply.sh`, stale live values only. Skipped if spec failed. |
 | `skim` | Parent-only secrets / lying commands / risky config. |
-| `impl-review` | Opus reviewers, one per routing block, at least one. |
-| `challenger` | Opus fresh-context attack on the change and for missed findings. |
+| `impl-review` | Opus finders: one (fast) or one per routing block (deep). |
+| `challenger` | Deep only. Opus attack on the change itself. |
 | `verify` | Opus verifiers rule CONFIRMED / PLAUSIBLE / REFUTED on every finding. |
-| `sweep` | One Opus gap-finder; its new findings go through verify. |
-| `receipt` | `receipt.sh emit --tool ultra-audit`. GO only at zero open findings. |
+| `sweep` | Deep only. One Opus gap-finder; its findings go through verify. |
+| `receipt` | `receipt.sh emit --tool ultra-audit`, counts always passed. |
 
-## Apply then review
-
-After `gate` and `tests`, run `spec-vs-diff` if listed, then apply nodes
-(`freshness-update`, `simplify`, `docs-apply`), then re-run the same gate.
-Red after apply: stop, report the red output, do not emit a Built PASS. Skip
-`docs-apply` when spec-vs-diff returned FAIL.
+Order is load-bearing: the gate and tests run on the change as written, spec
+before the apply nodes, apply nodes (`simplify`, `docs-apply`) before the
+finders, so finders see the post-apply diff, and verify after every finder.
+Red gate after an apply: report it; it is a counted Built finding. On a staged
+review, carry apply-node edits back to the real branch with
+`pr-stage.sh export <dir> | git apply` before removing the staged worktree.
 
 Reviewer prompts get the post-apply diff, the script records, and a rubric
 path. Not this conversation. Not the author's rationale. Resolve
 `pass-reference.md` to an absolute path before handing it to an agent (see
 `resources/fanout.md`).
 
-## Verdict
+## Report
 
 ```
 ## Ultra Audit
-RISK:      <risk surfaces or none>
+MODE:      fast | deep (<reason>)
 Spec:      PASS | FAIL | N/A
-Built:     PASS | FAIL
-Challenge: HOLDS | DOES NOT HOLD
-Verified:  N raised, C confirmed, P plausible, R refuted
-Apply:     <what ran, or skipped because spec failed>
+Built:     PASS | FAIL | NOT RUN
+Challenge: HOLDS | DOES NOT HOLD | SKIPPED (fast)
+Verified:  <the verify node's line>
+Apply:     <what ran>
 
-### Fix these (open, counted)
-SEVERITY | CONFIRMED|PLAUSIBLE | file:line | finding | <what would confirm it, for PLAUSIBLE>
+### Fix now (counted)
+SEVERITY | CONFIRMED|PLAUSIBLE | file:line | finding | <evidence, or what would confirm it>
 
-### Not blocking
-REFUTED (with evidence), PRE-EXISTING, repo-level, informational
+### Follow-up (after merge, one PR)
+<pre-existing, repo-level, untouched deps (/deps-update), with the item each needs>
 
+### Closed
+<REFUTED with evidence; accepted-by-user>
+
+Verdict: GO | NO-GO | CONDITIONAL
 Receipt: <path>
 ```
 
-Open findings are ordered by severity, then CONFIRMED before PLAUSIBLE. No
-blended GO. Spec N/A when `SPEC=no`.
+Fix-now findings are ordered by severity, then CONFIRMED before PLAUSIBLE.
 
-## After the verdict: fix everything open
+## After the report
 
-Every open finding is fixed in the same PR, at every severity, then
-`/ultra-audit` re-runs with the prior-run ledger (`nodes/verify.md`). A
-finding the author believes is wrong is dismissed only with a quoted
-`file:line` or a command and its output, recorded in the next report, never
-by skipping it. A finding needing its own design or a user decision is
-surfaced as NEEDS-DECISION with a concrete proposal, and it blocks GO until
-the user decides.
-
-The receipt satisfies `receipt.sh verify` at the merge gate. When this branch
-is heading for merge, run `receipt.sh verify --pr <n>` immediately before
-`gh pr merge`.
+1. **Fix every Fix-now finding** in this PR, at every severity. A finding the
+   author believes is wrong is recorded in the ledger as `dismissed` with its
+   evidence; the next run's verifier re-checks it. Never skip one silently.
+2. **Re-run** `/ultra-audit` on the whole branch. At most 2 fix rounds; then
+   whatever is still counted goes to the user as one NEEDS-DECISION list
+   (`nodes/receipt.md` § Fix rounds).
+3. **Merge on GO.** The merge gate runs
+   `receipt.sh verify --pr <n> --require-tool ultra-audit` immediately before
+   `gh pr merge`.
+4. **Follow-up PR.** Right after the merge, fix the Follow-up list in one
+   branch cut fresh from `origin/main`, reviewed by `/ultra-audit` like any
+   change. Dependency items go to `/deps-update` instead.
 
 ## Rules
 
 - Execute `NODES=`. Do not invent nodes. Do not skip a listed node.
-- The review itself never edits the change under review, never commits, and
-  never deploys, publishes, releases, migrates, or pushes. Fixing happens
-  after the verdict, as ordinary work in the session.
+- The finders and verifiers never edit the change. Only the apply nodes
+  (`simplify`, `docs-apply`) change files during the review, and only as
+  their node files say; fixing findings happens after the report.
+- Never commit, deploy, publish, release, migrate, or push from inside the
+  review.
 - Never drop a finding for low confidence or low severity. Only an
-  evidence-backed REFUTED removes one from the counts.
-- `/simplify` is the cleanup apply. Skip it when it is not in `NODES=`.
-- Do not apply docs or plans when spec-vs-diff failed.
-- Do not apply docs-apply into `CLAUDE.md`, `*/SKILL.md`, `.claude/**`,
-  `prompts/`, or a plugin's `commands/`, `agents/`, or `skills/`.
+  evidence-backed REFUTED, or the user's explicit decision, closes one.
 - After untracked-backup, run `untracked-guard.sh verify --restore` before
-  the receipt, the same way chad-review does.
+  the receipt.

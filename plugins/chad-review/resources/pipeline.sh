@@ -1,56 +1,63 @@
 #!/usr/bin/env bash
 # pipeline.sh: emit the ultra-audit execution plan for this diff.
 #
-# One pipeline, no tiers. Every diff gets every review node: the gate,
-# the deterministic scans, tests, freshness, a fresh-context Opus
-# implementation review, a challenger, per-finding adversarial
-# verification, and one gap sweep. Tiers (leaf/deps/small/standard/audit)
-# were removed in chad-review 3.0.0 because routing a diff to a lighter
-# tier was how findings got skipped.
+# Two depths, one rule. Depth decides how many agents LOOK; it never decides
+# which findings are KEPT. Every finding from either depth goes through
+# evidence-required verification and, unless refuted, gets fixed (3.0.0).
 #
-# The only nodes left out are ones with no input to act on: spec-vs-diff
-# without a changed PLAN.md, simplify on a diff with no code or with
-# executable prompt content (shipping excludes prompts from /simplify),
-# and untracked-backup with no untracked files. That is input detection,
-# not tiering.
+#   fast (default): gate, deterministic scans, tests, freshness audit, skim,
+#     one Opus finder over the whole diff, verify.
+#   deep: fast plus one finder per routing block (prose blocks included), a
+#     fresh-context challenger, and one gap sweep. Chosen when a high-risk
+#     path is touched (auth, billing, crypto, migrations, OpenAPI), when the
+#     diff carries executable prompt content, when it passes 15 files or 400
+#     production lines, when routing failed, or with --full.
+#
+# Dependency UPDATES are not part of review. /deps-update does them as their
+# own PR. Review only audits (freshness-audit).
+#
+# Input-driven omissions, not depth: spec-vs-diff needs a changed PLAN.md;
+# simplify needs code and a working route (so prompt files are known and
+# excluded); untracked-backup needs untracked files.
+#
+# A multi-commit PR branch is reviewed whole by running this inside the
+# worktree pr-stage.sh creates, never with --last-commit on a fix commit.
 #
 # USAGE
 #   bash pipeline.sh [--last-commit] [--full]
-#   --full is accepted for compatibility and changes nothing: every run is full.
 #
 # OUTPUT
-# One KEY=value block on stdout, then a REASON line. MODE is full or none.
-# RISK names high-risk surfaces (auth, migration, api) for the reviewers'
-# attention; it no longer changes which nodes run. Exit 0 when a plan was
-# produced, including MODE=none. Exit 2 for usage. Exit 1 only when the
-# script itself cannot run.
+# One KEY=value block on stdout, then a REASON line. MODE is fast, deep, or
+# none. Exit 0 when a plan was produced, including MODE=none. Exit 2 for
+# usage. Exit 1 only when the script itself cannot run.
 #
 # BASH 3.2. No associative arrays, no mapfile. Grep-no-match is normal:
 # every command substitution that can match nothing ends in || true.
 set -euo pipefail
 
+full=0
 mode="working-tree"
 for arg in "$@"; do
   case "$arg" in
-    --full) ;;
+    --full) full=1 ;;
     --last-commit) mode="last-commit" ;;
     *) echo "usage: pipeline.sh [--last-commit] [--full]" >&2; exit 2 ;;
   esac
 done
 
-ALL_NODES="gate,untracked-backup,docs-drift,contract-mirror,tests,freshness-audit,spec-vs-diff,freshness-update,simplify,docs-apply,skim,impl-review,challenger,verify,sweep,receipt"
+ALL_NODES="untracked-backup,gate,docs-drift,contract-mirror,tests,freshness-audit,spec-vs-diff,simplify,docs-apply,skim,impl-review,challenger,verify,sweep,receipt"
 
 empty_plan() {
   echo "MODE=none"
   echo "RISK=none"
   echo "AGENTS=0"
-  echo "APPLY=none"
   echo "SPEC=no"
   echo "SCOPE_ASK=0"
   echo "UNTRACKED=$1"
   echo "FILES=0"
   echo "LINES=0"
   echo "LANG_BLOCKS=0"
+  echo "PROSE_BLOCKS=0"
   echo "NODES="
   echo "SKIP=$ALL_NODES"
   echo "REASON=$2"
@@ -132,7 +139,8 @@ is_code() {
     Makefile|Dockerfile|Justfile|Taskfile.yml) return 0 ;;
   esac
   case "$1" in
-    *.go|*.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.swift|*.py|*.rs|*.kt|*.java|*.rb|*.c|*.h|*.m|*.mm) return 0 ;;
+    *.go|*.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.swift|*.py|*.rs|*.kt|*.kts|*.java|*.rb|*.c|*.h|*.cc|*.cpp|*.hpp|*.m|*.mm) return 0 ;;
+    *.dart|*.vue|*.svelte|*.cs|*.php|*.scala|*.ex|*.exs|*.lua|*.pl|*.r|*.R) return 0 ;;
     *.sh|*.bash|*.zsh|*.tf|*.tfvars|*.sql) return 0 ;;
   esac
   return 1
@@ -147,7 +155,7 @@ is_openapi_path() {
 
 # --- counts -------------------------------------------------------------------
 
-n_docs=0; n_config=0; n_manifest=0; n_code=0; n_test=0; n_other=0
+n_code=0
 n_prod_lines=0
 risk_hits=""
 
@@ -173,9 +181,10 @@ risk_from_path() {
   local f="$1" b
   b=$(basename "$1")
   case "$f" in
-    */auth/*|*/oauth/*|*/session/*|*/middleware/*) echo "auth"; return ;;
+    auth/*|oauth/*|session/*|middleware/*|*/auth/*|*/oauth/*|*/session/*|*/middleware/*) echo "auth"; return ;;
+    billing/*|payment/*|payments/*|stripe/*|crypto/*) echo "auth"; return ;;
     */billing/*|*/payment/*|*/payments/*|*/stripe/*|*/crypto/*) echo "auth"; return ;;
-    */migrations/*|*schema.prisma*|*/dynamodb*) echo "migration"; return ;;
+    migrations/*|*/migrations/*|*schema.prisma*|dynamodb*|*/dynamodb*) echo "migration"; return ;;
     *openapi*|*swagger*) echo "api"; return ;;
   esac
   case "$b" in
@@ -187,17 +196,14 @@ risk_from_path() {
 
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
-  if is_manifest "$f"; then n_manifest=$((n_manifest+1))
-  elif is_config "$f"; then n_config=$((n_config+1))
-  elif is_docs "$f"; then n_docs=$((n_docs+1))
-  elif is_test "$f"; then n_test=$((n_test+1))
+  if is_manifest "$f" || is_config "$f" || is_docs "$f" || is_test "$f"; then
+    :
   elif is_code "$f"; then
     n_code=$((n_code+1))
     n_prod_lines=$((n_prod_lines + $(file_lines "$f")))
     rh=$(risk_from_path "$f")
     [[ -n "$rh" ]] && risk_hits+="$rh"$'\n'
   else
-    n_other=$((n_other+1))
     if is_openapi_path "$f"; then
       risk_hits+="api"$'\n'
     fi
@@ -214,16 +220,16 @@ route_rc=0
 route_out=$(bash "$here/chad-review-route.sh" "${route_args[@]+"${route_args[@]}"}" 2>/dev/null) || route_rc=$?
 
 has_exec=0
-has_status=0
 lang_blocks=0
+prose_blocks=0
 has_openapi=0
 route_failed=0
 [[ "$route_rc" -ne 0 ]] && route_failed=1
 while IFS= read -r line; do
   case "$line" in
     "--- Routing: Executable prompt content"*) has_exec=1; lang_blocks=$((lang_blocks+1)) ;;
-    "--- Routing: Docs / status-bearing"*) has_status=1; lang_blocks=$((lang_blocks+1)) ;;
-    "--- Routing: Docs / spec"*) ;;
+    "--- Routing: Docs / status-bearing"*) lang_blocks=$((lang_blocks+1)) ;;
+    "--- Routing: Docs / spec"*) prose_blocks=$((prose_blocks+1)) ;;
     "--- Routing: Other"*) lang_blocks=$((lang_blocks+1)) ;;
     "--- Routing:"*) lang_blocks=$((lang_blocks+1)) ;;
     *"OpenAPI spec"*) has_openapi=1 ;;
@@ -243,26 +249,34 @@ spec=no
 printf '%s\n' "$files" | grep -qxF 'PLAN.md' && spec=yes
 printf '%s\n' "$files" | grep -qxF 'plan.md' && spec=yes
 
-# --- size ask -----------------------------------------------------------------
+# --- size ask and depth --------------------------------------------------------
 
 scope_ask=0
 if [[ "$file_count" -gt 50 || "$n_prod_lines" -gt 3000 ]]; then
   scope_ask=1
 fi
 
+depth="fast"
+why=""
+add_why() { if [[ -z "$why" ]]; then why="$1"; else why="$why, $1"; fi; }
+[[ "$full" -eq 1 ]] && add_why "--full"
+[[ "$risk" != "none" ]] && add_why "risk: $risk"
+[[ "$has_exec" -eq 1 ]] && add_why "executable prompt content"
+[[ "$file_count" -gt 15 ]] && add_why "$file_count files"
+[[ "$n_prod_lines" -gt 400 ]] && add_why "$n_prod_lines production lines"
+[[ "$route_failed" -eq 1 ]] && add_why "routing failed"
+[[ -n "$why" ]] && depth="deep"
+
 # --- nodes --------------------------------------------------------------------
 # Order is load-bearing: backup and gate first, deterministic scans and tests
 # on the user's tree, spec before apply (a spec FAIL vetoes docs-apply), apply
-# nodes, then every review node sees the post-apply diff.
+# nodes, then every review node sees the post-apply diff, verify after every
+# finder, receipt last.
 
 nodes=""
 skip=""
-add_node() {
-  if [[ -z "$nodes" ]]; then nodes="$1"; else nodes="$nodes,$1"; fi
-}
-add_skip() {
-  if [[ -z "$skip" ]]; then skip="$1"; else skip="$skip,$1"; fi
-}
+add_node() { if [[ -z "$nodes" ]]; then nodes="$1"; else nodes="$nodes,$1"; fi; }
+add_skip() { if [[ -z "$skip" ]]; then skip="$1"; else skip="$skip,$1"; fi; }
 
 if [[ "$untracked" -gt 0 ]]; then add_node "untracked-backup"; else add_skip "untracked-backup"; fi
 add_node "gate"
@@ -271,43 +285,45 @@ add_node "contract-mirror"
 add_node "tests"
 add_node "freshness-audit"
 if [[ "$spec" == "yes" ]]; then add_node "spec-vs-diff"; else add_skip "spec-vs-diff"; fi
-add_node "freshness-update"
-if [[ "$has_exec" -eq 0 && "$n_code" -gt 0 ]]; then add_node "simplify"; else add_skip "simplify"; fi
+# simplify needs code, and a working route so prompt files are known and
+# excluded from it. Mixed prompt-plus-code diffs simplify the code files only.
+if [[ "$n_code" -gt 0 && "$route_failed" -eq 0 ]]; then add_node "simplify"; else add_skip "simplify"; fi
 add_node "docs-apply"
 add_node "skim"
 add_node "impl-review"
-add_node "challenger"
+if [[ "$depth" == "deep" ]]; then add_node "challenger"; else add_skip "challenger"; fi
 add_node "verify"
-add_node "sweep"
+if [[ "$depth" == "deep" ]]; then add_node "sweep"; else add_skip "sweep"; fi
 add_node "receipt"
-
 [[ -z "$skip" ]] && skip="none"
 
-# One impl-review reviewer per routing block (at least one), plus the
-# challenger and the sweep. Verifiers scale with the finding count and are
-# sized by nodes/verify.md, not here.
-agents=$lang_blocks
-[[ "$agents" -lt 1 ]] && agents=1
-agents=$((agents + 2))
+# Finder agents before verification. fast: one reviewer over the whole diff.
+# deep: one per routing block, prose blocks included, plus challenger and
+# sweep, plus spec-vs-diff when listed. Verifiers scale with the finding
+# count (nodes/verify.md) and are not counted here.
+if [[ "$depth" == "fast" ]]; then
+  agents=1
+else
+  agents=$((lang_blocks + prose_blocks))
+  [[ "$agents" -lt 1 ]] && agents=1
+  agents=$((agents + 2))
+fi
+[[ "$spec" == "yes" ]] && agents=$((agents + 1))
 
-apply=""
-printf '%s' ",$nodes," | grep -q ",simplify," && apply="${apply}simplify,"
-apply="${apply}docs-stale,deps"
+if [[ "$depth" == "fast" ]]; then reason="fast: no high-risk path, no prompt content, small diff"
+else reason="deep: $why"; fi
+[[ "$scope_ask" -eq 1 ]] && reason="$reason; diff exceeds size ask line"
 
-reason="full pipeline"
-[[ "$scope_ask" -eq 1 ]] && reason="full pipeline; diff exceeds size ask line"
-[[ "$route_failed" -eq 1 ]] && reason="$reason; routing script failed, review the whole diff in one block"
-
-echo "MODE=full"
+echo "MODE=$depth"
 echo "RISK=$risk"
 echo "AGENTS=$agents"
-echo "APPLY=$apply"
 echo "SPEC=$spec"
 echo "SCOPE_ASK=$scope_ask"
 echo "UNTRACKED=$untracked"
 echo "FILES=$file_count"
 echo "LINES=$n_prod_lines"
 echo "LANG_BLOCKS=$lang_blocks"
+echo "PROSE_BLOCKS=$prose_blocks"
 echo "NODES=$nodes"
 echo "SKIP=$skip"
 echo "REASON=$reason"

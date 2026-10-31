@@ -2,23 +2,23 @@
 
 Fresh-context review of the post-apply diff. Is it built right?
 
-Owns: what changed, hostile probes (auth, empty/nil, races, compat, injection),
-test coverage (do not run tests; the tests node already did), observability,
-and doc accuracy for any changed prose.
+Owns: drift (two things that should agree, don't), what changed, hostile
+probes (auth, empty/nil, races, compat, injection), test coverage (do not run
+tests; the tests node already did), observability, and accuracy of every
+changed doc or comment.
 
-Always launch at least one reviewer, even on a docs-only or one-line diff.
-Launch one reviewer per routing block from `chad-review-route.sh`, scoped to
-that block's hunks, all in ONE message. With no routing block (plain prose,
-config), launch one reviewer over the whole diff. If routing failed, launch one
-reviewer over the whole diff.
+Every reviewer is `subagent_type: general-purpose`, `model: opus`. This skill
+explicitly sets effort: `medium` at fast depth (Opus 5.5 at medium matches
+Opus 5 at high on coding evaluations), `high` at deep depth. Ignore the
+`[REVIEW tier, sonnet]` hint routing prints; that is `/chad-review`'s tiering.
 
-Every reviewer is `subagent_type: general-purpose`, `model: opus`,
-`effort: high`. This skill explicitly sets that effort. Ignore the
-`[REVIEW tier, sonnet]` hint routing prints: that is `/chad-review`'s tiering,
-not ultra-audit's. When `RISK` is not `none`, name the risk surfaces in the
-prompt so the reviewer probes them first.
+- **fast**: one reviewer over the whole diff, every file, prose included.
+- **deep**: one reviewer per routing block from `chad-review-route.sh`, each
+  scoped to its block's hunks, all in ONE message. `Docs / spec` blocks get
+  their own reviewer too: no hunk goes unreviewed. When `RISK` is not `none`,
+  name the risk surfaces so the reviewer probes them first.
 
-Prompt contract: `resources/fanout.md`. Rubric path: `pass-reference.md`
-sections BEHAVIOR AND RISK, TESTS (coverage), OBSERVABILITY. Do not paste the
-rubric. Output contract from `fanout.md`, verbatim: report everything, no
-filtering. No edit, no commit, no deploy.
+Prompt contract: `resources/fanout.md`. Rubric path: `pass-reference.md`,
+sections DRIFT, BEHAVIOR AND RISK, TESTS (coverage), OBSERVABILITY. Do not
+paste the rubric. Output contract from `fanout.md`, verbatim: report
+everything, no filtering. No edit, no commit, no deploy.

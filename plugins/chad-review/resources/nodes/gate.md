@@ -12,13 +12,18 @@ Never assume `make`.
 - failing those, the language default for the diff (`go build ./... && go vet ./...`,
   `tsc --noEmit`, `cargo check`, `swift build`)
 
-Print `Gate: <command> (<green | N failures | none detected | over budget>)`.
-Cap around 60s. Past that, report over budget and continue.
+Print `Gate: <command> (<green | N failures | none detected | not run>)`.
 
-Failures are findings: compile/type/lint under Built, failing tests under tests.
-Quote the tool. Never paraphrase a compiler.
+Run it to completion, in the background if it is slow, and keep reviewing
+meanwhile. Give it up to 10 minutes. A gate that cannot finish is Built
+NOT RUN, which makes the receipt CONDITIONAL: quality on small changes comes
+mostly from the gate, so it is never skipped for speed.
 
-No gate at all is a Built finding, MEDIUM, with a ready-to-paste target assembled
-from `pass-reference.md` § GATE for the ecosystems present. Recommend it, do not
-create it. It is a repo-level gap: it does not fail Built and is not counted, but
-report it.
+Failures are findings: compile/type/lint under Built, failing tests under
+tests. Quote the tool. Never paraphrase a compiler.
+
+No entrypoint and no language default (a pure docs repo): Built is PASS with a
+Follow-up item, MEDIUM, carrying a ready-to-paste target assembled from
+`pass-reference.md` § GATE for the ecosystems present. Recommend it, do not
+create it. A diff that removes or breaks an existing gate target is a counted
+finding, not a repo-level gap.

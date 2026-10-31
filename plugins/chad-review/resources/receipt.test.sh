@@ -161,6 +161,11 @@ emit(){ ( cd "$1" && shift && bash "$SCRIPT" emit "$@" 2>&1 ); }
 verify(){ ( cd "$1" && shift && bash "$SCRIPT" verify "$@" 2>&1 ); echo "code=$?"; }
 publish(){ ( cd "$1" && shift && bash "$SCRIPT" publish "$@" 2>&1 ); echo "code=$?"; }
 store_of(){ echo "$1/.git/chad-review/receipts"; }
+# jqedit <file> <jq args...>: edit a receipt in place; fail the case loudly
+# (never write a stray "<empty>.tmp" into the cwd) if the receipt is missing.
+jqedit(){ local f="$1"; shift
+  if [[ -z "$f" || ! -f "$f" ]]; then bad "receipt file missing for jq edit"; return 1; fi
+  jq "$@" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; }
 
 # --- 1. emit on a clean tree, verify the exact head ---------------------------
 r=$(newrepo)
@@ -189,7 +194,7 @@ check "pass mode is convergence" "(convergence)" "$v"
 r=$(newrepo)
 ( cd "$r" && sed -e 's/line8/line8 changed by feat/' base.txt > b.tmp && mv b.tmp base.txt \
   && git add -A && git commit -qm touch8 ) >/dev/null 2>&1
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 ( cd "$r" && git checkout -q main \
   && sed -e 's/line6/line6 changed by main/' base.txt > b.tmp && mv b.tmp base.txt \
   && git add -A && git commit -qm touch6 && git push -q origin main \
@@ -200,7 +205,7 @@ check "near-hunk rebase exits 1" "code=1" "$v"
 
 # --- 4. any substantive change after the receipt is stale ----------------------
 r=$(newrepo)
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 ( cd "$r" && printf 'more\n' >> feat.txt && git add -A && git commit -qm more ) >/dev/null 2>&1
 v=$(verify "$r")
 check "a changed diff is stale" "FAIL: receipt(s) found but stale" "$v"
@@ -214,7 +219,7 @@ check "NO-GO exits 1" "code=1" "$v"
 
 # --- 6. a newer NO-GO shadows an older GO on the same content -------------------
 r=$(newrepo)
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 emit "$r" --verdict NO-GO >/dev/null
 v=$(verify "$r")
 check "newest ruling for the content wins" "verdict NO-GO" "$v"
@@ -241,7 +246,7 @@ check "a look-alike review comment never passes" "FAIL: no valid review receipt"
 r=$(newrepo)
 ( cd "$r" && printf 'new file\n' > extra.txt && : > empty.txt \
   && printf '#!/bin/sh\ntrue\n' > tool.sh && chmod 755 tool.sh ) >/dev/null 2>&1
-out=$(emit "$r" --verdict GO)
+out=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0)
 check "dirty emit records tree state" '"tree_state": "dirty"' "$(cat "$(grep -o '/.*\.json' <<<"$out" | head -1)")"
 ( cd "$r" && git add -A && git commit -qm addall ) >/dev/null 2>&1
 v=$(verify "$r")
@@ -255,7 +260,7 @@ check "fold-in match is convergence" "(convergence)" "$v"
 # now computes both modes and matches either.
 r=$(newrepo)
 ( cd "$r" && printf 'wip note\n' > untracked.md ) >/dev/null 2>&1
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 v=$(verify "$r")
 check "unchanged dirty tree verifies without --worktree" "PASS: GO receipt" "$v"
 check "unchanged dirty tree match is convergence" "(convergence)" "$v"
@@ -263,7 +268,7 @@ check "unchanged dirty tree match is convergence" "(convergence)" "$v"
 # --- 10. dirty-tree emit (modified tracked file), commit verbatim ----------------
 r=$(newrepo)
 ( cd "$r" && printf 'edited\n' >> base.txt ) >/dev/null 2>&1
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 ( cd "$r" && git add -A && git commit -qm edit ) >/dev/null 2>&1
 v=$(verify "$r")
 check "modified-tracked fold-in survives the commit" "PASS: GO receipt" "$v"
@@ -271,7 +276,7 @@ check "modified-tracked fold-in survives the commit" "PASS: GO receipt" "$v"
 # --- 11. a dirty receipt's head_sha never counts as exact-head --------------------
 r=$(newrepo)
 ( cd "$r" && printf 'edited\n' >> base.txt ) >/dev/null 2>&1
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 ( cd "$r" && git checkout -q -- base.txt ) >/dev/null 2>&1
 v=$(verify "$r")
 check "discarded dirty content is stale, not exact-head" "FAIL: receipt(s) found but stale" "$v"
@@ -279,7 +284,7 @@ check "discarded dirty content is stale, not exact-head" "FAIL: receipt(s) found
 # --- 12. binary content changes re-arm via --full-index ---------------------------
 r=$(newrepo)
 ( cd "$r" && printf '\x00\x01\x02\x80\xff' > blob.bin && git add -A && git commit -qm bin ) >/dev/null 2>&1
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 ( cd "$r" && printf '\x00\x01\x03\x80\xff' > blob.bin && git add -A && git commit -qm bin2 ) >/dev/null 2>&1
 v=$(verify "$r")
 check "a binary byte flip is stale" "FAIL: receipt(s) found but stale" "$v"
@@ -288,7 +293,7 @@ check "a binary byte flip is stale" "FAIL: receipt(s) found but stale" "$v"
 r=$(newrepo)
 h=$(cd "$r" && git rev-parse HEAD)
 reset_gh "$h"
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 GH_STUB_FAIL=0
 p1=$(publish "$r" --pr 7)
 first_body=$(jq -r '.[0].body' "$GH_STUB_DIR/comments.json")
@@ -312,7 +317,7 @@ check "cross-machine verify passes from the PR comment" "PASS: GO receipt (githu
 r=$(newrepo)
 h=$(cd "$r" && git rev-parse HEAD)
 reset_gh "$h"
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 GH_STUB_FAIL=0 GH_STUB_AUTHOR=NONE publish "$r" --pr 7 >/dev/null
 rm -f "$(store_of "$r")"/*.json
 GH_STUB_FAIL=0
@@ -322,7 +327,7 @@ check "an untrusted author's receipt does not count" "FAIL: no valid review rece
 
 # --- 16. gh unavailable degrades to local-only with a warning ---------------------
 r=$(newrepo)
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 v=$(verify "$r" --pr 7)   # GH_STUB_FAIL=1 is the ambient default
 check "gh-less verify warns" "WARN: local-only verification" "$v"
 check "gh-less verify still passes on the local receipt" "PASS: GO receipt (local)" "$v"
@@ -331,7 +336,7 @@ check "gh-less verify still passes on the local receipt" "PASS: GO receipt (loca
 d="$WORKDIR/noorigin"; mkdir -p "$d"
 ( cd "$d" && git init -q -b main . && printf 'x\n' > f.txt && git add -A && git commit -qm base \
   && git checkout -qb feat && printf 'y\n' > g.txt && git add -A && git commit -qm feat ) >/dev/null 2>&1
-out=$(emit "$d" --verdict GO --base main)
+out=$(emit "$d" --verdict GO --counts critical=0,high=0,medium=0,low=0 --base main)
 check "no-origin emit works" "receipts/" "$out"
 dphys=$(cd "$d" && pwd -P)
 check "identity falls back to the path" "\"repo\": \"$dphys\"" "$(cat "$(grep -o '/.*\.json' <<<"$out" | head -1)")"
@@ -344,7 +349,7 @@ git init -q --bare "$WORKDIR/master-origin.git"
 ( cd "$d" && git init -q -b master . && printf 'x\n' > f.txt && git add -A && git commit -qm base \
   && git remote add origin "$WORKDIR/master-origin.git" && git push -q origin master \
   && git checkout -qb feat && printf 'y\n' > g.txt && git add -A && git commit -qm feat ) >/dev/null 2>&1
-out=$(emit "$d" --verdict GO)
+out=$(emit "$d" --verdict GO --counts critical=0,high=0,medium=0,low=0)
 check "origin/master is found without a flag" '"base_ref": "origin/master"' "$(cat "$(grep -o '/.*\.json' <<<"$out" | head -1)")"
 d="$WORKDIR/trunk"; mkdir -p "$d"
 ( cd "$d" && git init -q -b trunk . && printf 'x\n' > f.txt && git add -A && git commit -qm base \
@@ -355,10 +360,10 @@ check "cannot-run exits 2" "code=2" "$v"
 
 # --- 19. two branches share the store without shadowing each other ----------------
 r=$(newrepo)
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 ( cd "$r" && git checkout -q main && git checkout -qb feat2 \
   && printf 'z\n' > z.txt && git add -A && git commit -qm feat2 ) >/dev/null 2>&1
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 v2=$(verify "$r")
 ( cd "$r" && git checkout -q feat ) >/dev/null 2>&1
 v1=$(verify "$r")
@@ -367,7 +372,7 @@ check "first branch still verifies after the second emitted" "PASS: GO receipt" 
 
 # --- 20. verify refuses a local HEAD that is not the PR head ----------------------
 r=$(newrepo)
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 reset_gh "0000000000000000000000000000000000000000"
 GH_STUB_FAIL=0
 v=$(verify "$r" --pr 7)
@@ -377,7 +382,7 @@ check "PR head mismatch exits 1" "code=1" "$v"
 
 # --- 21. the store prunes to the newest 20 ----------------------------------------
 r=$(newrepo)
-i=1; while [[ $i -le 25 ]]; do emit "$r" --verdict GO >/dev/null; i=$((i+1)); done
+i=1; while [[ $i -le 25 ]]; do emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null; i=$((i+1)); done
 n=$(ls -1 "$(store_of "$r")" | grep -c '\.json$')
 expect_code "25 emits leave 20 receipts" "20" "$n"
 
@@ -393,7 +398,7 @@ check "corrupt candidates exit 1, not a crash" "code=1" "$v"
 
 # --- 23. an ultra-audit receipt satisfies the same gate ---------------------------
 r=$(newrepo)
-out=$(emit "$r" --tool ultra-audit --verdict GO)
+out=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0)
 check "ultra-audit emit writes its own store" "$r/.git/ultra-audit/receipts/" "$out"
 if grep -qF "$r/.git/chad-review/receipts/" <<<"$out"; then
   bad "ultra-audit emit does not write the chad-review store"
@@ -410,11 +415,11 @@ check "ultra-audit verify exits 0" "code=0" "$v"
 
 # --- 24. newest ruling wins ACROSS tools on the same content ----------------------
 r=$(newrepo)
-emit "$r" --tool ultra-audit --verdict GO >/dev/null
+emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 emit "$r" --verdict NO-GO >/dev/null
 v=$(verify "$r")
 check "a newer chad-review NO-GO shadows an older ultra-audit GO" "verdict NO-GO" "$v"
-emit "$r" --tool ultra-audit --verdict GO >/dev/null
+emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 v=$(verify "$r")
 check "a newer ultra-audit GO out-ranks the NO-GO again" "PASS: GO receipt" "$v"
 
@@ -422,7 +427,7 @@ check "a newer ultra-audit GO out-ranks the NO-GO again" "PASS: GO receipt" "$v"
 r=$(newrepo)
 h=$(cd "$r" && git rev-parse HEAD)
 reset_gh "$h"
-out=$(emit "$r" --tool ultra-audit --verdict GO)
+out=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0)
 f=$(grep -o '/.*\.json' <<<"$out" | head -1)
 GH_STUB_FAIL=0
 publish "$r" --pr 7 --file "$f" >/dev/null
@@ -436,12 +441,12 @@ check "cross-machine verify passes from the ultra-audit comment" "PASS: GO recei
 
 # --- 26. a mismatched schema/tool pair is a forgery, not a receipt ----------------
 r=$(newrepo)
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 f=$(ls -1 "$(store_of "$r")"/*.json | head -1)
-jq '.schema = "ultra-audit-receipt"' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+jqedit "$f" '.schema = "ultra-audit-receipt"'
 v=$(verify "$r")
 check "ultra-audit schema with chad-review tool never counts" "FAIL: no valid review receipt" "$v"
-jq '.schema = "chad-review-receipt" | .tool = "ultra-audit"' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+jqedit "$f" '.schema = "chad-review-receipt" | .tool = "ultra-audit"'
 v=$(verify "$r")
 check "chad-review schema with ultra-audit tool never counts" "FAIL: no valid review receipt" "$v"
 
@@ -449,8 +454,8 @@ check "chad-review schema with ultra-audit tool never counts" "FAIL: no valid re
 r=$(newrepo)
 h=$(cd "$r" && git rev-parse HEAD)
 reset_gh "$h"
-emit "$r" --verdict GO >/dev/null
-emit "$r" --tool ultra-audit --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 GH_STUB_FAIL=0
 p=$(publish "$r" --pr 7)
 GH_STUB_FAIL=1
@@ -459,8 +464,8 @@ check "bare publish picked the newer (ultra-audit) receipt" "ultra-audit-receipt
 r=$(newrepo)
 h=$(cd "$r" && git rev-parse HEAD)
 reset_gh "$h"
-emit "$r" --tool ultra-audit --verdict GO >/dev/null
-emit "$r" --verdict GO >/dev/null
+emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 GH_STUB_FAIL=0
 publish "$r" --pr 7 >/dev/null
 GH_STUB_FAIL=1
@@ -470,7 +475,7 @@ check "reversed order picks the newer (chad-review) receipt" "chad-review-receip
 r=$(newrepo)
 h=$(cd "$r" && git rev-parse HEAD)
 reset_gh "$h"
-out=$(emit "$r" --tool ultra-audit --verdict GO)
+out=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0)
 f=$(grep -o '/.*\.json' <<<"$out" | head -1)
 GH_STUB_FAIL=0 GH_STUB_AUTHOR=NONE publish "$r" --pr 7 --file "$f" >/dev/null
 rm -f "$r/.git/ultra-audit/receipts/"*.json "$r/.git/chad-review/receipts/"*.json 2>/dev/null
@@ -481,11 +486,11 @@ check "an untrusted author's ultra-audit receipt does not count" "FAIL: no valid
 
 # --- 29. an emitted_at tie is fail-closed: the non-GO ruling wins -----------------
 r=$(newrepo)
-emit "$r" --verdict GO >/dev/null
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 out=$(emit "$r" --tool ultra-audit --verdict NO-GO)
 f2=$(grep -o '/.*\.json' <<<"$out" | head -1)
 ts=$(jq -r .emitted_at "$(ls -1 "$(store_of "$r")"/*.json | head -1)")
-jq --arg t "$ts" '.emitted_at = $t' "$f2" > "$f2.tmp" && mv "$f2.tmp" "$f2"
+jqedit "$f2" --arg t "$ts" '.emitted_at = $t'
 v=$(verify "$r")
 check "tied timestamps let the NO-GO win" "verdict NO-GO" "$v"
 check "tied-timestamp verify fails closed" "code=1" "$v"
@@ -509,6 +514,60 @@ r=$(newrepo)
 emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
 v=$(verify "$r")
 check "GO with all-zero counts passes" "PASS: GO receipt" "$v"
+
+
+# --- 31. 3.0.0 fail-closed paths ----------------------------------------------
+r=$(newrepo)
+out=$(emit "$r" --verdict GO); rc=$?
+check "GO without --counts is refused" "requires --counts" "$out"
+v=$(verify "$r")
+check "refused GO left no receipt" "no valid review receipt" "$v"
+r=$(newrepo)
+f=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=00,low=0 | grep -o '/.*\.json' | head -1)
+check "zero-padded count is written as 0" '"medium": 0,' "$(cat "$f")"
+# A GO whose findings object is missing fails closed.
+r=$(newrepo)
+f=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+jqedit "$f" 'del(.findings)'
+v=$(verify "$r")
+check "GO with no findings object fails" "records 1 open finding" "$v"
+# A GO missing medium/low fails closed.
+jqedit "$f" '.findings = {critical: 0, high: 0}'
+v=$(verify "$r")
+check "GO missing medium/low fails" "records 2 open finding" "$v"
+# A newer NO-GO with a non-numeric count still shadows the older GO.
+r=$(newrepo)
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+sleep 1
+f=$(emit "$r" --verdict NO-GO --counts critical=0,high=0,medium=1,low=0 | grep -o '/.*\.json' | head -1)
+jqedit "$f" '.findings.medium = "1"'
+v=$(verify "$r")
+check "malformed newer NO-GO still shadows the GO" "verdict NO-GO" "$v"
+# Same-second GOs: the one with counts wins the tie and fails.
+r=$(newrepo)
+f1=$(emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 | grep -o '/.*\.json' | head -1)
+f2=$(emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=1,low=0 | grep -o '/.*\.json' | head -1)
+ts=$(jq -r .emitted_at "$f1")
+jqedit "$f2" --arg t "$ts" '.emitted_at = $t'
+v=$(verify "$r")
+check "tied GO with counts fails closed" "records 1 open finding" "$v"
+# --require-tool ultra-audit ignores chad-review receipts.
+r=$(newrepo)
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+v=$(verify "$r" --require-tool ultra-audit)
+check "chad-review GO does not satisfy --require-tool ultra-audit" "no ultra-audit receipt found" "$v"
+check "require-tool miss exits 1" "code=1" "$v"
+emit "$r" --tool ultra-audit --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+v=$(verify "$r" --require-tool ultra-audit)
+check "ultra-audit GO satisfies --require-tool ultra-audit" "PASS: GO receipt" "$v"
+r=$(newrepo)
+emit "$r" --tool ultra-audit --verdict NO-GO --counts critical=0,high=1,medium=0,low=0 >/dev/null
+sleep 1
+emit "$r" --verdict GO --counts critical=0,high=0,medium=0,low=0 >/dev/null
+v=$(verify "$r" --require-tool ultra-audit)
+check "newer chad-review GO cannot override an ultra-audit NO-GO" "verdict NO-GO" "$v"
+v=$(verify "$r" --require-tool bogus)
+check "unknown --require-tool is usage" "code=2" "$v"
 
 echo
 echo "receipt.sh: $pass passed, $fail failed"

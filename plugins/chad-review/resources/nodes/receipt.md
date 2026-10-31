@@ -1,6 +1,7 @@
 # Node: receipt
 
-Every completed run emits one, whatever the axes:
+Every completed run emits one, whatever the outcome. `--counts` is required
+for a GO and is always passed:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/receipt.sh" emit \
@@ -9,41 +10,48 @@ bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/chad-review}/resources/receipt.
   --counts critical=N,high=N,medium=N,low=N
 ```
 
-## What counts
+Emit from the real branch worktree, not a `pr-stage.sh` worktree: the
+fingerprint is the merge-base diff, so it matches either way, and the receipt
+store belongs to the real repo.
 
-`--counts` holds every **open** finding attributable to this diff, at every
-severity: CONFIRMED and PLAUSIBLE findings from verify (and script-sourced
-findings) on a line the diff touched or on behavior the diff changed. A finding
-needing a user decision (NEEDS-DECISION) counts until the user decides.
+## Where each finding goes
 
-Not counted, but listed in the report under `Not blocking`:
+**Fix now (counted)**: every finding that is not REFUTED and is attributable
+to this change: on a line the diff touched, or on behavior the diff changed.
+That includes tool evidence (red gate, failing tests), verified scan records,
+verified challenger concerns, and any NEEDS-DECISION finding until the user
+decides it. Severity sets the order fixes happen in, never whether they happen.
 
-- REFUTED findings (with their quoted evidence)
-- `PRE-EXISTING` findings on untouched lines the diff does not reach
-- repo-level gaps (no gate entrypoint), bundled or transitive freshness
-  advisories, majors held back, and other informational lines
+**Follow-up (listed, not counted)**: confirmed PRE-EXISTING findings,
+repo-level gaps (no gate entrypoint, a scanner COVERAGE GAP), freshness
+findings on dependencies the diff did not touch (run `/deps-update`), bundled
+or transitive advisories. These are not dropped: right after this PR merges,
+the session fixes them in ONE follow-up PR, reviewed by `/ultra-audit` like
+any other. Items that need a user decision are asked, not deferred.
+
+**Closed (listed, not counted)**: REFUTED findings with their evidence, and
+`accepted-by-user` ledger entries.
 
 ## Verdict
 
-- **GO** only when every count is zero and Built, Spec, and Challenge all pass.
-- **NO-GO** for any counted finding at any severity, Built FAIL, Spec FAIL, or
-  Challenge DOES NOT HOLD. Severity decides the order fixes happen in, never
-  whether they happen.
-- **CONDITIONAL** when the only blocker is a whole-project freshness CRITICAL
-  the diff did not touch, or a `COVERAGE ... GAP`.
+- **GO**: every count is zero, Built is PASS, and Spec is PASS or N/A.
+- **NO-GO**: any counted finding at any severity, Built FAIL, or Spec FAIL.
+- **CONDITIONAL**: nothing is counted, but the run cannot vouch for the whole
+  diff: the user scoped the review (`SCOPE_ASK`), or the gate could not finish
+  (Built NOT RUN). `receipt.sh verify` fails CONDITIONAL, so this needs a full,
+  unscoped run before merge.
 
-`receipt.sh verify` enforces the GO half mechanically: it fails a GO receipt
-whose counts are not all zero. The loop is fix, then re-run ultra-audit, until
-a GO.
+`receipt.sh verify` fails a GO whose counts are nonzero, missing, or malformed.
 
-## Re-runs
+## Fix rounds
 
-On a re-run after fixes, pass the previous run's findings and their outcomes to
-verify as the prior-run ledger (see `verify.md`). The author may dismiss a
-finding only to the verifier's standard: a quoted `file:line` or a command with
-its output, recorded in the report. The receipt is always emitted at full scope
-for the new head and fingerprint.
+Fix everything counted, then re-run `/ultra-audit` on the whole branch
+(`pr-stage.sh stage`, never `--last-commit`), with the ledger. At most **2
+fix rounds**. If round 2's re-run still counts findings, stop looping: present
+them to the user as one NEEDS-DECISION list (fix, redesign, split, or accept).
+Repeated rounds past 2 mostly fix the previous round's fixes. The user's answer
+goes into the ledger, then one final run emits the receipt.
 
 Print the path on `Receipt:`. If `gh pr view --json number` works, also pass
-`--pr <n>`. The published comment is an ultra-audit receipt and satisfies
-`receipt.sh verify` at the merge gate, the same as a chad-review receipt.
+`--pr <n>`. The merge gate runs `receipt.sh verify --pr <n> --require-tool
+ultra-audit`.

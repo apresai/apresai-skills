@@ -1,7 +1,10 @@
-# Node: apply-deps (freshness-update)
+# apply-deps: in-range dependency update
 
-Only when this node is listed and the pre-flight gate was green. If the gate
-was already red, print `FRESHNESS | update skipped: gate already red` and stop.
+Used by `/deps-update` (and `/chad-review` pass 5). `/ultra-audit` never runs
+it: review audits dependencies, it does not change them.
+
+Only when the gate was green first. If the gate was already red, print
+`FRESHNESS | update skipped: gate already red` and stop.
 
 Run `freshness.sh` first if `freshness-audit` has not already run in this
 invocation. Then, for each manifest it discovered:

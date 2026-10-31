@@ -32,6 +32,7 @@ exec_path() {
     CLAUDE.md|*/CLAUDE.md|Claude.md|*/Claude.md|AGENTS.md|*/AGENTS.md|SKILL.md|*/SKILL.md) return 0 ;;
     .claude/*|*/.claude/*|prompts/*|*/prompts/*) return 0 ;;
     */commands/*|commands/*|*/agents/*|agents/*|*/skills/*|skills/*) return 0 ;;
+    */resources/*.md|resources/*.md) return 0 ;;
   esac
   return 1
 }

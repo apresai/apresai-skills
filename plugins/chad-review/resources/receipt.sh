@@ -27,7 +27,13 @@
 # (chad-review-receipt with chad-review, or ultra-audit-receipt with
 # ultra-audit) and a fingerprint that matches the diff being merged. Either
 # tool's receipt satisfies the gate; the newest ruling for the current
-# content wins across both.
+# content wins across both. `verify --require-tool ultra-audit` (what the
+# merge gate passes) considers ultra-audit receipts only.
+#
+# Since 3.0.0 a GO must record zero open findings at every severity, and
+# `emit --verdict GO` requires --counts so the zero is a stated fact rather
+# than a default. verify fails closed on a GO whose counts are nonzero,
+# missing, or malformed, and on a same-second tie a GO with counts loses.
 #
 # THE FINGERPRINT
 # `git patch-id --stable` over the merge-base diff, with every diff knob
@@ -56,9 +62,9 @@
 #
 # USAGE
 #   receipt.sh emit    --verdict GO|NO-GO|CONDITIONAL [--base <ref>] [--pr <n>]
-#                      [--counts critical=0,high=0,medium=0,low=0]
+#                      [--counts critical=0,high=0,medium=0,low=0]   (required with GO)
 #   receipt.sh publish [--pr <n>] [--file <receipt.json>]
-#   receipt.sh verify  [--base <ref>] [--pr <n>] [--worktree]
+#   receipt.sh verify  [--base <ref>] [--pr <n>] [--require-tool ultra-audit] [--worktree]
 #
 # emit writes the receipt and prints its absolute path; with --pr and a
 # working gh it also publishes. publish posts or updates the PR comment.
@@ -82,7 +88,7 @@ STORE_KEEP=20
 usage() {
   echo "usage: receipt.sh emit --verdict GO|NO-GO|CONDITIONAL [--tool chad-review|ultra-audit] [--base <ref>] [--pr <n>] [--counts critical=0,high=0,medium=0,low=0]" >&2
   echo "       receipt.sh publish [--pr <n>] [--file <receipt.json>]" >&2
-  echo "       receipt.sh verify [--base <ref>] [--pr <n>] [--worktree]" >&2
+  echo "       receipt.sh verify [--base <ref>] [--pr <n>] [--require-tool chad-review|ultra-audit] [--worktree]" >&2
   exit 2
 }
 
@@ -199,10 +205,14 @@ do_emit() {
       case "$part" in
         critical=*|high=*|medium=*|low=*)
           [[ "${part#*=}" =~ ^[0-9]+$ ]] || usage
-          eval "c_${part%%=*}=${part#*=}" ;;
+          # 10# strips leading zeros so "00" is written as the JSON number 0.
+          eval "c_${part%%=*}=$((10#${part#*=}))" ;;
         *) usage ;;
       esac
     done < <(printf '%s\n' "$counts" | tr ',' '\n')
+  elif [[ "$verdict" == "GO" ]]; then
+    echo "emit: --verdict GO requires --counts (a GO must state its zero open findings)" >&2
+    exit 2
   fi
 
   require_repo_head
@@ -379,19 +389,27 @@ candidate_row() {
     | select(((.fingerprint // "") != "") and ((.head_sha // "") != "") and ((.verdict // "") != ""))
     | [(.emitted_at // "0"), $src, .verdict, .head_sha, (.tree_state // "clean"),
        .fingerprint, (.repo // "-"), (.base_ref // "-"),
-       (((.findings.critical // 0) + (.findings.high // 0) + (.findings.medium // 0) + (.findings.low // 0)) | tostring)]
+       # Open findings. Fail closed: a missing findings object, or a count that
+       # is absent or not a number, counts as 1 rather than erroring (an error
+       # would drop the row and let an older GO win).
+       ((if (.findings | type) != "object" then 1
+         else ([.findings.critical, .findings.high, .findings.medium, .findings.low]
+               | map(if type == "number" then . else 1 end) | add) end) | tostring),
+       (.tool // "-")]
     | @tsv' 2>/dev/null
   return 0
 }
 
 do_verify() {
-  local pr=""
+  local pr="" require_tool=""
   base_flag=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --pr)       pr="${2:-}"; shift 2 || usage ;;
       --base)     base_flag="${2:-}"; shift 2 || usage ;;
       --worktree) shift ;;   # accepted for back-compat; both modes always run now
+      --require-tool) require_tool="${2:-}"; shift 2 || usage
+                      case "$require_tool" in chad-review|ultra-audit) ;; *) usage ;; esac ;;
       *) usage ;;
     esac
   done
@@ -455,6 +473,13 @@ do_verify() {
   fi
 
   rows=$(printf '%s' "$rows" | grep -v '^$' || true)
+  if [[ -n "$require_tool" ]]; then
+    rows=$(printf '%s\n' "$rows" | awk -F'\t' -v t="$require_tool" '$10 == t' || true)
+    if [[ -z "$rows" ]]; then
+      echo "FAIL: no $require_tool receipt found (--require-tool $require_tool); run /$require_tool"
+      return 1
+    fi
+  fi
   if [[ -z "$rows" ]]; then
     echo "FAIL: no valid review receipt found (chad-review or ultra-audit; local store or PR comments)"
     return 1
@@ -484,7 +509,7 @@ do_verify() {
   local newest_ts tie_nogo blockers
   best=$(printf '%s\n' "$matches" | LC_ALL=C sort -t"$(printf '\t')" -k1,1r -k2,2 | head -1)
   newest_ts=$(printf '%s' "$best" | cut -f1)
-  tie_nogo=$(printf '%s\n' "$matches" | awk -F'\t' -v t="$newest_ts" '$1 == t && $3 != "GO"' \
+  tie_nogo=$(printf '%s\n' "$matches" | awk -F'\t' -v t="$newest_ts" '$1 == t && ($3 != "GO" || $9 != "0")' \
     | LC_ALL=C sort -t"$(printf '\t')" -k2,2 | head -1)
   [[ -n "$tie_nogo" ]] && best="$tie_nogo"
   verdict=$(printf '%s' "$best" | cut -f3)
@@ -499,7 +524,7 @@ do_verify() {
   # Enforce that contract mechanically rather than trusting the emitter.
   blockers=$(printf '%s' "$best" | cut -f9)
   if [[ -n "$blockers" && "$blockers" != "0" ]]; then
-    echo "FAIL: newest receipt is GO but records $blockers open finding(s); fix them and re-review"
+    echo "FAIL: newest receipt is GO but records $blockers open finding(s); since chad-review 3.0.0 a GO needs zero open findings at every severity: fix them and re-review"
     return 1
   fi
   if [[ "$(printf '%s' "$best" | cut -f5)" == "clean" && "$(printf '%s' "$best" | cut -f4)" == "$cur_head" ]]; then

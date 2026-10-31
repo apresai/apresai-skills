@@ -199,6 +199,22 @@ out=$(run "$r")
 check "Go DRIFT hint names contract-mirror.sh" "contract-mirror.sh reverse check" "$out"
 rm -rf "$r"
 
+# --- plugin resources/*.md is executable prompt content -----------------------
+r=$(newrepo)
+mkdir -p "$r/p/.claude-plugin" "$r/p/resources/nodes"
+printf '{}\n' > "$r/p/.claude-plugin/plugin.json"
+( cd "$r" && git add -A && git commit -qm base ) >/dev/null 2>&1
+printf '# Node\n' > "$r/p/resources/nodes/verify.md"
+out=$(run "$r")
+check "plugin resources markdown routes as executable prompt" "Routing: Executable prompt content" "$out"
+printf 'echo hi\n' > "$r/p/resources/x.sh"
+rm -f "$r/p/resources/nodes/verify.md"
+out=$(run "$r")
+if grep -qF "Routing: Executable prompt content" <<<"$out"; then
+  bad "plugin resources shell is not prompt content"
+else ok "plugin resources shell is not prompt content"; fi
+rm -rf "$r"
+
 echo
 echo "chad-review-route.sh: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]] || exit 1
