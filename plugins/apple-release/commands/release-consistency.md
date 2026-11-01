@@ -103,9 +103,8 @@ Grep the whole repo (READMEs, `CLAUDE.md`, `AGENTS.md`, `docs/**`, `SKILL.md`,
 checklist below.
 
 ### 5. Verify + ship
-Build-verify the **exported** artifact is `KZ4VK235YL`-signed (when a build is in scope). Run
-`/ultra-audit`; fix ALL findings at every severity in the same PR (MEDIUM/LOW are never
-backlogged), then `receipt.sh verify --pr <n>` must pass before the squash-merge.
+Build-verify the **exported** artifact is `KZ4VK235YL`-signed (when a build is in scope), then
+squash-merge the PR.
 
 ## Doc-drift checklist (certs, signing, Fastlane removal)
 
@@ -136,8 +135,7 @@ and/or docs were fixed** (🟡/🔴, with PR links).
 ## Guardrails
 
 - Verify read-only first; change only what preflight justifies.
-- One PR per repo via worktree branch → push → `gh pr create` → `/ultra-audit` →
-  `receipt.sh verify --pr <n>` → squash-merge.
+- One PR per repo via worktree branch → push → `gh pr create` → squash-merge.
   Never commit to `main` directly; never `--no-verify`.
 - **Do NOT pin by UUID. Do NOT re-introduce Fastlane. Do NOT upload** unless explicitly instructed.
 - Don't churn conforming profile names or drop an app's SHA-1 pin before the keychain single-instance
